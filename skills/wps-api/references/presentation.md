@@ -10,7 +10,8 @@
 const pres = Application.ActivePresentation;
 const slide = pres.Slides.Item(1);
 const shapes = [];
-for (let i = 1; i <= slide.Shapes.Count; i++) { const s = slide.Shapes.Item(i); shapes.push({ name: s.Name, type: s.Type }); }
+// 自增必须写成 i = i + 1：静态守卫把 `++` / `--` 判为 mutation，`i++` 会直接报 READ_ONLY_VIOLATION
+for (let i = 1; i <= slide.Shapes.Count; i = i + 1) { const s = slide.Shapes.Item(i); shapes.push({ name: s.Name, type: s.Type }); }
 return { name: pres.Name, count: pres.Slides.Count, shapes };
 ```
 

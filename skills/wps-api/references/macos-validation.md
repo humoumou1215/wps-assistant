@@ -1,6 +1,6 @@
 # macOS live validation (2026-09-28 to 2026-09-29)
 
-Environment: macOS, WPS Office 12.1.28496. Codex called the real local Add-ins through `wps-mcp`; the fixture/API notes in the other host guides remain from UOS Linux ARM64 / WPS Build 26885. Full run record: [`reports/macos-live-api-validation.md`](../../../../reports/macos-live-api-validation.md).
+Environment: macOS, WPS Office 12.1.28496. Codex called the real local Add-ins through `wps-mcp`; the fixture/API notes in the other host guides remain from UOS Linux ARM64 / WPS Build 26885. Full run record: `doc/macos-live-api-validation.md` in the `wps-mcp` repository (not bundled with this skill, so no relative link).
 
 ## Connected hosts
 

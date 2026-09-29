@@ -29,7 +29,7 @@ All document mutation checks were done in separate temporary, unsaved workbook/p
 
 ## API results
 
-See [`macos-live-api-validation.md`](macos-live-api-validation.md) for exact ET/WPP outcomes, build identifiers, and the Add-in-global `wps` versus host-specific `Application` root distinction. The skill copy of this summary is at `.agents/skills/wps-api/references/macos-validation.md`.
+See [`macos-live-api-validation.md`](macos-live-api-validation.md) for exact ET/WPP outcomes, build identifiers, and the Add-in-global `wps` versus host-specific `Application` root distinction. The skill copy of this summary is at `skills/wps-api/references/macos-validation.md`.
 
 ## Remaining blocker
 

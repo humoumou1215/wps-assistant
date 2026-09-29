@@ -8,7 +8,7 @@ from collections import Counter
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 ZIP = pathlib.Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "reports.zip"
-OUT = ROOT / ".agents/skills/wps-api"
+OUT = ROOT / "skills/wps-api"
 HOSTS = {
     "et": ("spreadsheet", "表格", "Spreadsheet / ET"),
     "wps": ("writer", "文字", "Writer / WPS"),

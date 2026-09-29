@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="用最简单的方式看懂 wps-mcp：让 Agent 通过一个很薄的 MCP 桥安全地读写 WPS。" />
+  <title>wps-mcp · 一眼看懂</title>
+  <style>
+    :root{
+      --bg:#f7f8fa;
+      --paper:#ffffff;
+      --ink:#17191c;
+      --muted:#68707b;
+      --line:#dfe3e8;
+      --soft:#f4f6f8;
+      --wps:#e7433b;
+      --agent:#5d5fef;
+      --mcp:#178a62;
+      --gold:#9d660f;
+      --shadow:0 18px 48px rgba(20,28,38,.08);
+      --radius:22px;
+      /* 大块底色：同一 hex 在多个组件复用，收敛成变量 */
+      --wps-tint:#fff6f5;
+      --agent-tint:#f7f7ff;
+      --mcp-tint:#f1fbf7;
+      --gold-tint:#fffaf0;
+      /* 说明：带透明度的品牌色仍是 rgba 字面量，hex 变量无法直接带 alpha 复用 */
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;
+      color:var(--ink);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(93,95,239,.10), transparent 28rem),
+        radial-gradient(circle at 88% 10%, rgba(231,67,59,.09), transparent 26rem),
+        var(--bg);
+      font-family:Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height:1.55;
+    }
+    a{color:inherit}
+    /* 内联 SVG 图标：跨平台渲染一致，不再依赖 emoji 字体 */
+    .sprite{position:absolute;width:0;height:0;overflow:hidden}
+    .icon{width:1em;height:1em;display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+    .page{width:min(1120px, calc(100% - 32px));margin:0 auto;padding:38px 0 70px}
+    .hero{
+      min-height:460px;
+      display:grid;
+      grid-template-columns:1.1fr .9fr;
+      gap:36px;
+      align-items:center;
+      padding:52px;
+      background:rgba(255,255,255,.88);
+      border:1px solid rgba(223,227,232,.9);
+      border-radius:32px;
+      box-shadow:var(--shadow);
+      overflow:hidden;
+      position:relative;
+    }
+    .hero:after{
+      content:"";
+      position:absolute;inset:auto -90px -130px auto;width:340px;height:340px;border-radius:50%;
+      background:linear-gradient(135deg, rgba(93,95,239,.10), rgba(231,67,59,.14));
+      filter:blur(2px);
+    }
+    .eyebrow{display:inline-flex;gap:9px;align-items:center;font-weight:800;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--mcp)}
+    .dot{width:9px;height:9px;border-radius:50%;background:var(--mcp);box-shadow:0 0 0 6px rgba(23,138,98,.12)}
+    h1{font-size:clamp(44px,7vw,78px);line-height:.98;letter-spacing:-.055em;margin:20px 0 20px}
+    .lead{font-size:clamp(18px,2.3vw,24px);color:#343a43;max-width:650px;margin:0}
+    .lead strong{color:var(--ink)}
+    .tiny{margin-top:24px;color:var(--muted);font-size:14px}
+    .walkie{
+      position:relative;z-index:1;
+      display:grid;gap:14px;
+      padding:26px;
+      border:1px solid var(--line);
+      border-radius:26px;
+      background:linear-gradient(180deg,#fff,#f8f9fb);
+    }
+    .walkie .title{font-weight:900;font-size:18px}
+    .mini-flow{display:grid;grid-template-columns:1fr auto 1.15fr auto 1fr;align-items:center;gap:10px}
+    .mini-card{padding:18px 10px;border-radius:18px;background:#fff;border:1px solid var(--line);text-align:center;font-weight:800;font-size:14px}
+    .mini-card.agent{border-color:rgba(93,95,239,.28);box-shadow:inset 0 0 0 3px rgba(93,95,239,.05)}
+    .mini-card.wps{border-color:rgba(231,67,59,.25);box-shadow:inset 0 0 0 3px rgba(231,67,59,.05)}
+    .mini-card .icon{width:22px;height:22px;margin:0 auto 8px}
+    .mini-card.agent .icon{color:var(--agent)}
+    .mini-card.wps .icon{color:var(--wps)}
+    .mini-card small{display:block;margin-top:6px;font-size:12px;font-weight:600;color:var(--muted);line-height:1.4}
+    .arrow{font-size:25px;color:#8a919b;text-align:center}
+    .bridge{padding:13px 10px;border-radius:15px;background:#eaf7f2;color:#126e50;font-weight:900;text-align:center;font-size:14px}
+    .bridge .icon{width:22px;height:22px;margin:0 auto 6px}
+    .bridge small{display:block;margin-top:6px;font-size:12px;font-weight:600;color:#2f8a6b;line-height:1.4}
+    section{margin-top:34px}
+    .section-head{display:flex;justify-content:space-between;gap:20px;align-items:end;margin:0 4px 16px}
+    h2{font-size:clamp(27px,4vw,40px);letter-spacing:-.035em;line-height:1.1;margin:0}
+    .section-head p{max-width:520px;margin:0;color:var(--muted)}
+    .section-head p code{font-size:12px}
+    .panel{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);box-shadow:0 12px 36px rgba(24,32,43,.05)}
+    .big-flow{padding:28px;overflow-x:auto}
+    .track{min-width:860px;display:grid;grid-template-columns:1.05fr 58px 1fr 58px 1.1fr 58px 1fr;gap:10px;align-items:stretch}
+    .node{position:relative;padding:24px 20px;border:1px solid var(--line);border-radius:20px;background:#fff;min-height:156px}
+    .node .fig{font-size:31px;line-height:1}
+    .node h3{font-size:19px;margin:13px 0 4px}.node p{margin:0;color:var(--muted);font-size:14px}
+    .node.user{background:var(--gold-tint);border-color:#ecd7aa}
+    .node.user .fig{color:var(--gold)}
+    .node.agent{background:var(--agent-tint);border-color:#ccccfa}.node.agent .fig{color:var(--agent)}
+    .node.mcp{background:var(--mcp-tint);border-color:#bfe5d8}.node.mcp .fig{color:var(--mcp)}
+    .node.wps{background:var(--wps-tint);border-color:#efc7c3}.node.wps .fig{color:var(--wps)}
+    .connector{display:flex;align-items:center;justify-content:center;font-size:28px;color:#9da3ab}
+    .simple-note{margin-top:16px;padding:16px 18px;border-radius:16px;background:var(--soft);color:#3f4650;font-size:14px}
+    .simple-note strong{color:var(--ink)}
+    .trio{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+    .concept{padding:26px;min-height:278px;position:relative;overflow:hidden}
+    .concept .n{position:absolute;right:18px;top:8px;font-size:70px;font-weight:1000;color:#f0f1f3;letter-spacing:-.08em}
+    .pill{display:inline-block;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:900;letter-spacing:.04em}
+    .t .pill{background:#eeeefe;color:#4f51ca}.v .pill{background:#fff1d8;color:#9b650e}.r .pill{background:#e6f5ef;color:#0f7756}
+    .concept h3{font-size:25px;margin:16px 0 8px;letter-spacing:-.03em}.concept p{color:var(--muted);margin:0 0 18px}
+    .toy{font-size:14px;padding:14px;border-radius:14px;background:#f7f8fa;border:1px dashed #d8dde3}
+    .toy b{color:var(--ink)}
+    .toy .row{display:flex;align-items:center;gap:8px}
+    .toy .down{color:#9aa1aa;font-weight:900;line-height:1.2;margin:4px 0}
+    .toy .icon{flex:0 0 auto}
+    .toy.excel .icon{color:var(--mcp)}.toy.variable .icon{color:var(--gold)}.toy.ppt .icon{color:var(--wps)}
+    .story{padding:30px}
+    .storyline{display:grid;grid-template-columns:1fr 62px .8fr 62px 1fr;gap:10px;align-items:center}
+    .sheet,.box,.slide{min-height:210px;border-radius:22px;border:1px solid var(--line);padding:22px;background:#fff}
+    .sheet{background:linear-gradient(180deg,#f7fff9,#fff);border-color:#cde8d3}.slide{background:linear-gradient(180deg,#fff8f7,#fff);border-color:#edd0cd}.box{background:linear-gradient(180deg,#fffaf0,#fff);border-color:#ecd6ad}
+    .grid-demo{width:100%;border-collapse:collapse;border:1px solid #bad7c1;margin-top:15px;font-size:12px}
+    .grid-demo th,.grid-demo td{padding:8px;text-align:left;font-weight:400;border-right:1px solid #d9e9dd;border-bottom:1px solid #d9e9dd;background:#fff}
+    .grid-demo th{font-weight:900;background:#eaf7ee}
+    .grid-demo th:last-child,.grid-demo td:last-child{border-right:0}
+    .grid-demo tbody tr:last-child td{border-bottom:0}
+    .guard-table{width:100%;border-collapse:collapse;border:1px solid #e9cfcc;margin-top:18px;font-size:13px}
+    .guard-table th,.guard-table td{padding:10px 12px;text-align:left;font-weight:400;border-bottom:1px solid #f2e0dd;background:#fff;vertical-align:top}
+    .guard-table th{font-weight:900;background:#fdf3f2;color:#9b443c}
+    .guard-table tbody tr:last-child td{border-bottom:0}
+    .guard-table td:first-child{white-space:nowrap}
+    .guard-table code{background:#faf1f0}
+    .json{margin-top:18px;padding:14px;border-radius:12px;background:#282c34;color:#e9ecf1;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap}
+    .slide-demo{margin-top:18px;border-radius:12px;background:#fff;padding:16px;border:1px solid #eadbd9;box-shadow:0 7px 20px rgba(60,28,24,.06)}
+    .slide-demo .big{font-size:28px;font-weight:950;color:#dc4038}.slide-demo .bar{height:10px;border-radius:8px;background:#eceff3;margin-top:14px;overflow:hidden}.slide-demo .bar i{display:block;width:78%;height:100%;background:#dc4038;border-radius:inherit}
+    .caption{font-size:12px;color:var(--muted);font-weight:700;letter-spacing:.03em;text-transform:uppercase}
+    .rules{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .rule{padding:28px}
+    .rule h3{font-size:25px;margin:12px 0 6px}.rule p{margin:0;color:var(--muted)}
+    .ok,.lock{font-size:34px}
+    .ok .icon{color:var(--agent)}.lock .icon{color:var(--mcp)}
+    .okline,.lockline{margin-top:18px;padding:14px 16px;border-radius:14px;font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .okline{background:#f2f4ff;color:#4346b2}.lockline{background:#eaf7f2;color:#126d50}
+    .skillbook{padding:30px;display:grid;grid-template-columns:.88fr 1.12fr;gap:18px;align-items:stretch}
+    .book{padding:26px;border-radius:20px;background:linear-gradient(180deg,var(--gold-tint),#fff);border:1px solid #ecd9b7;display:flex;flex-direction:column;justify-content:center}
+    .book .fig{font-size:38px;line-height:1;color:var(--gold)}
+    .book h3{font-size:26px;margin:12px 0 8px;letter-spacing:-.03em}.book p{margin:0;color:var(--muted)}
+    .codepath{padding:24px;border-radius:20px;background:#17191c;color:#edf1f5;display:grid;gap:12px;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .codepath .line{display:grid;grid-template-columns:38px 1fr;gap:10px;align-items:start}.codepath .n{width:28px;height:28px;border-radius:50%;display:grid;place-items:center;background:#30353d;color:#fff;font-weight:900}.codepath .muted{color:#9da6b2}.codepath .hot{color:#7fe0ba}.codepath .api{color:#9ec4ff}.codepath .warn{color:#ffd58a}
+    .tools{padding:8px 22px}
+    .toolrow{display:grid;grid-template-columns:220px 1fr auto;gap:18px;padding:17px 4px;border-bottom:1px solid var(--line);align-items:center}.toolrow:last-child{border-bottom:0}
+    code{font:600 13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#f3f4f6;padding:3px 6px;border-radius:7px}
+    .badge{font-size:11px;font-weight:900;padding:5px 8px;border-radius:999px;white-space:nowrap}.read{background:#eef0ff;color:#5052bd}.write{background:#e8f6f0;color:#137552}.store{background:#fff3dd;color:var(--gold)}
+
+    .dev-intro{padding:30px;display:grid;grid-template-columns:.9fr 1.1fr;gap:22px;align-items:stretch}
+    .dev-callout{padding:26px;border-radius:20px;background:linear-gradient(180deg,#f4f8ff,#fff);border:1px solid #d8e2f3}
+    .dev-callout h3{font-size:25px;margin:12px 0 8px;letter-spacing:-.03em}.dev-callout p{margin:0;color:var(--muted)}
+    .dev-rule{margin-top:18px;padding:14px 16px;border-radius:14px;background:#17191c;color:#dbe1e8;font:13px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+    .tree{margin:0;padding:24px;border-radius:20px;background:#17191c;color:#e9edf3;overflow:auto;font:13px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre;min-height:100%}
+    .tree .dim{color:#87919f}.tree .dir{color:#8eb8ff}.tree .hot{color:#7fe0ba}
+    .owners{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+    .owner{padding:22px;min-height:215px}.owner .who{font-size:30px;line-height:1}
+    .owner.agent .who{color:var(--agent)}.owner.mcp .who{color:var(--mcp)}.owner.addin .who{color:var(--gold)}.owner.wps .who{color:var(--wps)}
+    .owner h3{font-size:20px;margin:12px 0 6px}.owner p{font-size:14px;color:var(--muted);margin:0}.owner .owns{margin-top:15px;padding-top:14px;border-top:1px solid var(--line);font-size:12px;color:#505862}.owner .owns b{color:var(--ink)}
+    .work{padding:26px}.work-title{display:flex;justify-content:space-between;gap:18px;align-items:center;margin-bottom:18px}.work-title p{margin:0;color:var(--muted);font-size:14px}
+    .steps{display:grid;grid-template-columns:repeat(8,minmax(150px,1fr));gap:10px;overflow-x:auto;padding-bottom:4px}
+    .step{min-width:150px;padding:18px;border-radius:17px;background:#fff;border:1px solid var(--line);position:relative}.step:after{content:"→";position:absolute;right:-12px;top:50%;transform:translateY(-50%);z-index:2;color:#a3a9b1;font-weight:900}.step:last-child:after{display:none}.step .num{width:25px;height:25px;border-radius:50%;display:grid;place-items:center;background:#17191c;color:#fff;font-size:12px;font-weight:900}.step h4{font-size:15px;margin:11px 0 6px}.step p{margin:0;color:var(--muted);font-size:12px}.step code{font-size:11px}.step.readstep{background:var(--agent-tint);border-color:#d9d9fb}.step.storestep{background:var(--gold-tint);border-color:#efddbb}.step.runstep{background:var(--mcp-tint);border-color:#cae8dd}.step.writestep{background:var(--wps-tint);border-color:#efcfcb}
+    .runtime-note{margin-top:16px;padding:18px;border-radius:16px;background:#eef8f4;border:1px solid #cce7dc;color:#245d49}.runtime-note strong{color:#103f31}
+    .mistakes{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}.mistake{padding:24px}.mistake .x{font-size:26px;color:var(--wps)}.mistake h3{font-size:18px;margin:10px 0 6px}.mistake p{font-size:14px;color:var(--muted);margin:0}
+    .manifesto{padding:42px;text-align:center;background:#17191c;color:#fff;border:0}
+    .manifesto h2{font-size:clamp(34px,5vw,54px);margin-bottom:16px}.manifesto p{margin:0 auto;max-width:700px;color:#b9c0c9;font-size:18px}.manifesto strong{color:#fff}
+    .less{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:26px}.less span{padding:9px 12px;border:1px solid #3c424a;border-radius:999px;color:#d8dde3;font-size:13px}
+    .scope-label{margin:34px 0 0;font-size:12px;font-weight:900;letter-spacing:.1em;text-transform:uppercase;color:#8d949e}
+    .less.scope span{border-color:#333941;color:#98a0aa;border-style:dashed}
+    footer{padding:30px 6px 0;display:flex;justify-content:space-between;gap:18px;color:var(--muted);font-size:13px}.github{font-weight:800;color:var(--ink);text-decoration:none}
+    @media (max-width:860px){
+      .page{width:min(100% - 20px,1120px);padding-top:10px}.hero{grid-template-columns:1fr;padding:30px;min-height:auto}.section-head{display:block}.section-head p{margin-top:8px}.trio,.rules,.dev-intro,.mistakes,.skillbook{grid-template-columns:1fr}.owners{grid-template-columns:1fr 1fr}.storyline{grid-template-columns:1fr}.storyline>.connector{transform:rotate(90deg);height:38px}.toolrow{grid-template-columns:1fr;gap:7px}.badge{justify-self:start}.work-title{display:block}.work-title p{margin-top:6px}.manifesto{padding:34px 24px}footer{display:block}.footer-right{margin-top:8px}
+    }
+    @media (max-width:560px){
+      .mini-flow{grid-template-columns:1fr;gap:8px}.mini-flow .arrow{transform:rotate(90deg)}
+      .grid-demo{font-size:11px}.grid-demo th,.grid-demo td{padding:6px 5px}
+    }
+  </style>
+</head>
+<body>
+  <svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
+    <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="7.6" r="3.5"/><path d="M5 20.6c0-3.7 3.1-6.6 7-6.6s7 2.9 7 6.6"/></symbol>
+    <symbol id="i-agent" viewBox="0 0 24 24"><rect x="4" y="8.2" width="16" height="11.3" rx="3.2"/><path d="M12 8.2V5"/><circle cx="12" cy="3.6" r="1.3"/><circle cx="9.3" cy="13.5" r="1.15" fill="currentColor" stroke="none"/><circle cx="14.7" cy="13.5" r="1.15" fill="currentColor" stroke="none"/><path d="M9.8 16.8h4.4"/></symbol>
+    <symbol id="i-bridge" viewBox="0 0 24 24"><path d="M2.4 18.2h19.2"/><path d="M5.2 18.2V9.6M18.8 18.2V9.6"/><path d="M2.4 12.6c3.5-4.3 15.7-4.3 19.2 0"/><path d="M9.4 18.2v-3.4M14.6 18.2v-3.4"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3.4v5M15 3.4v5"/><path d="M6.4 8.4h11.2v3.3a5.6 5.6 0 0 1-11.2 0z"/><path d="M12 17.4v3.2"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6 3.5h7l5 5v12H6z"/><path d="M13 3.5v5h5"/><path d="M9 12.8h6M9 16.4h6"/></symbol>
+    <symbol id="i-sheet" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="2.6"/><path d="M3.5 9.4h17M3.5 14.9h17M9.7 3.5v17M15.1 3.5v17"/></symbol>
+    <symbol id="i-slide" viewBox="0 0 24 24"><rect x="3" y="4.4" width="18" height="12" rx="2.2"/><path d="M12 16.4v3.4M8.6 20.4h6.8"/><path d="M7.2 12.8l3.1-3 2.4 2.2 4.1-4"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="M12 2.9 20.4 7.1v9.8L12 21.1 3.6 16.9V7.1z"/><path d="M3.6 7.1 12 11.3l8.4-4.2M12 11.3v9.8"/></symbol>
+    <symbol id="i-manual" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2.2"/><path d="M9 3v6l3-2 3 2V3"/><path d="M12.5 13.4h3.5M12.5 16.8h3.5"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.6 12S6.1 5.9 12 5.9 21.4 12 21.4 12 17.9 18.1 12 18.1 2.6 12 2.6 12z"/><circle cx="12" cy="12" r="2.7"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4.6" y="10.4" width="14.8" height="9.4" rx="2.2"/><path d="M8 10.4V7.7a4 4 0 0 1 8 0v2.7"/><path d="M12 13.9v2.8"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.4"/><path d="M9.2 9.2l5.6 5.6M14.8 9.2l-5.6 5.6"/></symbol>
+  </svg>
+  <main class="page">
+    <section class="hero" aria-labelledby="title">
+      <div>
+        <div class="eyebrow"><span class="dot"></span> wps-mcp</div>
+        <h1 id="title">给 AI 一根<br>WPS 对讲机。</h1>
+        <p class="lead">你告诉 Agent：<strong>“把 Excel 里的数字放进 PPT。”</strong><br>Agent 先看说明书、直接写 WPS API 代码，<strong>wps-mcp 只负责把代码送到 WPS 里执行。</strong></p>
+        <p class="tiny">核心原则：能简单，就不要多造一层。</p>
+      </div>
+      <div class="walkie" aria-label="Agent 通过 MCP 和 WPS 通信">
+        <div class="title">它不是一个“大脑”，它是一座小桥。</div>
+        <div class="mini-flow">
+          <div class="mini-card agent"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-agent"></use></svg>Agent<small>读 Skill，直接写 WPS API</small></div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="bridge"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-bridge"></use></svg>wps-mcp<small>只送代码，不做翻译</small></div>
+          <div class="arrow" aria-hidden="true">→</div>
+          <div class="mini-card wps"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-file"></use></svg>WPS<small>真的打开着的文档</small></div>
+        </div>
+        <div class="tiny" style="margin:0;text-align:center">中间这根绿色小桥，就是 wps-mcp。</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>一次请求，谁做什么？</h2>
+        <p>像接力赛。每个人只做自己最擅长的一棒。</p>
+      </div>
+      <div class="panel big-flow">
+        <div class="track">
+          <div class="node user"><div class="fig"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-user"></use></svg></div><h3>你</h3><p>说自然语言，也可以引用 <code>@当前选区</code>。</p></div>
+          <div class="connector" aria-hidden="true">→</div>
+          <div class="node agent"><div class="fig"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-agent"></use></svg></div><h3>Agent</h3><p>看懂任务，读取 Skill / Reference，然后直接写要执行的 WPS JS API 代码。</p></div>
+          <div class="connector" aria-hidden="true">→</div>
+          <div class="node mcp"><div class="fig"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-bridge"></use></svg></div><h3>wps-mcp</h3><p>接收 Agent 写好的 WPS API 代码，保存 Transform / Render，并调用 Add-in。保持很薄。</p></div>
+          <div class="connector" aria-hidden="true">→</div>
+          <div class="node wps"><div class="fig"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-plug"></use></svg></div><h3>WPS Add-in</h3><p>在真正的 WPS 进程里执行 WPS JS API。</p></div>
+        </div>
+        <div class="simple-note"><strong>最重要的边界：</strong> Skill / Reference 教 Agent WPS API；Agent 负责“想 + 写 WPS API 代码”；WPS 负责“做”；MCP 不替 Agent 再造一套 API。</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>只记住 3 个词</h2>
+        <p>复杂的 Excel、PPT 最后都先缩成这三个积木。</p>
+      </div>
+      <div class="trio">
+        <article class="panel concept t">
+          <div class="n">1</div><span class="pill">TRANSFORM</span>
+          <h3>把东西拿出来</h3>
+          <p>从 WPS 里读取数据，算成一个以后可以重复得到的结果。</p>
+          <div class="toy excel"><div class="row"><svg class="icon" style="font-size:18px" aria-hidden="true" focusable="false"><use href="#i-sheet"></use></svg> Excel A1:B10</div><div class="down">↓</div><b>“算出部门预算 Top 5”</b></div>
+        </article>
+        <article class="panel concept v">
+          <div class="n">2</div><span class="pill">VARIABLE</span>
+          <h3>把结果装进盒子</h3>
+          <p>Variable 就像贴了名字的小盒子，里面可以放数字、文本、表格或 JSON。它由 <code>transform.create</code> 顺手建出来。</p>
+          <div class="toy variable"><div class="row"><svg class="icon" style="font-size:18px" aria-hidden="true" focusable="false"><use href="#i-box"></use></svg> <b>部门预算Top5</b></div><div style="color:#7b828b;margin-top:6px">这个盒子以后还能再次更新</div></div>
+        </article>
+        <article class="panel concept r">
+          <div class="n">3</div><span class="pill">RENDER</span>
+          <h3>把盒子里的东西放回去</h3>
+          <p>把 Variable 渲染进 PPT / Excel 的指定位置。一个 Variable 可以有多个 Render。</p>
+          <div class="toy ppt"><div class="row"><svg class="icon" style="font-size:18px" aria-hidden="true" focusable="false"><use href="#i-box"></use></svg> 部门预算Top5</div><div class="down">↓</div><div class="row"><svg class="icon" style="font-size:18px" aria-hidden="true" focusable="false"><use href="#i-slide"></use></svg> PPT 第 3 页图表</div></div>
+        </article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>举个 8 岁也能懂的例子</h2>
+        <p>Excel 像作业本，Variable 像答案卡，PPT 像展示板。</p>
+      </div>
+      <div class="panel story">
+        <div class="storyline">
+          <div class="sheet">
+            <div class="caption">① Transform · 读 Excel</div>
+            <table class="grid-demo" aria-label="预算示例表格：研发 120 排第 1，市场 95 排第 2，运营 80 排第 3">
+              <thead><tr><th scope="col">部门</th><th scope="col">预算</th><th scope="col">排名</th></tr></thead>
+              <tbody>
+                <tr><td>研发</td><td>120</td><td>1</td></tr>
+                <tr><td>市场</td><td>95</td><td>2</td></tr>
+                <tr><td>运营</td><td>80</td><td>3</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="connector" aria-hidden="true">→</div>
+          <div class="box">
+            <div class="caption">② Variable · 保存结果</div>
+            <div class="json">{
+  "name": "研发",
+  "budget": 120,
+  "rank": 1
+}</div>
+          </div>
+          <div class="connector" aria-hidden="true">→</div>
+          <div class="slide">
+            <div class="caption">③ Render · 写进 PPT</div>
+            <div class="slide-demo">
+              <div style="font-size:13px;color:#737a84">预算最高部门</div>
+              <div class="big">研发 · 120</div>
+              <div class="bar"><i></i></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Agent 怎么会写 WPS API？</h2>
+        <p>不是 MCP 教它，也不是 Server 把 WPS API 再封装一遍。Agent 先读项目提供的 Skill / Reference。</p>
+      </div>
+      <div class="panel skillbook">
+        <div class="book">
+          <div class="fig"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-manual"></use></svg></div>
+          <div class="caption">Skill / Reference</div>
+          <h3>这是 Agent 的“WPS API 说明书”</h3>
+          <p>里面告诉 Agent：WPS JS API 有哪些对象、怎么读工作簿/幻灯片/图表、常见代码怎么写，以及哪些操作必须放进 Render。</p>
+        </div>
+        <div class="codepath" aria-label="Agent 从 Skill 学会 WPS API 后直接生成代码">
+          <div class="line"><span class="n">1</span><span><span class="warn">Agent 读取 Skill / Reference</span><br><span class="muted">知道 Application、Workbook、Worksheet、Presentation、Shape、Chart… 怎么用</span></span></div>
+          <div class="line"><span class="n">2</span><span><span class="hot">Agent 自己生成 JavaScript</span><br><span class="api">const workbook = Application.ActiveWorkbook; // 直接使用 WPS JS API</span></span></div>
+          <div class="line"><span class="n">3</span><span><span class="hot">代码交给 wps-mcp</span><br><span class="muted">查询代码 → wps.exec　　提取代码 → Transform　　写入代码 → Render</span></span></div>
+          <div class="line"><span class="n">4</span><span><span class="hot">Add-in 在 WPS 里执行</span><br><span class="muted">MCP 不把它翻译成另一套“自创 WPS API”。</span></span></div>
+        </div>
+      </div>
+      <div class="simple-note"><strong>所以项目能保持简单：</strong> WPS 已经有一套很大的 API。我们只需要教 Agent 会用它，而不是复制它。</div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>两条护栏，就够了</h2>
+        <p>不是把 WPS API 包得很厚，而是只把“读”和“写”的边界说清楚。</p>
+      </div>
+      <div class="rules">
+        <article class="panel rule">
+          <div class="ok"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-eye"></use></svg></div>
+          <h3>想看，可以直接看</h3>
+          <p>Agent 先根据 Skill / Reference 写出只读的 WPS JS API 代码，再通过 <code>wps.exec</code> 执行，了解表格、幻灯片、选区、图表等内容。</p>
+          <div class="okline">workspace.list_documents → document.get → wps.exec</div>
+        </article>
+        <article class="panel rule">
+          <div class="lock"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
+          <h3>想改，必须走 Render</h3>
+          <p>Agent 也直接写 WPS JS API，但所有会修改文档的代码必须成为 Render，再由正式执行入口运行。前置条件是 Variable 已经跑过一次 Transform、手里有值。这样写能力强，边界仍然简单。</p>
+          <div class="lockline">transform.create → variable.transform<br>render.create → variable.render → WPS</div>
+        </article>
+      </div>
+      <div class="panel work" style="margin-top:16px">
+        <div class="work-title">
+          <strong>被拦下来的时候，一次说清</strong>
+          <p>判据集中在 <code>src/readonly-guard.ts</code>，违规<strong>一次性全部报出</strong>，每条带行列号、源码行和改写建议 —— 拿到就能一轮改完，不用“报一条、改一条、再报一条”。</p>
+        </div>
+        <table class="guard-table" aria-label="只读守卫会拦下的四类写法">
+          <thead><tr><th scope="col">你写的</th><th scope="col">为什么被拦</th></tr></thead>
+          <tbody>
+            <tr><td><code>o.a = 1</code></td><td>任何<strong>成员赋值</strong>都拦。判据是纯语法的，不区分文档对象和你自己声明的本地对象。</td></tr>
+            <tr><td><code>i++</code> · <code>--i</code></td><td>自增自减一律拦，本地循环计数器也不例外。写成 <code>i = i + 1</code> 就通过了。</td></tr>
+            <tr><td><code>new Date()</code></td><td><strong>所有</strong> <code>new</code> 都拦，内置构造器（Date / Map / Set / RegExp）一样在内。</td></tr>
+            <tr><td><code>arr.sort()</code></td><td>方法黑名单<strong>按属性名匹配</strong>：读一下就拦，本地数组也中招。换个属性名，或者挪进 Render。</td></tr>
+          </tbody>
+        </table>
+        <div class="runtime-note"><strong>记住这个方向：</strong> 上面这些写法在 <strong>Render 里全部合法</strong> —— Render 的代码根本不经过这道守卫。所以“想改文档”不要跟守卫较劲，直接写成 Render。</div>
+      </div>
+      <div class="simple-note"><strong>老实说一句：</strong>“只读”来自 Acorn 静态检查——拦住成员赋值、<code>new</code>、删除和常见写入方法，属于 best-effort，<strong>不是 JavaScript 沙箱</strong>，绕过去仍然可能写出有副作用的代码。真正有写权限的只有 Render，所以只运行可信代码。</div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>MCP 的小工具箱</h2>
+        <p>少而清楚。第一版一共 8 个，不给每个 WPS API 再造一个 MCP API。</p>
+      </div>
+      <div class="panel tools">
+        <div class="toolrow"><div><code>workspace.list_documents</code></div><div>现在有哪些 WPS 文档可以用？</div><span class="badge read">发现</span></div>
+        <div class="toolrow"><div><code>document.get</code></div><div>拿到某个文档的基本上下文。</div><span class="badge read">发现</span></div>
+        <div class="toolrow"><div><code>wps.exec</code></div><div>执行 Agent 生成的只读 WPS JS API 代码。</div><span class="badge read">只读</span></div>
+        <div class="toolrow"><div><code>transform.create</code></div><div>创建一个 Variable，并保存它的 Transform 代码（只读的 WPS JS API）。</div><span class="badge store">规则</span></div>
+        <div class="toolrow"><div><code>render.create</code></div><div>给 Variable 保存一条 Render 代码（核心就是 WPS JS API 代码）。</div><span class="badge store">规则</span></div>
+        <div class="toolrow"><div><code>variable.get</code></div><div>看 Variable 的最新值，以及它挂着的 Transform / Render。</div><span class="badge read">查询</span></div>
+        <div class="toolrow"><div><code>variable.transform</code></div><div>跑一次 Transform，得到最新 Variable。</div><span class="badge read">计算</span></div>
+        <div class="toolrow"><div><code>variable.render</code></div><div>把 Variable 真正写进目标文档；不传 <code>renderId</code> 就执行它的全部 Render。</div><span class="badge write">唯一写入口</span></div>
+      </div>
+    </section>
+
+    <section id="connect">
+      <div class="section-head">
+        <h2>怎么把它接上？</h2>
+        <p>顺序不能反：先起服务，再注册 Add-in，最后完全重启 WPS。细节见 README。</p>
+      </div>
+      <div class="rules">
+        <article class="panel rule">
+          <div class="caption">Step 1 · 起服务</div>
+          <h3>只监听本机</h3>
+          <p>一个进程同时提供 MCP（stdio + Streamable HTTP）、Add-in 资源和 WebSocket，默认端口 <code>18766</code>，只绑定 <code>127.0.0.1</code>。</p>
+          <div class="okline">npm ci &amp;&amp; npm run build &amp;&amp; npm start</div>
+        </article>
+        <article class="panel rule">
+          <div class="caption">Step 2 · 注册 Add-in</div>
+          <h3>写进 publish.xml</h3>
+          <p>把 ET / WPP / WPS 三个本地 Add-in 注册进去；脚本只增删自己的条目，改前先备份，也可 <code>--uninstall</code> 回滚。</p>
+          <div class="okline">node scripts/install-addin.mjs</div>
+        </article>
+        <article class="panel rule">
+          <div class="caption">Step 3 · 接 MCP 客户端</div>
+          <h3>填这个地址</h3>
+          <p>传输方式选 <strong>Streamable HTTP</strong>。客户端要跑在能访问本机 loopback 的环境里。</p>
+          <div class="okline">http://127.0.0.1:18766/mcp</div>
+        </article>
+        <article class="panel rule">
+          <div class="caption">Step 4 · 验证</div>
+          <h3>先问服务，再看文档</h3>
+          <p>健康检查通了、WPS 里能列出 <code>documentId</code>，才算接通。注意：<strong>注册后必须完全退出并重启 WPS</strong>（托盘图标也要退）。</p>
+          <div class="okline">curl http://127.0.0.1:18766/health</div>
+        </article>
+      </div>
+      <div class="simple-note">这份页面只讲结构；安装、端口、状态目录（macOS <code>~/Library/Application Support/wps-mcp</code>、Windows <code>%APPDATA%\wps-mcp</code>）与安全边界以项目 <strong>README.md</strong> 为准。</div>
+    </section>
+
+    <section id="developers">
+      <div class="section-head">
+        <h2>给开发者：代码只认 4 个目录</h2>
+        <p>这是职责地图，不是鼓励把项目拆成很多层。目录名可以调整，但边界最好别混。下面这棵树是<strong>目标形状</strong>；v0.1 的实现还很集中。</p>
+      </div>
+      <div class="panel dev-intro">
+        <div class="dev-callout">
+          <div class="caption">Developer mental model</div>
+          <h3>读代码时，先问：这件事属于谁？</h3>
+          <p><strong>Skill / Reference</strong> 教 Agent WPS JS API；<strong>Server</strong> 管 MCP、规则和路由；<strong>Add-in</strong> 只负责在 WPS 里执行；<strong>Shared</strong> 只放最小协议。Agent 不在这 4 个目录里——它是外面的使用者。</p>
+          <div class="dev-rule">Skill = 教 WPS API<br>Agent = 想 + 写 WPS API 代码<br>MCP Server = 管代码 / 规则 / 路由<br>readonly-guard = 只读判据的唯一来源<br>WPS Add-in = 执行代码<br>WPS = 真正的文档</div>
+        </div>
+        <pre class="tree" aria-label="wps-mcp 目标目录结构"><span class="dir">wps-mcp/</span>
+├─ <span class="dir">skills/</span>            <span class="dim"># Agent 的“WPS API 说明书”</span>
+│  ├─ SKILL.md         <span class="dim"># 什么时候读、什么时候写、调用约束</span>
+│  └─ references/      <span class="dim"># WPS JS API 对象、示例、常用模式</span>
+│
+├─ <span class="dir">server/</span>            <span class="dim"># MCP Server：项目的“交通警察”</span>
+│  ├─ mcp/             <span class="dim"># 少量 MCP 工具的定义与入口</span>
+│  ├─ documents/       <span class="dim"># 当前打开文档的发现与 documentId 路由</span>
+│  ├─ rules/           <span class="dim"># 保存 Agent 写好的 Transform / Render 代码</span>
+│  └─ variables/       <span class="dim"># Variable 的执行与最新值</span>
+│
+├─ <span class="dir">addin/</span>             <span class="dim"># WPS JS Add-in：项目的“手”</span>
+│  ├─ bridge/          <span class="dim"># 和 Server 通信，报告当前文档</span>
+│  └─ runner/          <span class="dim"># 在 WPS 进程内直接执行 WPS JS API 代码</span>
+│
+└─ <span class="dir">shared/</span>            <span class="dim"># 少量共享类型 / 消息协议</span>
+
+<span class="hot">原则：不要为了“看起来像架构”继续加层。</span>
+
+<span class="dim">v0.1 现状：src/server.ts 单体（MCP + HTTP + WebSocket 都在里面）</span>
+<span class="dim">          src/readonly-guard.ts · 只读判据的唯一来源，server 与外部校验工具都 import 它，</span>
+<span class="dim">                                  避免判据以副本形式散落各处、各自静默过时</span>
+<span class="dim">          addon/{index.html, main.js, manifest.xml, ribbon.xml, status.html}</span>
+<span class="dim">          skills/wps-api/ · scripts/ · test/ · doc/</span></pre>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>职责分布：谁拥有哪件事？</h2>
+        <p>边界越清楚，项目越不容易从“小桥”长成“大平台”。</p>
+      </div>
+      <div class="owners">
+        <article class="panel owner agent"><div class="who"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-agent"></use></svg></div><h3>Agent</h3><p>理解自然语言，按需读取 Skill / Reference，直接生成 WPS JS API 查询代码、Transform 代码和 Render 代码。</p><div class="owns"><b>关键点：</b>不是调用一套“封装好的 WPS 业务 API”，而是自己写 WPS JS API。</div></article>
+        <article class="panel owner mcp"><div class="who"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-bridge"></use></svg></div><h3>MCP Server</h3><p>暴露少量工具、登记文档、保存 Agent 写好的代码规则、按 documentId 找到正确的 Add-in。</p><div class="owns"><b>拥有：</b>Variable / Transform / Render 的定义与执行入口。</div></article>
+        <article class="panel owner addin"><div class="who"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-plug"></use></svg></div><h3>WPS Add-in</h3><p>待在真实 WPS 进程里，接收执行请求，直接运行 Agent 生成的 WPS JS API 代码。</p><div class="owns"><b>不负责：</b>理解用户意图，也不自己发明 Transform / Render。</div></article>
+        <article class="panel owner wps"><div class="who"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-file"></use></svg></div><h3>WPS</h3><p>真正拥有工作簿、幻灯片、选区、图表、样式和当前编辑状态。</p><div class="owns"><b>事实来源：</b>文档内容以 WPS 当前状态为准。</div></article>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>一次完整工作，到底发生了什么？</h2>
+        <p>例子：用户说“把 Excel 里的预算 Top 5 填进 PPT 里合适的位置”。</p>
+      </div>
+      <div class="panel work">
+        <div class="work-title"><strong>建立绑定：只需要走完这 8 步</strong><p>先学会 API、再看清文档；随后定义 Transform / Variable / Render，最后执行写入。</p></div>
+        <div class="steps">
+          <article class="step"><div class="num">1</div><h4>收到任务</h4><p>自然语言 + <code>@当前选区</code> / 文件引用交给 Agent。</p></article>
+          <article class="step storestep"><div class="num">2</div><h4>读取 Skill</h4><p>Agent 查看 <code>SKILL.md</code> / WPS API Reference，知道该写哪些 WPS JS API。</p></article>
+          <article class="step readstep"><div class="num">3</div><h4>找到文档</h4><p><code>workspace.list_documents</code><br><code>document.get</code></p></article>
+          <article class="step readstep"><div class="num">4</div><h4>写代码调查</h4><p>Agent 直接生成只读 WPS JS API 代码，交给 <code>wps.exec</code> 执行。</p></article>
+          <article class="step storestep"><div class="num">5</div><h4>写 Transform</h4><p>Agent 生成提取数据的 WPS JS API 代码，<code>transform.create</code> 保存它（同时建出 Variable）。</p></article>
+          <article class="step runstep"><div class="num">6</div><h4>得到 Variable</h4><p><code>variable.transform</code><br>运行 Transform，产生最新值。</p></article>
+          <article class="step storestep"><div class="num">7</div><h4>写 Render</h4><p>Agent 生成修改目标文档的 WPS JS API 代码，<code>render.create</code> 保存它。</p></article>
+          <article class="step writestep"><div class="num">8</div><h4>真正写入</h4><p><code>variable.render</code><br>Add-in 在目标 WPS 文档执行 Render 代码。</p></article>
+        </div>
+        <div class="runtime-note"><strong>绑定建好以后：</strong> 再执行同步时，不需要 Agent 重新思考。程序直接跑 Transform → 更新 Variable → 跑 Render。Agent 只在“创建或修改规则”时出现。</div>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h2>开发时，最重要的 3 个“不”</h2>
+        <p>这三个地方一旦破坏，项目就会迅速变复杂。</p>
+      </div>
+      <div class="mistakes">
+        <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>不要复制 WPS API</h3><p>不要为每个 WPS JS API 再包一层 MCP Tool。Skill / Reference 负责“教”，Agent 负责直接生成 WPS JS API 代码。</p></article>
+        <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>不要让查询偷偷写</h3><p><code>wps.exec</code> 和 Transform 都应该是只读。文档修改只有 Render 一个正式入口。</p></article>
+        <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>不要把 Agent 塞进运行时</h3><p>同步执行是确定性的程序流程：Transform → Variable → Render，不应该每次都重新问模型。</p></article>
+      </div>
+    </section>
+
+    <section class="panel manifesto">
+      <h2>Simple means powerful.</h2>
+      <p><strong>wps-mcp 不想成为另一个 Office 框架。</strong><br>它只想用 Skill 教 Agent 写 WPS API，让 Agent 能找到 WPS、看懂 WPS、保存 Transform / Render，然后在正确的时候执行这些代码。</p>
+      <div class="less">
+        <span>不复制整套 WPS API</span>
+        <span>不发明新的复杂 DSL</span>
+        <span>不让 Agent 参与日常计算</span>
+        <span>不把桥变成大脑</span>
+      </div>
+      <p class="scope-label">v0.1 明确不做</p>
+      <div class="less scope">
+        <span>Undo / Redo</span>
+        <span>Transform / Render 版本管理</span>
+        <span>复杂依赖图</span>
+        <span>Variable 自动依赖计算</span>
+        <span>定时任务</span>
+        <span>自动监听文件变化</span>
+        <span>复杂权限 / 沙箱</span>
+        <span>Render Timeline</span>
+        <span>多用户协同</span>
+      </div>
+    </section>
+
+    <footer>
+      <div><strong>wps-mcp</strong> · README visual explainer</div>
+      <div class="footer-right"><a class="github" href="https://github.com/humoumou1215/wps-mcp">github.com/humoumou1215/wps-mcp ↗</a></div>
+    </footer>
+  </main>
+</body>
+</html>

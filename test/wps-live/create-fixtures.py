@@ -5,7 +5,7 @@ The API observations/assertions are made by real WPS, not by this generator.
 The files contain only stable seed text/values and are created in a temp dir.
 """
 from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 import sys
 
 
@@ -13,7 +13,10 @@ def write_zip(path: Path, entries: dict[str, str]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(path, "w", ZIP_DEFLATED) as archive:
         for name, contents in entries.items():
-            archive.writestr(name, contents.encode("utf-8"))
+            info = ZipInfo(name, date_time=(2020, 1, 1, 0, 0, 0))
+            info.compress_type = ZIP_DEFLATED
+            info.external_attr = 0o600 << 16
+            archive.writestr(info, contents.encode("utf-8"))
 
 
 def make_xlsx(path: Path) -> None:
@@ -50,6 +53,32 @@ def make_xlsx(path: Path) -> None:
   </sheetData>
   <pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/>
 </worksheet>''',
+    })
+
+
+def make_docx(path: Path) -> None:
+    w = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    write_zip(path, {
+        "[Content_Types].xml": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>''',
+        "_rels/.rels": '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>''',
+        "word/document.xml": f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="{w}"><w:body>
+  <w:p><w:r><w:t>WPS_WRITER_SEED</w:t></w:r></w:p>
+  <w:tbl>
+    <w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>
+    <w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>
+    <w:tr><w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>WPS_WRITER_TABLE_SEED</w:t></w:r></w:p></w:tc></w:tr>
+  </w:tbl>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr>
+</w:body></w:document>''',
     })
 
 
@@ -139,6 +168,7 @@ def main() -> None:
     out = Path(sys.argv[1]).resolve()
     make_xlsx(out / "et-live-probe.xlsx")
     make_pptx(out / "wpp-live-probe.pptx")
+    make_docx(out / "writer-live-probe.docx")
     print(out)
 
 

@@ -14,6 +14,7 @@
   const $details = typeof document !== "undefined" ? document.getElementById("details") : null;
   const $dot = typeof document !== "undefined" ? document.getElementById("dot") : null;
   const hostFromUrl = typeof location !== "undefined" ? ["et", "wpp", "wps"].find((type) => location.pathname.includes(`/${type}/`)) : null;
+  const onlyDocumentPath = pageUrl.searchParams.get("onlyDocument");
   let socket;
   let retryTimer;
 
@@ -29,6 +30,7 @@
   const safe = (fn, fallback) => { try { const value = fn(); return value == null ? fallback : value; } catch { return fallback; } };
   const getProp = (object, key) => safe(() => object?.[key], undefined);
   const toStringValue = (value) => safe(() => String(value), "");
+  const normalizePath = (value) => toStringValue(value).replace(/^\/private\//, "/");
   const getCount = (collection) => Number(safe(() => collection?.Count, 0)) || 0;
 
   function appType(app) {
@@ -117,7 +119,11 @@
     const list = enumerate(collection);
     if (current && !list.includes(current)) list.unshift(current);
     if (!current && list.length === 0) return [];
-    return (list.length ? list : [current]).map((doc) => describeDocument(doc, type, app)).filter(Boolean);
+    const documents = (list.length ? list : [current]).map((doc) => describeDocument(doc, type, app)).filter(Boolean);
+    if (!onlyDocumentPath) return documents;
+    const expectedPath = normalizePath(onlyDocumentPath);
+    const expectedName = onlyDocumentPath.split(/[\\/]/).pop();
+    return documents.filter((doc) => (doc.path && normalizePath(doc.path) === expectedPath) || doc.name === expectedName);
   }
   function setState(connected, message, docs = []) {
     if ($dot) $dot.classList.toggle("ok", connected);

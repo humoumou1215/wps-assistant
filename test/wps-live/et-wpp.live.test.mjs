@@ -45,7 +45,7 @@ function normalizedPath(path) {
   return path.replace(/^\/private\//, "/");
 }
 
-async function waitForDocument(client, type, expectedPath) {
+async function waitForDocument(client, type, expectedPath, serviceLogs) {
   const expectedRealPath = normalizedPath(await realpath(expectedPath));
   let lastDocuments = [];
   const deadline = Date.now() + 120_000;
@@ -60,7 +60,7 @@ async function waitForDocument(client, type, expectedPath) {
     if (match) return match;
     await pause(1_000);
   }
-  throw new Error(`WPS did not register ${type} document ${expectedPath}; registered: ${JSON.stringify(lastDocuments)}`);
+  throw new Error(`WPS did not register ${type} document ${expectedPath}; registered: ${JSON.stringify(lastDocuments)}; test server log: ${serviceLogs()}`);
 }
 
 async function openInWps(file) {
@@ -146,7 +146,7 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
 
   // ET: open a unique disposable workbook through Launch Services and wait for the live Add-in.
   await openInWps(etFile);
-  const etDoc = await waitForDocument(client, "spreadsheet", etFile);
+  const etDoc = await waitForDocument(client, "spreadsheet", etFile, () => serverLog);
   const etState = await invoke(client, "document.get", { documentId: etDoc.documentId });
   assert.equal(etState.connected, true);
   const etBaseline = await invoke(client, "wps.exec", {
@@ -205,7 +205,7 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
 
   // WPP: same flow through the actual presentation Add-in and JS API.
   await openInWps(wppFile);
-  const wppDoc = await waitForDocument(client, "presentation", wppFile);
+  const wppDoc = await waitForDocument(client, "presentation", wppFile, () => serverLog);
   const wppState = await invoke(client, "document.get", { documentId: wppDoc.documentId });
   assert.equal(wppState.connected, true);
   const wppBaseline = await invoke(client, "wps.exec", {

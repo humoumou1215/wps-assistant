@@ -11,6 +11,7 @@
     "dev": "tsx src/server.ts",
     "test": "npm run build && node --test test/*.test.mjs",
     "test:wps-live": "bash scripts/run-macos-wps-live-tests.sh",
+    "test:wps-writer-live": "bash scripts/run-macos-wps-writer-live-test.sh",
     "install:addin": "node scripts/install-addin.mjs",
     "uninstall:addin": "node scripts/install-addin.mjs --uninstall",
     "debug:local": "node scripts/debug-local.mjs"

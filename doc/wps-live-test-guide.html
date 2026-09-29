@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>小小测试员：真实 WPS 测试是怎么跑的</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #203047;
+      --muted: #58677c;
+      --paper: #ffffff;
+      --bg: #f3f7fb;
+      --blue: #2563eb;
+      --teal: #0f766e;
+      --gold: #a16207;
+      --line: #d9e3ef;
+      --soft-blue: #eaf1ff;
+      --soft-green: #e8f7ef;
+      --soft-yellow: #fff7df;
+      --shadow: 0 10px 28px rgba(25, 48, 79, .08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background: var(--bg);
+      font: 16px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    header {
+      padding: 52px 22px 44px;
+      color: white;
+      background: linear-gradient(125deg, #1d4ed8, #087e8b);
+    }
+    .wrap { width: min(1020px, calc(100% - 32px)); margin: 0 auto; }
+    header .wrap { width: min(1020px, calc(100% - 32px)); }
+    h1 { margin: 0 0 12px; font-size: clamp(30px, 5vw, 46px); line-height: 1.15; }
+    header p { max-width: 760px; margin: 8px 0; font-size: 18px; color: #eaf5ff; }
+    .badge {
+      display: inline-block; margin-top: 14px; padding: 5px 12px; border-radius: 999px;
+      background: rgba(255,255,255,.17); font-weight: 700;
+    }
+    main { padding: 28px 0 56px; }
+    section, .card {
+      margin: 18px 0; padding: 24px; background: var(--paper); border: 1px solid var(--line);
+      border-radius: 18px; box-shadow: var(--shadow);
+    }
+    h2 { margin: 0 0 14px; font-size: 25px; }
+    h3 { margin: 17px 0 6px; font-size: 18px; }
+    p { margin: 8px 0; }
+    .lead { color: var(--muted); font-size: 17px; }
+    .callout { padding: 14px 16px; border-left: 5px solid var(--blue); border-radius: 10px; background: var(--soft-blue); }
+    .success { border-left-color: var(--teal); background: var(--soft-green); }
+    .warning { border-left-color: var(--gold); background: var(--soft-yellow); }
+    .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 18px 0 4px; }
+    .flow div { padding: 15px; text-align: center; border: 1px solid var(--line); border-radius: 14px; background: #fbfdff; }
+    .flow b { display: block; color: var(--blue); font-size: 17px; }
+    .emoji { font-size: 27px; }
+    ol.steps { padding-left: 27px; }
+    ol.steps li { padding: 4px 0 8px 4px; }
+    code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    code { padding: 2px 6px; border-radius: 6px; background: #eef2f7; font-size: .92em; }
+    pre {
+      overflow-x: auto; padding: 16px; border-radius: 12px; color: #e5efff; background: #17243a;
+      font-size: 13px; line-height: 1.6;
+    }
+    table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+    th, td { padding: 10px 12px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+    th { background: #f4f7fb; }
+    .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; background: var(--soft-green); color: #116149; font-weight: 700; }
+    .small { color: var(--muted); font-size: 14px; }
+    .file { color: #174ea6; font-family: ui-monospace, monospace; overflow-wrap: anywhere; }
+    footer { padding: 20px 0 34px; color: var(--muted); text-align: center; }
+    @media (max-width: 720px) {
+      .flow { grid-template-columns: repeat(2, 1fr); }
+      section, .card { padding: 18px; }
+      table { display: block; overflow-x: auto; }
+    }
+    @media (max-width: 430px) { .flow { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>🧪 小小测试员：真实 WPS 测试是怎么跑的？</h1>
+      <p>把它想成让机器人拿着一份<strong>临时练习册</strong>，请真正的 WPS 表格和 WPS 演示做几道题，然后核对答案。</p>
+      <p>这不是假装 WPS 的模型：测试真的打开 WPS、真的运行 JS API，并读取 WPS 返回的结果。</p>
+      <span class="badge">真实测试结果：ET 表格 ✅　WPP 演示 ✅　Writer 文字 ✅</span>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section>
+      <h2>先看一张路线图 🗺️</h2>
+      <p class="lead">测试小机器人要经过四个地方：</p>
+      <div class="flow" aria-label="真实 WPS 测试流程">
+        <div><span class="emoji">📄</span><b>做临时文件</b>Excel / 演示练习册</div>
+        <div><span class="emoji">🪟</span><b>打开真实 WPS</b>ET / WPP Add-in 连上来</div>
+        <div><span class="emoji">🤖</span><b>调用 MCP 工具</b>查询、修改、再读回来</div>
+        <div><span class="emoji">🧹</span><b>收拾现场</b>保存临时副本并清理</div>
+      </div>
+      <p class="callout"><strong>小比喻：</strong>临时文件像草稿纸；WPS 是真的老师；断言（assert）像答案检查器。值是测试输入，但 API 的真实回答来自 WPS。</p>
+    </section>
+
+    <section>
+      <h2>1. 普通测试和真实测试有什么不同？</h2>
+      <table>
+        <thead><tr><th>命令</th><th>谁在回答？</th><th>它主要检查什么？</th></tr></thead>
+        <tbody>
+          <tr><td><code>npm test</code></td><td>假 Add-in（测试替身）</td><td>检查 MCP 服务能否发请求、收响应、处理错误。它不证明 WPS API 真能用。</td></tr>
+          <tr><td><code>npm run test:wps-live</code></td><td><strong>真的 WPS ET 和 WPP</strong></td><td>检查真实文档能否打开、Add-in 能否连接，以及 API 操作和读回是否正确。</td></tr>
+          <tr><td><code>npm run test:wps-writer-live</code></td><td><strong>真的 WPS Writer</strong></td><td>单独检查临时 DOCX 的正文/表格读取、Render 写入与读回。</td></tr>
+        </tbody>
+      </table>
+      <p class="callout success"><strong>这次跑出来：</strong><code>npm test</code> 通过；真实 WPS 冒烟测试也通过。两种测试各做各的工作，不能拿前者冒充后者。</p>
+    </section>
+
+    <section>
+      <h2>2. 测试脚本具体做了什么？</h2>
+      <ol class="steps">
+        <li><strong>先检查安全条件。</strong>必须是 macOS；WPS 要先完全退出；测试端口默认是 <code>18767</code>，不能被别的程序占用；原 Add-in 静态页面服务 <code>18766</code> 必须可访问。</li>
+        <li><strong>编译项目。</strong>运行 <code>npm run build</code>，把 TypeScript 服务编译成 JavaScript。</li>
+        <li><strong>建一个临时房间。</strong>脚本在系统临时目录创建独一无二的文件夹，测试状态文件也只放在这里，不用家里的正式状态文件。</li>
+        <li><strong>把测试流量送到独立端口。</strong>临时调整 Add-in 的 WebSocket 目标为 <code>127.0.0.1:18767</code>。结束时会还原 <code>addon/main.js</code>。</li>
+        <li><strong>启动测试 MCP 服务。</strong>服务只用临时数据目录，并同时提供 MCP HTTP 接口和 WPS Add-in WebSocket 接口。</li>
+        <li><strong>生成临时测试文件。</strong><code>create-fixtures.py</code> 制作 `.xlsx`、`.pptx` 和 `.docx` 输入文件。这些是固定测试输入，不是伪造的 WPS API 返回值。</li>
+        <li><strong>真的打开 WPS。</strong>ET/WPP 和 Writer 使用独立命令；脚本用 macOS 的 <code>open</code> 打开临时文件，并轮询 MCP 等待对应 Add-in 注册。</li>
+        <li><strong>做题和检查。</strong>使用 MCP 客户端调用 <code>workspace.list_documents</code>、<code>document.get</code>、<code>wps.exec</code>、Transform 和 Render。</li>
+        <li><strong>清理。</strong>修改只写入临时文件副本；脚本保存副本、关闭 WPS、停止测试服务并删除临时目录。若 WPS 没有正常退出，脚本会保留临时目录，避免删掉 WPS 仍在使用的文件。</li>
+      </ol>
+      <p class="callout warning"><strong>端口小知识：</strong>WPS 现有注册的 Add-in 页面仍从 <code>18766</code> 取静态文件；这次真正的 MCP 和 WebSocket 测试流量走独立的 <code>18767</code>。不是把正式文档发给测试服务。</p>
+    </section>
+
+    <section>
+      <h2>3. 练习册里放了什么？ 📚</h2>
+      <h3>ET 表格练习册</h3>
+      <ul>
+        <li>工作表叫 <code>MCPProbe</code>。</li>
+        <li>A1 是 <code>WPS_MCP_SEED</code>，B1 是数字 <code>7</code>。</li>
+        <li>B2 有公式 <code>=1+2</code>，预期计算结果为 <code>3</code>。</li>
+      </ul>
+      <h3>WPP 演示练习册</h3>
+      <ul>
+        <li>有 1 张幻灯片。</li>
+        <li>有一个文字形状，里面写着 <code>WPS_MCP_SEED_TEXT</code>。</li>
+      </ul>
+      <h3>Writer 文字练习册</h3>
+      <ul>
+        <li>正文包含 <code>WPS_WRITER_SEED</code>，另有一个表格和单元格标记。</li>
+      </ul>
+      <p>Python 脚本只负责把这些固定输入包装成 WPS 能打开的 Office 文件。WPS 打开文件之后，读出来的内容和 API 操作结果才是本次真实测试的观察结果。</p>
+    </section>
+
+    <section>
+      <h2>4. ET 测试：先读，再写，再读回来 ✏️</h2>
+      <p>第一次查询时，测试会确认 WPS 当前打开的文件路径就是这次的临时副本，并读取工作表、单元格、公式和应用版本。</p>
+      <pre><code>const book = Application.ActiveWorkbook;
+const sheet = Application.ActiveSheet;
+return {
+  app: Application.Name,
+  version: String(Application.Version),
+  workbook: book.Name,
+  sheet: sheet.Name,
+  seed: sheet.Range("A1").Value2,
+  formulaValue: sheet.Range("B2").Value2
+};</code></pre>
+      <p>预期答案：工作表是 <code>MCPProbe</code>，A1 是 <code>WPS_MCP_SEED</code>，B2 算出 <code>3</code>。</p>
+      <p>接下来用 Transform 准备一个小变量，再用 Render 在临时表格的 Z100 写入公式、粗体和数字格式：</p>
+      <pre><code>const cell = Application.ActiveSheet.Range("Z100");
+cell.Formula = "=1+2";
+cell.Font.Bold = true;
+cell.NumberFormat = "0.00";
+return {
+  formula: cell.Formula,
+  value2: cell.Value2,
+  bold: cell.Font.Bold,
+  numberFormat: cell.NumberFormat
+};</code></pre>
+      <p>最后再用只读查询读一次 Z100。测试要求：公式仍是 <code>=1+2</code>、数值是 <code>3</code>、粗体为 <code>true</code>。这叫<strong>写入—读回检查</strong>，不是只看 WPS 有没有报错。</p>
+    </section>
+
+    <section>
+      <h2>5. WPP 测试：在临时幻灯片上加一个文字框 🖼️</h2>
+      <p>先确认演示文稿路径、幻灯片数量和种子文字；然后用 Render 在第一张幻灯片新增文本框：</p>
+      <pre><code>const slide = Application.ActivePresentation.Slides.Item(1);
+const box = slide.Shapes.AddTextbox(1, 30, 40, 210, 60);
+box.TextFrame.TextRange.Text = variable.value.token;
+box.Left = 30;
+box.Top = 40;
+box.Width = 210;
+box.Height = 60;
+return {
+  text: box.TextFrame.TextRange.Text,
+  left: box.Left,
+  top: box.Top,
+  width: box.Width,
+  height: box.Height
+};</code></pre>
+      <p>读回检查文字标记，以及左、上、宽、高是否正确。写入发生在这次的临时 `.pptx` 副本，不会改用户正式演示文稿。</p>
+    </section>
+
+    <section>
+      <h2>6. Transform 和 Render 是什么？</h2>
+      <table>
+        <thead><tr><th>工具</th><th>小孩版解释</th><th>这次怎么用</th></tr></thead>
+        <tbody>
+          <tr><td><code>transform.create</code></td><td>写一张“读取说明卡”。</td><td>保存只读 JavaScript 代码。</td></tr>
+          <tr><td><code>variable.transform</code></td><td>照说明去 WPS 读取东西，装进小盒子。</td><td>取得测试 token，或读取工作簿的数据。</td></tr>
+          <tr><td><code>render.create</code></td><td>写一张“修改说明卡”。</td><td>保存有意要写入临时文档的代码。</td></tr>
+          <tr><td><code>variable.render</code></td><td>真正照修改卡去做，然后报告结果。</td><td>写公式、改格式、加文本框。</td></tr>
+        </tbody>
+      </table>
+      <p>项目规定：<code>wps.exec</code> 和 Transform 用来读；有意修改文档的操作放在 Render。测试也遵守这条规则。</p>
+    </section>
+
+    <section>
+      <h2>7. 这次真的测到了什么？ <span class="pill">PASS</span></h2>
+      <table>
+        <thead><tr><th>宿主</th><th>WPS 返回的版本</th><th>检查结果</th></tr></thead>
+        <tbody>
+          <tr><td>ET 表格</td><td>API 12.0 / Build 28496</td><td>打开、读单元格和公式、写公式/粗体/数字格式、读回，全部通过。</td></tr>
+          <tr><td>WPP 演示</td><td>API 12.0 / Build 12.1.28496.28496</td><td>打开、读幻灯片和形状、创建文本框、写文字和几何属性、读回，全部通过。</td></tr>
+          <tr><td>Writer 文字</td><td>API 12.0 / Build 12.1.28496.28496</td><td>读取正文和表格；Render 插入文本并读回；保存、关闭临时 DOCX，全部通过。</td></tr>
+        </tbody>
+      </table>
+      <p>真实测试记录：<span class="file">doc/macos-live-et-wpp-smoke-2026-09-29.md</span>；<span class="file">doc/macos-live-writer-smoke-2026-09-29.md</span></p>
+    </section>
+
+    <section>
+      <h2>8. 小朋友自己想再跑一次？▶️</h2>
+      <ol class="steps">
+        <li>在 macOS 上，先把 WPS 完全退出。</li>
+        <li>确认项目原来的 Add-in 页面服务在 <code>127.0.0.1:18766</code> 可访问。</li>
+        <li>确认 WPS 和测试端口 <code>18767</code> 没被其他程序占用。</li>
+        <li>在项目目录运行：<pre><code>npm run test:wps-live</code></pre></li>
+        <li>如果 18767 被其他程序占用了，可以换一个非 18766 的端口：<pre><code>WPS_LIVE_PORT=18769 npm run test:wps-live</code></pre></li>
+        <li>Writer 单独运行：<pre><code>npm run test:wps-writer-live</code></pre>同样要求 WPS 完全退出；脚本会单独打开 Writer 测试文档并在结束时关闭 WPS。</li>
+        <li>看到绿色的通过结果后，测试脚本会自动清理临时文件。普通模拟测试仍用 <code>npm test</code>。</li>
+      </ol>
+      <p class="callout warning"><strong>如果说“WPS 已经运行”：</strong>先完整退出 WPS 再重试。<br><strong>如果说 Add-in 页面服务不可用：</strong>先检查 <code>curl http://127.0.0.1:18766/health</code>。<br><strong>如果说 WPS 没注册文件：</strong>检查 WPS 是否能加载本机 Add-in，以及测试服务日志；不要把“没连上”算作 API 通过。</p>
+    </section>
+
+    <section>
+      <h2>9. 还有哪些没测？ 🧩</h2>
+      <ul>
+        <li>Writer 冒烟测试只覆盖正文和表格读取、文本插入与读回；完整的 105 项 Writer 报告矩阵仍未逐项运行。</li>
+        <li>这是一轮冒烟测试，只挑几个常用 API 检查，不是把 WPS 的几千个成员全部调用一遍。</li>
+        <li>本轮由 Python 创建可打开的临时 Office 输入文件；没有把 <code>Workbooks.Add()</code> 或 <code>Presentations.Add()</code> 当作本轮断言。</li>
+        <li>事件监听的回调内容、其他 WPS 版本、更多 API 参数组合，仍需后续逐项加入测试矩阵。</li>
+      </ul>
+      <p class="callout">就像先确认自行车能刹车、能转弯，再慢慢测每个零件；冒烟测试是第一圈，不是整本 API 字典的毕业考试。</p>
+    </section>
+
+    <section>
+      <h2>代码文件地图 🗂️</h2>
+      <table>
+        <thead><tr><th>文件</th><th>负责什么</th></tr></thead>
+        <tbody>
+          <tr><td class="file">test/wps-live/create-fixtures.py</td><td>制作固定内容的临时 Excel、PowerPoint 和 Writer 输入文件。</td></tr>
+          <tr><td class="file">test/wps-live/et-wpp.live.test.mjs</td><td>运行 ET/WPP 隔离测试、调用 MCP、做断言、记录宿主版本。</td></tr>
+          <tr><td class="file">test/wps-live/writer.live.test.mjs</td><td>运行 Writer 隔离测试，验证文档/表格读取、Render 写入、读回和清理。</td></tr>
+          <tr><td class="file">scripts/run-macos-wps-live-tests.sh</td><td>运行 ET/WPP 测试并收尾。</td></tr>
+          <tr><td class="file">scripts/run-macos-wps-writer-live-test.sh</td><td>独立运行 Writer 测试，过滤到临时 DOCX 并收尾。</td></tr>
+          <tr><td class="file">scripts/enable-macos-wps-live-port.sh</td><td>临时把 Add-in 的 WebSocket 目标指向测试端口，结束后还原。</td></tr>
+          <tr><td class="file">addon/main.js</td><td>WPS Add-in 页面连接本地 WebSocket 的代码。</td></tr>
+          <tr><td class="file">doc/macos-live-et-wpp-smoke-2026-09-29.md</td><td>ET/WPP 真实 WPS 测试版本和结果。</td></tr>
+          <tr><td class="file">doc/macos-live-writer-smoke-2026-09-29.md</td><td>Writer 真实 WPS 测试版本和结果。</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+  <footer class="wrap">做测试就像认真做实验：用干净样品、记下真实结果、最后收拾好现场。🌟</footer>
+</body>
+</html>

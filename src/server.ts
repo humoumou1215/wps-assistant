@@ -7,15 +7,20 @@ import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { parse } from "acorn";
 import { WebSocket, WebSocketServer } from "ws";
 import { z } from "zod";
+import { analyzeReadOnlyCode, formatReadOnlyViolations, MAX_CODE_LENGTH } from "./readonly-guard.js";
 
 const APP_DIR = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const PORT = Number(process.env.WPS_MCP_PORT ?? "18766");
-const DATA_DIR = resolve(process.env.WPS_MCP_DATA_DIR ?? join(homedir(), "Library/Application Support/wps-mcp"));
+/** Per-user state directory; keeps the macOS default and uses platform-native paths elsewhere. */
+function defaultDataDir() {
+  if (process.platform === "win32") return join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "wps-mcp");
+  if (process.platform === "darwin") return join(homedir(), "Library/Application Support/wps-mcp");
+  return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "wps-mcp");
+}
+const DATA_DIR = resolve(process.env.WPS_MCP_DATA_DIR ?? defaultDataDir());
 const STATE_FILE = join(DATA_DIR, "state.json");
-const MAX_CODE_LENGTH = 100_000;
 const RPC_TIMEOUT_MS = 45_000;
 
 type DocType = "spreadsheet" | "presentation" | "writer";
@@ -125,63 +130,21 @@ function serializeResult(value: unknown) {
   catch { throw new ToolError("WPS_EXEC_ERROR", "WPS code result must be JSON-serializable"); }
 }
 
-const DENIED_METHODS = new Set([
-  "add", "add2", "addchart", "addshape", "addtextbox", "addtable", "addslide", "addworksheet",
-  "delete", "remove", "clear", "clearcontents", "clearformats", "insert", "insertafter", "insertbefore",
-  "cut", "paste", "copy", "duplicate", "merge", "unmerge", "save", "saveas", "close", "quit", "run",
-  "execute", "sendkeys", "select", "activate", "undo", "redo", "writefile", "appendfile", "mkdir",
-  "setvalue", "settext", "setdata", "setsource", "autofill", "autofilter", "sort", "sortascending", "sortdescending",
-  "calculate", "calculatefull", "refresh", "refreshall", "replace", "exportasfixedformat", "applytemplate", "insertbreak",
-  "addapieventlistener", "removeapieventlistener", "write", "savecopyas", "protect", "unprotect", "printout",
-]);
-const DENIED_GLOBALS = new Set(["eval", "Function", "fetch", "XMLHttpRequest", "WebSocket", "Worker", "SharedWorker"]);
-
-/** Best-effort syntax guard. This is not a sandbox; WPS JS API is intentionally powerful. */
+/**
+ * Read-only guard for `wps.exec` / Variable Transforms. The rule set and the AST walk live in
+ * `readonly-guard.ts` so that tooling (including the agent-facing skill) can call the exact same
+ * judgement offline instead of maintaining a hand-copied denylist.
+ *
+ * Callers must surface the whole violation batch: `analyzeReadOnlyCode` reports every problem in
+ * one pass, and collapsing that back to a single error is what used to push agents into
+ * one-violation-per-round retry loops.
+ */
 function assertReadOnlyCode(code: string) {
-  if (!code.trim() || code.length > MAX_CODE_LENGTH) throw new ToolError("INVALID_REQUEST", `code must be 1-${MAX_CODE_LENGTH} characters`);
-  let ast: any;
-  try { ast = parse(code, { ecmaVersion: "latest", sourceType: "script", allowReturnOutsideFunction: true }); }
-  catch (error) { throw new ToolError("INVALID_REQUEST", `Invalid JavaScript: ${(error as Error).message}`); }
-  const visit = (node: any) => {
-    if (!node || typeof node !== "object") return;
-    if (node.type === "AssignmentExpression" && node.left?.type !== "Identifier") {
-      throw new ToolError("READ_ONLY_VIOLATION", "wps.exec/transform cannot assign to document objects; use variable.render for document edits");
-    }
-    if (node.type === "UpdateExpression" || (node.type === "UnaryExpression" && node.operator === "delete")) {
-      throw new ToolError("READ_ONLY_VIOLATION", "wps.exec/transform cannot mutate WPS objects");
-    }
-    if (node.type === "NewExpression") throw new ToolError("READ_ONLY_VIOLATION", "wps.exec/transform cannot instantiate host objects");
-    if (node.type === "MemberExpression") {
-      const prop = node.computed && node.property?.type === "Literal" ? String(node.property.value) : node.property?.name;
-      if (prop && (DENIED_METHODS.has(String(prop).toLowerCase()) || ["constructor", "__proto__", "prototype"].includes(String(prop)))) {
-        throw new ToolError("READ_ONLY_VIOLATION", `Member '${prop}' is not allowed in read-only code`);
-      }
-    }
-    if (node.type === "CallExpression") {
-      const callee = node.callee;
-      if (callee?.type === "Identifier" && DENIED_GLOBALS.has(callee.name)) {
-        throw new ToolError("READ_ONLY_VIOLATION", `Call to '${callee.name}' is not allowed in read-only code`);
-      }
-      if (callee?.type === "MemberExpression" && callee.computed && callee.property?.type !== "Literal") {
-        throw new ToolError("READ_ONLY_VIOLATION", "Dynamic member calls are not allowed in read-only code");
-      }
-      const prop = callee?.type === "MemberExpression"
-        ? (callee.computed && callee.property?.type === "Literal" ? String(callee.property.value) : callee.property?.name)
-        : undefined;
-      if (prop && DENIED_GLOBALS.has(String(prop))) {
-        throw new ToolError("READ_ONLY_VIOLATION", `Call to '${prop}' is not allowed in read-only code`);
-      }
-      if (prop && DENIED_METHODS.has(String(prop).toLowerCase())) {
-        throw new ToolError("READ_ONLY_VIOLATION", `Method '${prop}' is not allowed in read-only code`);
-      }
-    }
-    for (const [key, value] of Object.entries(node)) {
-      if (key === "loc" || key === "start" || key === "end") continue;
-      if (Array.isArray(value)) value.forEach(visit);
-      else if (value && typeof value === "object") visit(value);
-    }
-  };
-  visit(ast);
+  const analysis = analyzeReadOnlyCode(code);
+  if (analysis.invalid) throw new ToolError("INVALID_REQUEST", analysis.invalid.message);
+  if (analysis.violations.length > 0) {
+    throw new ToolError("READ_ONLY_VIOLATION", formatReadOnlyViolations(analysis.violations), { violations: analysis.violations });
+  }
 }
 function registerDocument(connection: Connection, item: AddinDocument) {
   if (!item || !item.documentKey || !item.name || !["spreadsheet", "presentation", "writer"].includes(item.type)) return;
@@ -425,7 +388,8 @@ async function httpHandler(req: IncomingMessage, res: ServerResponse) {
   if (url.pathname === "/mcp") { await handleMcpHttp(req, res); return; }
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-    res.end(JSON.stringify({ ok: true, connections: connections.size, documents: documents.size }));
+    // Count only usable documents so /health matches workspace.list_documents.
+    res.end(JSON.stringify({ ok: true, connections: connections.size, documents: [...documents.values()].filter((doc) => doc.connected).length }));
     return;
   }
   const assets: Record<string, string> = {

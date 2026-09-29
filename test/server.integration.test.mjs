@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import WebSocket from "ws";
@@ -27,7 +28,7 @@ function callText(result) { return JSON.parse(result.content[0].text); }
 
 test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only calls", async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), "wps-mcp-test-"));
-  const child = spawn(process.execPath, [new URL("../dist/src/server.js", import.meta.url).pathname], {
+  const child = spawn(process.execPath, [fileURLToPath(new URL("../dist/src/server.js", import.meta.url))], {
     env: { ...process.env, WPS_MCP_TRANSPORT: "http", WPS_MCP_PORT: String(PORT), WPS_MCP_DATA_DIR: dataDir },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -111,6 +112,18 @@ test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only cal
     } });
     assert.equal(blocked.isError, true);
     assert.match(blocked.content[0].text, /READ_ONLY_VIOLATION/);
+
+    // A single call must surface every violation, not just the first one: the tool result is what
+    // the agent corrects against, and a fail-fast guard forces one round trip per violation.
+    const blockedBatch = await client.callTool({ name: "wps.exec", arguments: {
+      documentId, code: "let i = 0; i++;\nconst o = {}; o.a = 1;\nconst d = new Date();\nreturn { i: i, o: o, d: d };",
+    } });
+    assert.equal(blockedBatch.isError, true);
+    const batchError = callText(blockedBatch).error;
+    assert.equal(batchError.code, "READ_ONLY_VIOLATION");
+    assert.deepEqual(batchError.details.violations.map((violation) => violation.kind), ["UPDATE_EXPRESSION", "MEMBER_ASSIGNMENT", "NEW_OPERATOR"]);
+    assert.match(batchError.message, /3 violations found/);
+    assert.match(batchError.message, /line 3/);
 
     const created = callText(await client.callTool({ name: "transform.create", arguments: {
       variableName: "smoke data", sourceDocumentId: documentId,

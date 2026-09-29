@@ -9,7 +9,6 @@
     if (portOverride && /^\d+$/.test(portOverride)) url.port = portOverride;
     return url.toString();
   })();
-  const STATUS_URL = new URL("/addon/status.html", pageUrl);
   const $status = typeof document !== "undefined" ? document.getElementById("status") : null;
   const $details = typeof document !== "undefined" ? document.getElementById("details") : null;
   const $dot = typeof document !== "undefined" ? document.getElementById("dot") : null;
@@ -87,7 +86,9 @@
     const fullName = toStringValue(getProp(doc, "FullName") || "");
     const name = toStringValue(getProp(doc, "Name") || fullName);
     if (!name) return null;
-    const current = selectionInfo(app, type);
+    const active = type === "spreadsheet" ? getProp(app, "ActiveWorkbook") : type === "presentation" ? getProp(app, "ActivePresentation") : getProp(app, "ActiveDocument");
+    const isActive = active === doc || (fullName && fullName === toStringValue(getProp(active, "FullName")));
+    const current = isActive ? selectionInfo(app, type) : {};
     const selection = type === "spreadsheet"
       ? { ...(current.sheet ? { sheet: current.sheet } : {}), ...(current.address ? { address: current.address } : {}) }
       : type === "presentation"
@@ -100,7 +101,7 @@
       ...(fullName ? { path: fullName } : {}),
       ...(current.sheet ? { activeSheet: current.sheet } : {}),
       ...(current.slide !== undefined ? { activeSlide: current.slide } : {}),
-      selection,
+      ...(isActive ? { selection } : {}),
     };
   }
   function currentDocuments() {
@@ -176,14 +177,36 @@
   if (typeof WebSocket !== "undefined") connect();
   if (typeof window !== "undefined") {
     window.WpsMcpOnLoad = () => true;
-    window.WpsMcpShowStatus = () => {
+    const localPanes = {};
+    function showPane(page) {
       try {
-        const pane = getApplication()?.CreateTaskPane?.(STATUS_URL.toString(), "WPS MCP Bridge");
-        if (pane) pane.Visible = true;
-        else if (typeof alert === "function") alert("WPS MCP Bridge is running; use the MCP client to run tools.");
+        const app = getApplication();
+        const host = (app?.CreateTaskPane || app?.CreateTaskpane) ? app : window.wps;
+        const getPane = id => safe(() => host.GetTaskPane ? host.GetTaskPane(id) : host.GetTaskpane(id), null);
+        const key = "wps-mcp-pane-" + page;
+        const storage = app?.PluginStorage || window.wps?.PluginStorage;
+        const saved = safe(() => storage?.getItem(key), localPanes[page]);
+        let pane = saved == null ? null : getPane(saved);
+        if (!pane) {
+          const url = new URL(page === "status" ? "/addon/status.html" : "/addon/taskpane.html", pageUrl);
+          if (page !== "status") url.searchParams.set("page", page);
+          const port = new URL(BRIDGE_URL).port;
+          if (port && /^\d+$/.test(port)) url.port = port;
+          const create = host?.CreateTaskPane || host?.CreateTaskpane;
+          const created = create?.call(host, url.toString(), page === "status" ? "WPS MCP Bridge" : "WPS 助手");
+          pane = typeof created === "number" || typeof created === "string" ? getPane(created) : created;
+          if (!pane) throw new Error("当前 WPS 环境无法创建任务窗格");
+          const id = safe(() => pane.ID, safe(() => pane.Id, undefined));
+          if (id !== undefined) { localPanes[page] = id; safe(() => storage?.setItem(key, String(id)), null); }
+        }
+        safe(() => { pane.DockPosition = 2; if (!Number(pane.Width || 0)) pane.Width = 400; }, null);
+        pane.Visible = true;
       } catch (error) { if (typeof alert === "function") alert(error?.message || String(error)); }
       return true;
-    };
+    }
+    window.WpsMcpShowStatus = () => showPane("status");
+    window.WpsMcpShowAssistant = () => showPane("chat");
+    window.WpsMcpShowVariables = () => showPane("vars");
   }
   if (typeof setInterval !== "undefined") setInterval(() => {
     if (socket?.readyState !== WebSocket.OPEN) return;

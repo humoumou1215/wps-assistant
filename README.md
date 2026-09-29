@@ -148,3 +148,15 @@ npm run test:wps-writer-live
 - 重新从诊断报告包生成 API 技能：`python3 scripts/generate-wps-api-skill.py <reports.zip>`（报告包目前不在工作区，可用 `git show HEAD:reports.zip > reports.zip` 取回）
 - 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。一次 macOS 联调记录见 [`docs/macos-codex-validation.md`](docs/macos-codex-validation.md)：其中 Codex 只是当时使用的测试客户端/工具，报告中的客户端限制不构成项目运行依赖。
 - 2026-09-29 的真实 WPS 冒烟记录：[ET/WPP](docs/macos-live-et-wpp-smoke-2026-09-29.md)、[Writer](docs/macos-live-writer-smoke-2026-09-29.md)。
+
+## 助手任务窗格
+
+启动服务后，在 WPS 的「WPS MCP」选项卡选择「助手面板」或「变量管理」。也可以用浏览器打开 [任务窗格](http://127.0.0.1:18766/addon/taskpane.html)。首次使用在「设置」中填写模型配置并测试连接：支持 DeepSeek 内置目录和自定义 OpenAI 兼容端点（completions / responses）。需要 Node.js 22.19 或更高版本。
+
+- 会话支持流式回复、思考过程、工具执行详情、停止生成，以及 `@` 文档、选区快照、变量和 Render 引用。
+- 变量管理支持搜索、源文档筛选、取值与脚本预览、单条/全部重算和重写。操作失败会显示具体原因；停止生成不回滚已经完成的写入。
+- `config.json` 和 `state.json` 存在 `WPS_MCP_DATA_DIR` 指定的数据目录；默认目录与原服务一致。API Key 仅在服务端保存，读取配置只返回存在标记。更换端点时不会自动沿用旧密钥与请求头。
+- 单会话历史由 pi 保存在数据目录下的 `pi/sessions`，重新打开页面或重启服务后可恢复。内嵌 Agent 只挂载八个 WPS 工具，关闭内置文件/终端工具和外部资源自动发现，不读取 `~/.pi`。
+- 新建绑定保存文档路径到稳定 ID 的映射，重连后恢复关联。旧版绑定没有历史路径映射时，不会猜测它对应的新文档；需要重新创建绑定。文件移动或另存为新路径也被视为新文档。
+
+开发验证：`npm test` 覆盖 MCP、UI API、完整 Agent 工具往返、配置隐私、取消与重启恢复；`npm run test:wps-live` 验证真实 ET/WPP 和任务窗格复用；`npm run test:wps-writer-live` 验证真实 Writer。真人式浏览器验证记录见 [审计与验收报告](docs/ui-audit-and-validation.md)。

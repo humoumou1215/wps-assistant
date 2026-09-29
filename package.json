@@ -17,6 +17,7 @@
     "debug:local": "node scripts/debug-local.mjs"
   },
   "dependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.1",
     "@modelcontextprotocol/sdk": "^1.30.1",
     "acorn": "^8.18.0",
     "ws": "^8.22.0",
@@ -28,5 +29,8 @@
     "@types/ws": "^8.18.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
+  },
+  "engines": {
+    "node": ">=22.19.0"
   }
 }

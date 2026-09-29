@@ -176,6 +176,30 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
   assert.ok(etBaseline.result.app && etBaseline.result.version && etBaseline.result.build);
 
   const etVariable = await makeVariable(client, etDoc.documentId, `live-et-${runId}`, `ET-${runId}`);
+  // Exercise the real ribbon handlers and the host's pane cache, not just a browser page.
+  const paneProbe = await runRender(client, etVariable, etDoc.documentId, "Task pane creation and reuse", `
+    window.WpsMcpShowAssistant();
+    const host = (Application.GetTaskPane || Application.GetTaskpane) ? Application : wps;
+    const getPane = id => host.GetTaskPane ? host.GetTaskPane(id) : host.GetTaskpane(id);
+    const storage = Application.PluginStorage || wps.PluginStorage;
+    const first = storage.getItem("wps-mcp-pane-chat");
+    window.WpsMcpShowAssistant();
+    const second = storage.getItem("wps-mcp-pane-chat");
+    const pane = getPane(second);
+    const visible = pane.Visible;
+    pane.Visible = false;
+    window.WpsMcpShowVariables();
+    const variables = storage.getItem("wps-mcp-pane-vars");
+    const varsPane = getPane(variables);
+    const varsVisible = varsPane.Visible;
+    varsPane.Visible = false;
+    return { first, second, visible, variables, varsVisible };
+  `);
+  assert.ok(paneProbe.first != null, JSON.stringify(paneProbe));
+  assert.equal(paneProbe.first, paneProbe.second, "reopening assistant must reuse its pane");
+  assert.equal(paneProbe.visible, true);
+  assert.equal(paneProbe.varsVisible, true);
+  console.log("Real WPS task pane handlers:", JSON.stringify(paneProbe));
   const etRender = await runRender(client, etVariable, etDoc.documentId, "ET formula and format round-trip", `
     const cell = Application.ActiveSheet.Range("Z100");
     cell.Formula = "=1+2";

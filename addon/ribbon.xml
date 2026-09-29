@@ -3,6 +3,8 @@
     <tabs>
       <tab id="WpsMcpTab" label="WPS MCP">
         <group id="WpsMcpGroup" label="本地连接">
+          <button id="WpsMcpAssistant" label="助手面板" size="large" onAction="WpsMcpShowAssistant" />
+          <button id="WpsMcpVariables" label="变量管理" size="large" onAction="WpsMcpShowVariables" />
           <button id="WpsMcpStatus" label="显示连接状态" size="large" onAction="WpsMcpShowStatus" />
         </group>
       </tab>

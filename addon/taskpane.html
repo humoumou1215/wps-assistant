@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>WPS MCP · 助手面板</title><link rel="stylesheet" href="taskpane.css"><script src="taskpane.js" defer></script></head><body>
+    <aside class="drawer" id="drawer">
+      <div class="drawer-head">
+        <div class="brand"><span class="mark">M</span>WPS MCP</div>
+        <span class="live" id="livePill"><span class="dot"></span>正在连接</span>
+        <div class="grow"></div>
+        <button class="mini" id="refreshState" title="刷新连接和文档状态">刷新</button>
+      </div>
+
+      <div class="tabbar" role="tablist">
+        <button role="tab" aria-selected="true" data-tab="chat">会话</button>
+        <button role="tab" aria-selected="false" data-tab="vars">变量<span class="count" id="varCount">0</span></button>
+        <button role="tab" aria-selected="false" data-tab="settings">设置</button>
+      </div>
+
+      <div id="notice" class="notice" role="status" hidden></div>
+<!-- ---------- 会话面板 ---------- -->
+      <div class="panel" id="panel-chat">
+        <div class="chat-top"><span class="chip" id="modelChip">尚未配置模型</span><span id="usageLabel"></span></div>
+        <div class="chat-scroll" id="chatScroll">
+          <div class="chat-inner" id="chatInner"></div>
+        </div>
+
+        <div class="composer">
+          <div class="mention" id="mentionPop" aria-label="选择引用"></div>
+          <div class="ref-list" id="selectedRefs"></div><textarea class="editor" id="editor" aria-label="消息" placeholder="描述你的需求，输入 @ 引用文档、选区、变量或 Render…"></textarea>
+          <div class="composer-foot">
+            <span class="hint"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · <kbd>@</kbd> 引用对象</span>
+            <button class="atbtn" id="atBtn" title="插入引用">@</button>
+            <button class="mini" id="stopBtn" hidden>停止</button><button class="send" id="sendBtn">发送</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- 变量面板 ---------- -->
+      <div class="panel" id="panel-vars" hidden>
+        <div class="vars-top">
+          <input id="varSearch" placeholder="搜索变量名 / 描述 / 数据来源…">
+          <button class="mini" id="recalcAll" title="按当前数据源重新执行全部 Transform">全部重算</button>
+          <button class="mini" id="rerenderAll" title="执行全部变量下的所有 Render，写回目标文档">全部重写</button>
+        </div>
+        <!-- 统计 + 文件筛选：一条横向滚动带，常驻 -->
+        <div class="vars-bar" id="varsBar">
+          <div class="vars-strip" id="varsStrip"></div>
+          <span class="edge"></span>
+        </div>
+        <div class="vars-scroll" id="varsScroll">
+          <div id="varsList"></div>
+        </div>
+      </div>
+
+      <!-- ---------- 设置面板（模型配置） ---------- -->
+      <div class="panel" id="panel-settings" hidden>
+        <div class="st-wrap">
+
+          <!-- 当前生效 -->
+          <div class="st-now">
+            <div class="t"><span class="st-dot"></span>当前生效 · <span id="stNowName">DeepSeek 官方</span></div>
+            <div class="s" id="stNowDetail"></div>
+          </div>
+
+          <!-- 服务商 -->
+          <div class="st-sec">
+            <div class="hd">服务商</div>
+            <div class="bd">
+              <div class="st-seg" id="stKind">
+                <button type="button" data-kind="builtin" aria-pressed="true">DeepSeek 官方</button>
+                <button type="button" data-kind="custom" aria-pressed="false">自定义 / OpenAI 兼容</button>
+              </div>
+              <div class="st-hint" id="stKindHint">内置服务商：只需 API Key，模型参数（上下文 / 输出上限 / 兼容性）由 pi 自带的目录填充。</div>
+            </div>
+          </div>
+
+          <!-- 连接 -->
+          <div class="st-sec">
+            <div class="hd">连接</div>
+            <div class="bd">
+              <div class="st-row" id="stRowName" hidden>
+                <label>名称</label>
+                <input class="st-in" id="stName" placeholder="本地推理（只影响界面显示）">
+              </div>
+              <div class="st-row" id="stRowBase" hidden>
+                <label>Base URL</label>
+                <input class="st-in mono" id="stBase" placeholder="http://192.168.31.79:8080/v1">
+              </div>
+              <div class="st-row">
+                <label>API Key</label>
+                <span class="st-key">
+                  <input class="st-in" id="stKey" type="password" placeholder="sk-…（本地推理可留空）">
+                  <button type="button" class="st-eye" id="stEye" title="显示 / 隐藏">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M2 12s3.6-6 10-6 10 6 10 6-3.6 6-10 6-10-6-10-6Z"/><circle cx="12" cy="12" r="2.6"/></svg>
+                  </button>
+                </span>
+              </div>
+              <div class="st-hint">密钥保存在本机，仅在请求所选模型端点时使用。留空保留同端点的已有密钥。<button class="mini" id="clearKey" type="button">清除密钥</button></div>
+            </div>
+          </div>
+
+          <!-- 模型 -->
+          <div class="st-sec">
+            <div class="hd">模型<span class="grow"></span><span class="st-src" id="stModelSrc">来自内置目录</span></div>
+            <div class="bd">
+              <!-- 内置模式 -->
+              <div id="stBuiltin">
+                <div class="st-row">
+                  <label>选择模型</label>
+                  <select class="st-sel" id="stPreset">
+                    <option value="deepseek-flash">deepseek-flash · V4.1 Flash</option>
+                    <option value="deepseek-v4-pro">deepseek-v4-pro · V4 Pro</option>
+                  </select>
+                </div>
+                <div class="st-row"><label>上下文</label><span class="st-ro" id="stBiCtx">—</span></div>
+                <div class="st-row"><label>最大输出</label><span class="st-ro" id="stBiMax">—</span></div>
+                <div class="st-row"><label>能力</label><span class="st-ro" id="stBiCap">—</span></div>
+              </div>
+              <!-- 自定义模式 -->
+              <div id="stCustom" hidden>
+                <div class="st-row">
+                  <label>模型 ID</label>
+                  <input class="st-in mono" id="stModelId" placeholder="llama-3.1-8b">
+                </div>
+                <div class="st-row">
+                  <label>显示名</label>
+                  <input class="st-in" id="stModelName" placeholder="Llama 3.1 8B（本地）">
+                </div>
+                <div class="st-row">
+                  <label>上下文长度</label>
+                  <input class="st-in mono" id="stCtx" value="131072">
+                  <span class="st-unit">tokens</span>
+                </div>
+                <div class="st-row">
+                  <label>最大输出</label>
+                  <input class="st-in mono" id="stMax" value="8192">
+                  <span class="st-unit">tokens</span>
+                </div>
+                <div class="st-row">
+                  <label>能力</label>
+                  <label class="st-sw"><input type="checkbox" id="stReasoning">支持推理</label>
+                  <label class="st-sw"><input type="checkbox" id="stVision">图片输入</label>
+                </div>
+              </div>
+            </div>
+
+            <!-- 高级折叠 -->
+            <div class="st-fold" id="stFoldAdv">
+              <button type="button" id="stAdvBtn"><span class="arw">▶</span>高级：协议 / 兼容性 / 额外请求头</button>
+              <div class="st-fbd">
+                <div class="st-row">
+                  <label>API 协议</label>
+                  <select class="st-sel" id="stApi">
+                    <option value="openai-completions">openai-completions（多数兼容端点）</option>
+                    <option value="openai-responses">openai-responses</option>
+                    
+                    
+                  </select>
+                </div>
+                <div class="st-row">
+                  <label>思考格式</label>
+                  <select class="st-sel" id="stThinkFmt">
+                    <option value="">自动（按 Base URL 探测）</option>
+                    <option value="openai">openai</option>
+                    <option value="deepseek">deepseek</option>
+                    <option value="qwen">qwen · enable_thinking</option>
+                    <option value="chat-template">chat-template · llama.cpp 系</option>
+                    <option value="together">together</option>
+                    <option value="zai">zai</option>
+                    <option value="string-thinking">string-thinking</option>
+                  </select>
+                </div>
+                <div class="st-row">
+                  <label>输出上限字段</label>
+                  <select class="st-sel" id="stMaxField">
+                    <option value="">自动探测</option>
+                    <option value="max_tokens">max_tokens</option>
+                    <option value="max_completion_tokens">max_completion_tokens</option>
+                  </select>
+                </div>
+                <div class="st-row">
+                  <label>额外 Headers</label>
+                  <input class="st-in mono" id="stHeaders" placeholder='{"X-Corp-Auth":"…"}'>
+                </div>
+                <div class="st-hint">本地推理最常见的坑就在这一栏：llama.cpp / vLLM / Qwen 的思考参数写法各不相同，自动探测不准时手动指定。</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 思考等级 -->
+          <div class="st-sec">
+            <div class="hd">思考等级</div>
+            <div class="bd">
+              <div class="st-seg st-seg-sm" id="stThink">
+                <button type="button" data-lv="off" aria-pressed="true">off</button>
+                <button type="button" data-lv="minimal" aria-pressed="false">minimal</button>
+                <button type="button" data-lv="low" aria-pressed="false">low</button>
+                <button type="button" data-lv="medium" aria-pressed="false">medium</button>
+                <button type="button" data-lv="high" aria-pressed="false">high</button>
+                <button type="button" data-lv="xhigh" aria-pressed="false">xhigh</button>
+                <button type="button" data-lv="max" aria-pressed="false">max</button>
+              </div>
+              <div class="st-hint" id="stThinkHint">模型不支持推理时，pi 会自动降级到 off。</div>
+            </div>
+          </div>
+
+          <div class="st-actions">
+            <button type="button" class="st-ghost" id="stTest">测试连接</button>
+            <span class="grow"></span>
+            <button type="button" class="st-primary" id="stSave">保存</button>
+          </div>
+          <div class="st-result" id="stResult" role="status"></div>
+          <div class="st-hint" style="margin-top:7px">保存后下一轮会话使用新配置，会话历史保存在本机。</div>
+        </div>
+      </div>
+
+      <div class="drawer-foot">
+        <span class="grow" id="footMsg">变量与规则存于本机 state.json · 文档注册仅在内存</span>
+        <span id="footClock">—</span>
+      </div>
+      
+      
+    </aside>
+</body></html>

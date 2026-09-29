@@ -1,0 +1,65 @@
+import { createServer } from 'node:http';
+import { spawn } from 'node:child_process';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import WebSocket from 'ws';
+
+export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
+  if (!port) { const probe = createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r)); port = probe.address().port; await new Promise(r => probe.close(r)); }
+  const dir = dataDir || await mkdtemp(join(tmpdir(), 'wps-ui-test-'));
+  const requests = [], appState = { value: 120, written: null, failRender: false };
+  const model = createServer(async (req, res) => {
+    let raw = ''; for await (const data of req) raw += data;
+    const body = JSON.parse(raw || '{}'); requests.push({ body, headers: req.headers });
+    const messages = body.messages || []; const userIndex = messages.findLastIndex(m => m.role === 'user');
+    const userContent = messages[userIndex]?.content;
+    const user = typeof userContent === 'string' ? userContent : (userContent || []).map(c => c.text || '').join('');
+    if (user.includes('模拟失败')) { res.writeHead(401); res.end(JSON.stringify({ error: { message: 'invalid key' } })); return; }
+    if (user.includes('慢响应')) await new Promise(r => { const timer = setTimeout(r, 10000); res.on('close', () => { clearTimeout(timer); r(); }); });
+    if (res.destroyed) return;
+    const results = messages.slice(userIndex + 1).filter(m => m.role === 'tool');
+    const parsed = results.map(m => { try { return JSON.parse(m.content); } catch { return {}; } });
+    const variableId = parsed.find(v => v.variableId)?.variableId || 'var_001';
+    const steps = [
+      ['workspace_list_documents', {}], ['document_get', { documentId: 'doc_001' }],
+      ['wps_exec', { documentId: 'doc_001', code: 'return Application.ActiveWorkbook.Name;' }],
+      ['transform_create', { variableName: '销售合计', sourceDocumentId: 'doc_001', sourceRef: '销售数据!A1:B3', description: 'UI 验证变量', code: 'return Application.ActiveSheet.Range("B3").Value2;' }],
+      ['variable_transform', { variableId }],
+      ['render_create', { variableId, targetDocumentId: 'doc_001', description: '销售数据!D3', code: 'Application.ActiveSheet.Range("D3").Value2 = variable.value; return Application.ActiveSheet.Range("D3").Value2;' }],
+      ['variable_render', { variableId }], ['variable_get', { variableId }],
+    ];
+    let step = user.includes('验证绑定') ? steps[results.length] : null;
+    if (user.includes('守卫验证')) step = ['transform_create', { variableName: 'blocked', sourceDocumentId: 'doc_001', code: 'Application.ActiveSheet.Name = "bad"; return true;' }];
+    const content = step ? null : user.includes('验证绑定') ? '绑定已完成：销售合计已写入销售数据!D3。' : 'OK，模型连接正常。';
+    const toolCalls = step ? [{ index: 0, id: 'call_' + results.length, type: 'function', function: { name: step[0], arguments: JSON.stringify(step[1]) } }] : undefined;
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    const chunk = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ id: 'completion-test', object: 'chat.completion.chunk', created: 1, model: body.model, choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+    chunk({ role: 'assistant', ...(toolCalls ? { tool_calls: toolCalls } : { content }) });
+    chunk({}, step ? 'tool_calls' : 'stop'); res.end('data: [DONE]\n\n');
+  });
+  await new Promise(r => model.listen(modelPort, '127.0.0.1', r)); modelPort = model.address().port;
+  const base = `http://127.0.0.1:${port}`;
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../../dist/src/server.js', import.meta.url))], { env: { ...process.env, WPS_MCP_PORT: String(port), WPS_MCP_DATA_DIR: dir, WPS_MCP_TRANSPORT: 'http' }, stdio: ['ignore', 'ignore', 'pipe'] });
+  let log = ''; child.stderr.on('data', chunk => { log += chunk; });
+  for (let i = 0; i < 100; i++) { try { if ((await fetch(base + '/health')).ok) break; } catch {} if (child.exitCode !== null) throw new Error(log); await new Promise(r => setTimeout(r, 100)); }
+  const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+  const workbook = { Name: 'UI验证.xlsx' };
+  const app = { ActiveWorkbook: workbook, ActiveSheet: { Range(address) { return { get Value2() { return address === 'D3' ? appState.written : appState.value; }, set Value2(value) { if (appState.failRender) throw new Error('模拟文档写保护'); appState.written = value; } }; } } };
+  await new Promise((resolve, reject) => {
+    socket.on('error', reject);
+    socket.on('message', async raw => {
+      const message = JSON.parse(raw);
+      if (message.type === 'welcome') socket.send(JSON.stringify({ type: 'register', documents: [{ documentKey: 'ui-fixture', name: workbook.Name, type: 'spreadsheet', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' } }] }));
+      if (message.type === 'registered') resolve();
+      if (message.type === 'request') {
+        try { const result = await new Function('Application', 'wps', 'variable', message.code)(app, app, message.variable); socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: true, result } })); }
+        catch (error) { socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: false, error: error.message } })); }
+      }
+    });
+  });
+  const cfg = { kind: 'custom', label: '本地验证模型', baseUrl: `http://127.0.0.1:${modelPort}/v1`, api: 'openai-completions', apiKey: 'ui-test-secret', model: { id: 'ui-test-model', name: 'UI 验证模型', contextWindow: 32768, maxTokens: 2048, reasoning: false, vision: false }, compat: { thinkingFormat: '', maxTokensField: '' }, headers: { 'X-Test': 'header-secret' }, thinkingLevel: 'off' };
+  return { base, port, modelPort, dir, cfg, child, socket, requests, appState,
+    async close() { socket.close(); child.kill(); await new Promise(r => child.exitCode !== null ? r() : child.once('exit', r)); model.closeAllConnections(); await new Promise(r => model.close(r)); if (!dataDir) await rm(dir, { recursive: true, force: true }); } };
+}

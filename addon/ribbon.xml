@@ -1,0 +1,11 @@
+<customUI xmlns="http://schemas.microsoft.com/office/2006/01/customui" onLoad="WpsMcpOnLoad">
+  <ribbon startFromScratch="false">
+    <tabs>
+      <tab id="WpsMcpTab" label="WPS MCP">
+        <group id="WpsMcpGroup" label="本地连接">
+          <button id="WpsMcpStatus" label="显示连接状态" size="large" onAction="WpsMcpShowStatus" />
+        </group>
+      </tab>
+    </tabs>
+  </ribbon>
+</customUI>

@@ -1,0 +1,148 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import WebSocket from "ws";
+
+const PORT = 18768;
+const BASE = `http://127.0.0.1:${PORT}`;
+const WS = `ws://127.0.0.1:${PORT}/ws`;
+
+async function waitForHealth(child, serverLog) {
+  for (let i = 0; i < 100; i++) {
+    if (child.exitCode !== null) throw new Error(`MCP server exited: ${child.exitCode}; stderr: ${serverLog()}`);
+    try {
+      const response = await fetch(`${BASE}/health`);
+      if (response.ok) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  throw new Error("MCP server did not become ready");
+}
+function callText(result) { return JSON.parse(result.content[0].text); }
+
+test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only calls", async (t) => {
+  const dataDir = await mkdtemp(join(tmpdir(), "wps-mcp-test-"));
+  const child = spawn(process.execPath, [new URL("../dist/src/server.js", import.meta.url).pathname], {
+    env: { ...process.env, WPS_MCP_TRANSPORT: "http", WPS_MCP_PORT: String(PORT), WPS_MCP_DATA_DIR: dataDir },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  const childExit = new Promise((resolve) => child.once("exit", resolve));
+  let serverLog = "";
+  child.stderr.setEncoding("utf8").on("data", (data) => { serverLog += data; });
+  const appState = { writtenValue: null };
+  const sheet = {
+    Name: "Sheet1",
+    Range(address) {
+      return {
+        Address: address,
+        get Value2() { return appState.writtenValue; },
+        set Value2(value) { appState.writtenValue = value; },
+      };
+    },
+  };
+  const workbook = { Name: "MCP smoke.xlsx", FullName: "/tmp/MCP smoke.xlsx" };
+  const app = {
+    Name: "WPS表格", Version: "12.0", Build: 26885,
+    ActiveWorkbook: workbook, ActiveSheet: sheet, Selection: { Address: "A1:B2" },
+    Workbooks: { Count: 1, Item: () => workbook },
+  };
+  let socket;
+  let client;
+  try {
+    await waitForHealth(child, () => serverLog);
+    client = new Client({ name: "wps-mcp-integration-test", version: "1.0.0" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`)));
+    socket = new WebSocket(WS);
+    await new Promise((resolve, reject) => {
+      socket.once("open", resolve);
+      socket.once("error", reject);
+    });
+    socket.on("message", async (raw) => {
+      const request = JSON.parse(raw.toString());
+      if (request.type === "request" && request.method === "execute") {
+        try {
+          const run = new Function("Application", "wps", "variable", `"use strict"; return (async () => {\n${request.code}\n})()`);
+          const result = await run(app, app, request.variable);
+          socket.send(JSON.stringify({ type: "response", id: request.id, payload: { success: true, result } }));
+        } catch (error) {
+          socket.send(JSON.stringify({ type: "response", id: request.id, payload: { success: false, error: error.message } }));
+        }
+      }
+    });
+    const registered = new Promise((resolve) => socket.once("message", (raw) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === "welcome") {
+        socket.send(JSON.stringify({ type: "register", hostType: "spreadsheet", documents: [{
+          documentKey: workbook.FullName, type: "spreadsheet", name: workbook.Name, path: workbook.FullName,
+          activeSheet: "Sheet1", selection: { sheet: "Sheet1", address: "A1:B2" },
+        }] }));
+        socket.on("message", (payload) => { const event = JSON.parse(payload.toString()); if (event.type === "registered") resolve(); });
+      }
+    }));
+    await registered;
+
+    const tools = await client.listTools();
+    assert.deepEqual(tools.tools.map((tool) => tool.name), [
+      "workspace.list_documents", "document.get", "wps.exec", "transform.create",
+      "render.create", "variable.get", "variable.transform", "variable.render",
+    ]);
+
+    const listed = callText(await client.callTool({ name: "workspace.list_documents", arguments: {} }));
+    assert.equal(listed.documents.length, 1);
+    const documentId = listed.documents[0].documentId;
+    assert.equal(listed.documents[0].name, workbook.Name);
+
+    const document = callText(await client.callTool({ name: "document.get", arguments: { documentId } }));
+    assert.equal(document.activeSheet, "Sheet1");
+    assert.equal(document.selection.address, "A1:B2");
+
+    const query = callText(await client.callTool({ name: "wps.exec", arguments: {
+      documentId, code: "return { name: Application.ActiveWorkbook.Name, version: Application.Version };",
+    } }));
+    assert.deepEqual(query.result, { name: workbook.Name, version: "12.0" });
+
+    const blocked = await client.callTool({ name: "wps.exec", arguments: {
+      documentId, code: "Application.ActiveSheet.Range('A1').Value2 = 'not allowed'; return true;",
+    } });
+    assert.equal(blocked.isError, true);
+    assert.match(blocked.content[0].text, /READ_ONLY_VIOLATION/);
+
+    const created = callText(await client.callTool({ name: "transform.create", arguments: {
+      variableName: "smoke data", sourceDocumentId: documentId,
+      code: "return { rows: [[1, 2], [3, 4]], source: Application.ActiveWorkbook.Name };",
+    } }));
+    assert.equal(created.success, true);
+    const variableId = created.variableId;
+    const before = callText(await client.callTool({ name: "variable.get", arguments: { variableId } }));
+    assert.equal(before.name, "smoke data");
+    assert.equal(Object.hasOwn(before, "value"), false);
+
+    const transformed = callText(await client.callTool({ name: "variable.transform", arguments: { variableId } }));
+    assert.deepEqual(transformed.value, { rows: [[1, 2], [3, 4]], source: workbook.Name });
+
+    const render = callText(await client.callTool({ name: "render.create", arguments: {
+      variableId, targetDocumentId: documentId,
+      code: "Application.ActiveSheet.Range('A1').Value2 = variable.value.rows; return { updated: true };",
+    } }));
+    assert.equal(render.success, true);
+    const rendered = callText(await client.callTool({ name: "variable.render", arguments: { variableId, renderId: render.renderId } }));
+    assert.equal(rendered.success, true);
+    assert.deepEqual(appState.writtenValue, [[1, 2], [3, 4]]);
+
+    const after = callText(await client.callTool({ name: "variable.get", arguments: { variableId } }));
+    assert.deepEqual(after.value, transformed.value);
+    assert.equal(after.renders.length, 1);
+    assert.match(serverLog, /registered doc_001/);
+  } finally {
+    if (socket && socket.readyState === WebSocket.OPEN) socket.close();
+    if (client) await client.close().catch(() => {});
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    if (child.exitCode === null && child.signalCode === null) await Promise.race([childExit, new Promise((resolve) => setTimeout(resolve, 3000))]);
+    await rm(dataDir, { recursive: true, force: true });
+  }
+});

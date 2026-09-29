@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WPS MCP Bridge</title>
+  <style>body{font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:18px;color:#202124}#dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#d93025;margin-right:8px}.ok{background:#188038!important}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>
+</head>
+<body><h3><span id="dot"></span>WPS MCP Bridge</h3><p id="state">Checking local server…</p><pre id="details"></pre>
+<script>
+async function refresh(){try{const r=await fetch('/health');const d=await r.json();document.querySelector('#dot').classList.toggle('ok',d.ok);document.querySelector('#state').textContent=d.ok?'MCP bridge is running':'MCP bridge unavailable';document.querySelector('#details').textContent=`Add-in connections: ${d.connections}\nDocuments: ${d.documents}\nWebSocket: ws://127.0.0.1:18766/ws\nMCP: http://127.0.0.1:18766/mcp`;}catch(e){document.querySelector('#state').textContent='Cannot reach the local WPS MCP server';}}
+refresh();setInterval(refresh,2000);
+</script></body></html>

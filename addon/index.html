@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WPS MCP Bridge</title>
+  <style>
+    body { font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #202124; padding: 18px; }
+    .status { display:flex; gap:8px; align-items:center; }
+    #dot { width:9px; height:9px; border-radius:50%; background:#d93025; }
+    #dot.ok { background:#188038; }
+    pre { white-space:pre-wrap; overflow-wrap:anywhere; color:#5f6368; }
+  </style>
+  <script>
+    // WPS can parse ribbon.xml and invoke callbacks before the external entry script finishes loading.
+    // Define the callbacks first so the custom tab is not rejected during startup.
+    window.WpsMcpOnLoad = function () { return true; };
+    window.WpsMcpShowStatus = function () { return true; };
+  </script>
+  <script src="main.js"></script>
+</head>
+<body>
+  <div class="status"><span id="dot"></span><strong>WPS MCP Bridge</strong></div>
+  <p id="status">Connecting to local MCP bridge…</p>
+  <pre id="details">Keep this task pane open while the MCP client is using WPS.</pre>
+</body>
+</html>

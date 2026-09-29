@@ -1,5 +1,7 @@
 # macOS / Codex validation record
 
+This is a record of one environment-specific validation run. Codex was the MCP client and automation tool used in that run; Codex sandbox and Computer Use limitations are not runtime dependencies of `wps-mcp`. The server exposes MCP over Streamable HTTP and is intended to work with other compatible clients.
+
 Date: 2026-09-28 to 2026-09-29
 
 ## Current status

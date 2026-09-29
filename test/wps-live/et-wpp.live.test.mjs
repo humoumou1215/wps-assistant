@@ -99,7 +99,8 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
   assert.ok(Number.isInteger(PORT) && PORT > 1024 && PORT !== 18766, "live test must use an independent port");
 
   const runId = `${process.pid}-${Date.now()}`;
-  const runDir = await mkdtemp(join(tmpdir(), `wps-mcp-live-${runId}-`));
+  const externalRunDir = process.env.WPS_LIVE_RUN_DIR;
+  const runDir = externalRunDir ?? await mkdtemp(join(tmpdir(), `wps-mcp-live-${runId}-`));
   const dataDir = join(runDir, "state");
   const fixtureDir = join(runDir, "fixtures");
   const generator = join(ROOT, "test/wps-live/create-fixtures.py");
@@ -123,15 +124,19 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
     stdio: ["ignore", "ignore", "pipe"],
   });
   server.stderr.setEncoding("utf8").on("data", (chunk) => { serverLog += chunk; });
+  const serverExit = new Promise((resolve) => server.once("exit", resolve));
   let client;
   const completed = [];
 
   t.after(async () => {
     if (client) await client.close().catch(() => {});
-    if (server.exitCode === null && server.signalCode === null) server.kill("SIGTERM");
-    await rm(runDir, { recursive: true, force: true });
+    if (server.exitCode === null && server.signalCode === null) {
+      server.kill("SIGTERM");
+      await Promise.race([serverExit, pause(3_000)]);
+    }
+    if (!externalRunDir) await rm(runDir, { recursive: true, force: true });
     if (completed.length) {
-      console.log(`WPS live test completed: ${completed.join(", ")}; temp files and state removed`);
+      console.log(`WPS live test completed: ${completed.join(", ")}; run directory: ${runDir}`);
     }
   });
 
@@ -197,9 +202,6 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
   await runRender(client, etVariable, etDoc.documentId, "Save disposable ET copy", `Application.ActiveWorkbook.Save(); return { saved: true };`);
   completed.push(`ET (${etBaseline.result.version}/${etBaseline.result.build})`);
 
-  // Close the first host document before activating WPP; it is only a disposable copy.
-  await runRender(client, etVariable, etDoc.documentId, "Close disposable ET copy without saving further changes", `Application.ActiveWorkbook.Close(false); return { closed: true };`)
-    .catch((error) => console.warn(`ET close returned an error after the document was saved: ${error.message}`));
 
   // WPP: same flow through the actual presentation Add-in and JS API.
   await openInWps(wppFile);
@@ -266,8 +268,6 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
   assert.equal(Number(wppReadback.result.top), 40);
   await runRender(client, wppVariable, wppDoc.documentId, "Save disposable WPP copy", `Application.ActivePresentation.Save(); return { saved: true };`);
   completed.push(`WPP (${wppBaseline.result.version}/${wppBaseline.result.build})`);
-  await runRender(client, wppVariable, wppDoc.documentId, "Close disposable WPP copy", `Application.ActivePresentation.Close(); return { closed: true };`)
-    .catch((error) => console.warn(`WPP close returned an error after the document was saved: ${error.message}`));
 
   console.log(JSON.stringify({
     testPort: PORT,

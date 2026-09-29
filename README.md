@@ -5,7 +5,7 @@
 ## 架构
 
 ```text
-Codex MCP (Streamable HTTP) → 127.0.0.1:18766/mcp
+MCP Client (Streamable HTTP) → 127.0.0.1:18766/mcp
                                    │
 WPS JS Add-in (ET/WPP/WPS) → WebSocket /ws
                                    │
@@ -34,22 +34,17 @@ curl http://127.0.0.1:18766/addins/et/
 
 完整退出并重新启动 WPS Office，让 WPS 读取 `publish.xml`。打开 Writer、表格或演示文稿；Add-in 的任务面板页面连接服务后，状态显示当前文档。WPS MCP 工具栏的“显示连接状态”会打开状态窗格。
 
-## 连接 Codex
+## 接入 MCP 客户端
 
-一次性全局注册：
+服务启动后，可在支持 **MCP Streamable HTTP** 的客户端中添加服务器：
 
-```bash
-/Applications/ChatGPT.app/Contents/Resources/codex mcp add wps-mcp --url http://127.0.0.1:18766/mcp
-```
+- 名称：`wps-mcp`（客户端内的显示名称，可自定义）
+- 传输方式：`Streamable HTTP`
+- URL：`http://127.0.0.1:18766/mcp`
 
-用真实 Codex 对本项目做 MCP 探测：
+客户端配置格式因产品而异，请按其 MCP 配置说明填写上述传输方式和 URL。服务仅监听本机 loopback，因此 MCP 客户端需运行在能访问该本机地址的环境中。
 
-```bash
-/Applications/ChatGPT.app/Contents/Resources/codex exec -C "$PWD" \
-  'Use the wps-mcp tools: list connected WPS documents and inspect the active document with document.get and a read-only wps.exec query. Do not modify documents.'
-```
-
-Codex 工具名：
+该服务向客户端提供以下 MCP 工具：
 
 - `workspace.list_documents`
 - `document.get(documentId)`
@@ -68,6 +63,26 @@ Codex 工具名：
 4. `render.create` 保存目标文档修改代码；检查绑定后调用 `variable.render`。
 5. 可用 `variable.get` 查看最近值和所有规则。
 
+## 自动化测试
+
+常规测试使用模拟 Add-in，只验证 MCP/WebSocket 桥接，不代表 WPS JS API 的真实兼容性：
+
+```bash
+npm test
+```
+
+macOS 上可显式运行真实 WPS ET/WPP 冒烟测试：
+
+```bash
+npm run test:wps-live
+# 可用 WPS_LIVE_PORT 指定独立端口，默认 18767；不能使用生产端口 18766
+WPS_LIVE_PORT=18767 npm run test:wps-live
+```
+
+该命令要求 WPS Office 已安装、**测试开始前完全退出 WPS**，且独立测试端口未被占用。它会在 `publish.xml` 中临时加入 ET/WPP 测试加载项、启动隔离的 MCP 服务和临时状态目录、生成可丢弃的 `.xlsx`/`.pptx` 测试文件，再通过 macOS 打开文件并等待真实 Add-in 注册。测试会经真实 MCP/Add-in 执行只读查询、ET 公式/格式写入与读回、WPP 文本框/文字/几何属性写入与读回，并把修改保存到临时副本。退出时恢复原 `publish.xml` 并清理临时数据。若 WPS 未正常退出，临时文件会保留并打印路径，避免删除仍被 WPS 使用的文件。
+
+此套件不测试 Writer；普通 `npm test` 不会启动 WPS。若 Add-in 未连接、测试文件未注册、运行时版本不匹配或 API 断言失败，真实测试应失败，不能按 mock 通过处理。
+
 ## 安全边界
 
 - `wps.exec` 和 Transform 会用 Acorn 做只读静态检查，拒绝对象赋值、`new`、删除、以及常见写入/修改 API 方法；这是 best-effort 检查，不是 JavaScript 沙箱，无法阻止被绕过的恶意代码。
@@ -80,4 +95,4 @@ Codex 工具名：
 - 渐进式披露技能：`.agents/skills/wps-api/SKILL.md`（同时安装至 `~/.agents/skills/wps-api/`）
 - 每个报告 API 的成员清单、探测结果和使用说明：`.agents/skills/wps-api/references/`
 - 重新从 `reports.zip` 生成 API 技能：`python3 scripts/generate-wps-api-skill.py`
-- 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。当前 Mac Codex/WPS 的运行验证记录见 `reports/macos-codex-validation.md`（部署完成后生成）。
+- 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。一次 macOS 联调记录见 [`reports/macos-codex-validation.md`](reports/macos-codex-validation.md)：其中 Codex 只是当时使用的测试客户端/工具，报告中的客户端限制不构成项目运行依赖。

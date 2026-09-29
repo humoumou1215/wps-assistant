@@ -1,5 +1,7 @@
 # macOS live WPS API validation
 
+This report documents one historical validation run that used Codex as its MCP client. Codex-specific setup and limitations below describe that test environment, not a runtime dependency; `wps-mcp` exposes the standard MCP Streamable HTTP interface for compatible clients.
+
 Date: 2026-09-28 to 2026-09-29  
 Platform: macOS / WPS Office 12.1.28496  
 Driver: local `wps-mcp` WebSocket Add-in bridge, called through Codex MCP tools  

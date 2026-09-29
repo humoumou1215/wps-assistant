@@ -1,10 +1,10 @@
 # WPS MCP Server
 
-依据 `spec.md` 实现的本机 WPS MCP：MCP 负责文档路由、规则/变量生命周期；文档访问仍由 WPS JS API 执行。
+依据 `docs/spec.md` 实现的本机 WPS MCP：MCP 负责文档路由、规则/变量生命周期；文档访问仍由 WPS JS API 执行。
 
 ## 一眼看懂
 
-不想先读文档？先用浏览器打开 [`doc/show-me-wps-mcp.html`](doc/show-me-wps-mcp.html)：一页讲清 8 个 Tool、Transform / Variable / Render 三条规则、读与写的护栏，以及各部分的职责边界。
+不想先读文档？先用浏览器打开 [`docs/show-me-wps-mcp.html`](docs/show-me-wps-mcp.html)：一页讲清 8 个 Tool、Transform / Variable / Render 三条规则、读与写的护栏，以及各部分的职责边界。
 
 ## 架构
 
@@ -146,5 +146,5 @@ npm run test:wps-writer-live
 - 渐进式披露技能：`skills/wps-api/SKILL.md`（WorkBuddy 用户级安装位置为 `~/.workbuddy/skills/wps-api/`，需手工复制，仓库内没有安装脚本）
 - 每个报告 API 的成员清单、探测结果和使用说明：`skills/wps-api/references/`
 - 重新从诊断报告包生成 API 技能：`python3 scripts/generate-wps-api-skill.py <reports.zip>`（报告包目前不在工作区，可用 `git show HEAD:reports.zip > reports.zip` 取回）
-- 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。一次 macOS 联调记录见 [`doc/macos-codex-validation.md`](doc/macos-codex-validation.md)：其中 Codex 只是当时使用的测试客户端/工具，报告中的客户端限制不构成项目运行依赖。
-- 2026-09-29 的真实 WPS 冒烟记录：[ET/WPP](doc/macos-live-et-wpp-smoke-2026-09-29.md)、[Writer](doc/macos-live-writer-smoke-2026-09-29.md)。
+- 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。一次 macOS 联调记录见 [`docs/macos-codex-validation.md`](docs/macos-codex-validation.md)：其中 Codex 只是当时使用的测试客户端/工具，报告中的客户端限制不构成项目运行依赖。
+- 2026-09-29 的真实 WPS 冒烟记录：[ET/WPP](docs/macos-live-et-wpp-smoke-2026-09-29.md)、[Writer](docs/macos-live-writer-smoke-2026-09-29.md)。

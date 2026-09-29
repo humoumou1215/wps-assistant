@@ -32,7 +32,7 @@ curl http://127.0.0.1:18766/health
 curl http://127.0.0.1:18766/addins/et/
 ```
 
-完整退出并重新启动 WPS Office，让 WPS 读取 `publish.xml`。打开 Writer、表格或演示文稿；Add-in 的任务面板页面连接服务后，状态显示当前文档。WPS MCP 工具栏的“显示连接状态”会打开状态窗格。
+完整退出并重新启动 WPS Office。macOS 安装脚本会更新 `publish.xml`；Writer 还会在 `authaddin.json` 中登记 `wps` 主机的启用状态。打开 Writer、表格或演示文稿；Add-in 的任务面板页面连接服务后，状态显示当前文档。WPS MCP 工具栏的“显示连接状态”会打开状态窗格。
 
 ## 接入 MCP 客户端
 
@@ -79,9 +79,15 @@ npm run test:wps-live
 WPS_LIVE_PORT=18767 npm run test:wps-live
 ```
 
-该命令要求 WPS Office 已安装、**测试开始前完全退出 WPS**，且独立测试端口未被占用。它会在 `publish.xml` 中临时加入 ET/WPP 测试加载项、启动隔离的 MCP 服务和临时状态目录、生成可丢弃的 `.xlsx`/`.pptx` 测试文件，再通过 macOS 打开文件并等待真实 Add-in 注册。测试会经真实 MCP/Add-in 执行只读查询、ET 公式/格式写入与读回、WPP 文本框/文字/几何属性写入与读回，并把修改保存到临时副本。退出时恢复原 `publish.xml` 并清理临时数据。若 WPS 未正常退出，临时文件会保留并打印路径，避免删除仍被 WPS 使用的文件。
+该命令要求 WPS Office 已安装、**测试开始前完全退出 WPS**，且独立测试端口未被占用。它会启动测试端口上的隔离 MCP 服务和临时状态目录、生成可丢弃的 `.xlsx`/`.pptx` 测试文件，并临时让 Add-in 的 WebSocket/MCP 流量走测试端口。WPS 已注册的 Add-in 页面仍由其原有地址提供静态资源；测试结束会还原 `addon/main.js`。测试会经真实 MCP/Add-in 执行只读查询、ET 公式/格式写入与读回、WPP 文本框/文字/几何属性写入与读回，并把修改保存到临时副本。退出时清理临时数据。若 WPS 未正常退出，临时文件会保留并打印路径，避免删除仍被 WPS 使用的文件。
 
-此套件不测试 Writer；普通 `npm test` 不会启动 WPS。若 Add-in 未连接、测试文件未注册、运行时版本不匹配或 API 断言失败，真实测试应失败，不能按 mock 通过处理。
+Writer 使用独立命令；测试前需完全退出 WPS，且测试端口未占用、已注册 Add-in 的静态资源服务 `18766` 可用：
+
+```bash
+npm run test:wps-writer-live
+```
+
+该命令在隔离端口启动真实 Writer 测试，临时将 Add-in WebSocket 指向测试服务，并把 Add-in 文档枚举限制为本次临时 DOCX。它检查文档/表格读取、Render 插入文本并读回、保存和关闭临时副本；结束后关闭本次启动的 WPS、还原 Add-in 配置并清理临时数据。普通 `npm test` 不会启动 WPS。若 Add-in 未连接、测试文件未注册、运行时版本不匹配或 API 断言失败，真实测试应失败，不能按 mock 通过处理。
 
 ## 安全边界
 
@@ -96,3 +102,4 @@ WPS_LIVE_PORT=18767 npm run test:wps-live
 - 每个报告 API 的成员清单、探测结果和使用说明：`.agents/skills/wps-api/references/`
 - 重新从 `reports.zip` 生成 API 技能：`python3 scripts/generate-wps-api-skill.py`
 - 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。一次 macOS 联调记录见 [`reports/macos-codex-validation.md`](reports/macos-codex-validation.md)：其中 Codex 只是当时使用的测试客户端/工具，报告中的客户端限制不构成项目运行依赖。
+- 2026-09-29 的真实 WPS 冒烟记录：[ET/WPP](reports/macos-live-et-wpp-smoke-2026-09-29.md)、[Writer](reports/macos-live-writer-smoke-2026-09-29.md)。

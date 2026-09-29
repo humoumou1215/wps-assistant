@@ -52,7 +52,9 @@ node scripts/install-addin.mjs             # 注册 ET/WPP/WPS 三个本地 Add-
 npm start                                  # 前台启动桥接服务（stdio + HTTP + WebSocket）
 ```
 
-`scripts/install-addin.mjs` 是跨平台的，等价于 macOS 的 `install-macos-addin.sh`：只增删自己的 `WpsMcp*` 条目，其他加载项条目原样保留，首次修改前备份到 `publish.xml.backup-before-wps-mcp`；若 `publish.xml` 缺少 `</jsplugins>` 会拒绝写入。可用 `--uninstall` 移除，或用环境变量覆盖端口与状态：
+`scripts/install-addin.mjs` 是跨平台的，对应 macOS 的 `install-macos-addin.sh`：只增删自己的 `WpsMcp*` 条目，其他加载项条目原样保留，首次修改前备份到 `publish.xml.backup-before-wps-mcp`；若 `publish.xml` 缺少 `</jsplugins>` 会拒绝写入。可用 `--uninstall` 移除，或用环境变量覆盖端口与状态：
+
+> 两者的差异：`install-macos-addin.sh` 还会写入 Writer 宿主所需的 `authaddin.json` 记录，并在检测到 WPS 正在运行时拒绝安装。`install-addin.mjs` 目前**只处理 `publish.xml`**、不做运行中检测 —— Windows 下 Writer 宿主是否能仅凭 `publish.xml` 加载尚未实测。
 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |

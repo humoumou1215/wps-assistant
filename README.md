@@ -1,28 +1,43 @@
 # WPS MCP Server
 
-依据 `docs/spec.md` 实现的本机 WPS MCP：MCP 负责文档路由、规则/变量生命周期；文档访问仍由 WPS JS API 执行。
+通过本机桥接服务，让 AI 读取和修改当前打开的 WPS 表格、演示与文字文档。可以在 WPS 的助手面板里直接对话，也可以让外部 MCP 客户端接入；文档访问由 WPS Add-in 在真实宿主中执行 WPS JS API。
+
+核心流程是 **Transform → Variable → Render**：保存只读提取规则，得到 JSON 值，再按已保存的规则写入目标文档。创建绑定可以由 Agent 完成；之后在变量面板执行重算或重写，直接运行规则，无需再次请求模型。设计约束见 [`docs/spec.md`](docs/spec.md)。
 
 ## 一眼看懂
 
-不想先读文档？先用浏览器打开 [`docs/show-me-wps-mcp.html`](docs/show-me-wps-mcp.html)：一页讲清 8 个 Tool、Transform / Variable / Render 三条规则、读与写的护栏，以及各部分的职责边界。
+用浏览器打开 [`docs/show-me-wps-mcp.html`](docs/show-me-wps-mcp.html)：一页了解两种使用入口、8 个工具、Transform / Variable / Render、读写边界和运行日志。GitHub 的 HTML 文件页显示源代码，克隆仓库后可直接打开本地 HTML 预览。
+
+## 环境要求
+
+- Node.js **22.19.0 或更高版本**，与 `package.json` 的 `engines` 一致。
+- 本机安装支持 JS Add-in 的 WPS Office；桥接服务与 WPS 必须运行在同一台机器上。
+- 内置助手需要在「设置」中配置模型；支持 DeepSeek 内置目录和自定义 OpenAI 兼容端点（completions / responses）。模型请求按配置发送到对应服务商。
 
 ## 架构
 
 ```text
-MCP Client (Streamable HTTP) → 127.0.0.1:18766/mcp
-                                   │
-WPS JS Add-in (ET/WPP/WPS) → WebSocket /ws
-                                   │
-                             WPS JS API
+WPS 助手面板 → /api/chat → 内嵌 pi Agent ──┐
+                                        ├→ 共用 8 个工具 → WebSocket /ws → WPS Add-in → WPS JS API
+外部 MCP 客户端 → /mcp 或 stdio ──────────┘
 ```
 
-服务只绑定 `127.0.0.1`。变量及规则保存在 `~/Library/Application Support/wps-mcp/state.json`；WPS 文档注册信息只保存在内存中，Add-in 断开后标记为不可用。
+服务只绑定 `127.0.0.1`。内嵌 Agent 直接调用共用工具实现；外部客户端通过 MCP 调用。两种入口共用文档、变量和规则状态。Add-in 报告当前打开的文档，服务以 `documentId` 路由到对应宿主；断开的文档会标记为不可用。
 
-状态目录按平台选择，可用 `WPS_MCP_DATA_DIR` 覆盖：macOS 为 `~/Library/Application Support/wps-mcp`，Windows 为 `%APPDATA%\wps-mcp`，其他平台为 `$XDG_CONFIG_HOME/wps-mcp`。
+数据目录可用 `WPS_MCP_DATA_DIR` 覆盖：macOS 为 `~/Library/Application Support/wps-mcp`，Windows 为 `%APPDATA%\wps-mcp`，其他平台为 `$XDG_CONFIG_HOME/wps-mcp`（未设置时为 `~/.config/wps-mcp`）。
+
+| 数据 | 位置 | 用途 |
+| --- | --- | --- |
+| 变量与规则 | `state.json` | 最近变量值、Transform / Render 代码及文档身份映射 |
+| 模型配置 | `config.json` | 模型、协议、API Key 和额外 Headers |
+| 助手会话 | `pi/sessions/` | 消息、工具执行详情和轮次元数据 |
+| 运行日志 | `logs/wps-mcp.log` | 操作元信息、链路 ID、耗时与错误码；按大小轮转 |
+
+实时连接与选区保存在内存中，重启后由 Add-in 重新上报。会话历史可能包含文档数据，与运行日志的脱敏、轮转设置分别管理。
 
 ## macOS 部署
 
-要求 Node.js 20+。项目根目录运行：
+安装前完全退出 WPS。项目根目录运行：
 
 ```bash
 npm ci
@@ -38,18 +53,19 @@ curl http://127.0.0.1:18766/health
 curl http://127.0.0.1:18766/addins/et/
 ```
 
-完整退出并重新启动 WPS Office。macOS 安装脚本会更新 `publish.xml`；Writer 还会在 `authaddin.json` 中登记 `wps` 主机的启用状态。打开 Writer、表格或演示文稿；Add-in 的任务面板页面连接服务后，状态显示当前文档。WPS MCP 工具栏的“显示连接状态”会打开状态窗格。
+重新启动 WPS Office。macOS 安装脚本会更新 `publish.xml`；Writer 还会在 `authaddin.json` 中登记 `wps` 主机的启用状态。打开 Writer、表格或演示文稿，在「WPS MCP」选项卡选择「助手面板」或「变量管理」；「显示连接状态」打开状态窗格。
 
 ## Windows 部署
 
-要求 Node.js 20+，WPS Office 已安装。Windows 没有 LaunchAgent，服务在终端前台运行即可：
+安装前完全退出 WPS（包括托盘）。Windows 可在 PowerShell 中前台启动 HTTP 模式：
 
-```bash
+```powershell
 npm ci
 npm run build
 node scripts/install-addin.mjs --dry-run   # 先预览将要写入的 publish.xml
 node scripts/install-addin.mjs             # 注册 ET/WPP/WPS 三个本地 Add-in
-npm start                                  # 前台启动桥接服务（stdio + HTTP + WebSocket）
+$env:WPS_MCP_TRANSPORT = "http"
+npm start                                  # HTTP / MCP / WebSocket；保持此终端运行
 ```
 
 `scripts/install-addin.mjs` 是跨平台的，对应 macOS 的 `install-macos-addin.sh`：只增删自己的 `WpsMcp*` 条目，其他加载项条目原样保留，首次修改前备份到 `publish.xml.backup-before-wps-mcp`；若 `publish.xml` 缺少 `</jsplugins>` 会拒绝写入。可用 `--uninstall` 移除，或用环境变量覆盖端口与状态：
@@ -59,6 +75,8 @@ npm start                                  # 前台启动桥接服务（stdio + 
 | 变量 | 默认值 | 说明 |
 | --- | --- | --- |
 | `WPS_MCP_PORT` | `18766` | 服务端口，需与 `publish.xml` 中的 URL 一致 |
+| `WPS_MCP_TRANSPORT` | `stdio` | 设为 `http` 只启动 HTTP MCP；两种模式都有本机 HTTP 和 WebSocket |
+| `WPS_MCP_DATA_DIR` | 平台数据目录 | 覆盖配置、变量、会话及默认日志的存放目录 |
 | `WPS_MCP_ADDIN_ENABLE` | `enable_dev` | Add-in 的 `enable` 属性 |
 | `WPS_MCP_ADDINS_DIR` | `%APPDATA%\kingsoft\wps\jsaddons` | 加载项目录 |
 
@@ -77,6 +95,28 @@ npm run debug:local    # 连接两个模拟 Add-in（表格 + 演示），执行
 ```
 
 harness 只验证 MCP/WebSocket/桥接层，**不代表** WPS JS API 的真实兼容性；真实宿主下的 API 行为仍需按下方“自动化测试”在做实机验证。
+
+更新代码后先运行 `npm run build`，再重启桥接服务；修改助手页面后重新加载面板。已在默认端口运行的 Windows 桥接可用 `scripts/restart-local-bridge.ps1` 检查和重启：
+
+```powershell
+.\scripts\restart-local-bridge.ps1 -CheckOnly
+.\scripts\restart-local-bridge.ps1
+```
+
+脚本核对端口所属进程、会话空闲状态及变量数据目录，保留已保存配置和规则。自定义目录或端口时传入 `-DataDirectory`、`-Port`；重启后 Add-in 会重新连接。
+
+## 助手任务窗格
+
+服务启动且 Add-in 已连接后，在 WPS 的「WPS MCP」选项卡选择「助手面板」。首次使用在「设置」填写模型配置、测试连接并保存。也可以通过本机浏览器打开 [任务窗格](http://127.0.0.1:18766/addon/taskpane.html)；浏览器页面操作的是已连接的 WPS 文档，仍需 WPS Add-in 在线。
+
+- **会话**：流式回复、Markdown、思考过程、工具参数/结果/耗时、Token 与上下文用量、停止生成，以及重载后的会话恢复。
+- **引用**：输入 `@` 引用文档、选区快照、变量或 Render，支持中文、全拼和拼音首字母搜索。引用卡片可预览；有明确工作表和地址的表格选区最多读取 5 行 × 6 列，执行时使用引用快照中的位置。
+- **变量**：搜索、源文档筛选、数值/表格与脚本预览、单条或全部重算和重写。多条 Render 分别报告成功与失败；停止生成不回滚已完成的写入。
+- **设置**：DeepSeek 内置目录、自定义模型和协议、思考等级、兼容参数、额外 Headers。配置修订检查防止旧面板覆盖新配置；发生冲突时加载最新配置。更换端点不会自动沿用旧密钥与请求头；读取配置只返回凭据存在标记。
+
+同一桥接服务共用一份助手会话，同时只运行一个聊天轮次或配置操作。内嵌 Agent 只挂载八个 WPS 工具，关闭内置文件/终端工具和外部资源自动发现，不读取 `~/.pi`，也不会自动加载仓库中的 `skills/wps-api`。
+
+新建绑定会保存文档路径到稳定 ID 的映射，重连后恢复关联。旧版绑定没有历史路径映射时需重新创建；文件移动或另存为新路径也被视为新文档。规则仅在显式重算/重写时执行，当前没有自动监听文件变化或定时同步。
 
 ## 运行日志
 
@@ -102,6 +142,14 @@ Windows 查看最近日志：
 Get-Content "$env:APPDATA\wps-mcp\logs\wps-mcp.log" -Tail 30 -Wait
 ```
 
+macOS 查看最近日志：
+
+```bash
+tail -n 30 -f "$HOME/Library/Application Support/wps-mcp/logs/wps-mcp.log"
+```
+
+排查时先检查 `/health` 的连接数与文档数，再用 `x-request-id` 查找对应 `http.end`，沿 `toolCallId` / `rpcId` 定位失败。`tool.end` 会记录 `success`、`errorCode` 及失败 Render 数量；`rpc.failed` 标记超时。模型或工具的详细业务结果仍在助手会话中查看。
+
 ## 接入 MCP 客户端
 
 服务启动后，可在支持 **MCP Streamable HTTP** 的客户端中添加服务器：
@@ -110,6 +158,8 @@ Get-Content "$env:APPDATA\wps-mcp\logs\wps-mcp.log" -Tail 30 -Wait
 - 传输方式：`Streamable HTTP`
 - URL：`http://127.0.0.1:18766/mcp`
 
+如客户端使用 stdio，应由客户端启动 `node <仓库绝对路径>/dist/src/server.js`，保留默认 `WPS_MCP_TRANSPORT=stdio`；该进程同样占用本机桥接端口，须先停止该端口已有的服务。stdout 仅输出 MCP 协议，日志写入 stderr 和文件。
+
 客户端配置格式因产品而异，请按其 MCP 配置说明填写上述传输方式和 URL。服务仅监听本机 loopback，因此 MCP 客户端需运行在能访问该本机地址的环境中。
 
 该服务向客户端提供以下 MCP 工具：
@@ -117,7 +167,7 @@ Get-Content "$env:APPDATA\wps-mcp\logs\wps-mcp.log" -Tail 30 -Wait
 - `workspace.list_documents`
 - `document.get(documentId)`
 - `wps.exec(documentId, code)`
-- `transform.create(variableName, description?, sourceDocumentId, code)`
+- `transform.create(variableName, description?, sourceDocumentId, sourceRef?, code)`
 - `render.create(variableId, targetDocumentId, description?, code)`
 - `variable.get(variableId)`
 - `variable.transform(variableId)`
@@ -133,11 +183,13 @@ Get-Content "$env:APPDATA\wps-mcp\logs\wps-mcp.log" -Tail 30 -Wait
 
 ## 自动化测试
 
-常规测试使用模拟 Add-in，只验证 MCP/WebSocket 桥接，不代表 WPS JS API 的真实兼容性：
+常规测试覆盖 MCP、模拟 Add-in、完整 Agent 工具往返、任务面板渲染与 API、配置隐私和冲突、取消、部分写入与重启恢复，以及日志轮转/脱敏/链路关联、stdio 输出隔离和 RPC 超时清理。测试不会启动真实 WPS：
 
 ```bash
 npm test
 ```
+
+2026-09-30 当前代码通过 37 项常规测试；模拟宿主通过不代表 WPS JS API 的真实兼容性。真实宿主需运行以下显式测试。
 
 macOS 上可显式运行真实 WPS ET/WPP 冒烟测试：
 
@@ -161,7 +213,8 @@ npm run test:wps-writer-live
 
 - `wps.exec` 和 Transform 会用 Acorn 做只读静态检查（`src/readonly-guard.ts`），拒绝成员赋值、`new`、`delete`、以及常见写入/修改 API 方法。检查是**纯语法**的：它按节点类型与属性名匹配，不区分文档对象与本地对象 —— `const o = {}; o.a = 1`、`let i = 0; i++`、`new Date()` 同样被拒；方法黑名单按属性名匹配，因此本地对象上叫 `copy`/`sort` 的属性也会被拒。这是 best-effort 检查，不是 JavaScript 沙箱，无法阻止被绕过的恶意代码。
 - 违规会**一次报全**：错误信息列出每条的 `kind`、行列号与源码行，结构化数据在 `error.details.violations`。判据模块可被外部工具直接 import（不必抄一份带漂移风险的副本）。
-- Render 是唯一有意允许文档修改的规则。JSAPI 代码在 WPS 宿主内执行，拥有 WPS 文档权限；只运行可信的 Agent 生成代码，Render 前确认目标范围与内容。
+- 内嵌助手每个聊天轮次最多消耗 3 次只读守卫违规额度，按模型轮次计数；同一模型轮次中的多个违规调用只消耗一次，用尽后中断。每次聊天重新计数；外部 MCP 工具本身不施加这份 Agent 重试额度。
+- Render 是正式的文档修改入口。JSAPI 代码在 WPS 宿主内执行，拥有 WPS 文档权限；只运行可信代码。用户已请求的写入会在核实目标和位置后执行，不增加重复确认步骤；执行结果可能部分成功，也没有自动回滚。
 - WebSocket/HTTP 服务只监听 loopback，但本机其他进程仍可访问它；不要在公网/局域网端口暴露此服务。
 - 所有 JSAPI 结果必须 JSON 可序列化；不要返回 WPS/COM 宿主对象。
 
@@ -169,18 +222,22 @@ npm run test:wps-writer-live
 
 - 渐进式披露技能：`skills/wps-api/SKILL.md`（WorkBuddy 用户级安装位置为 `~/.workbuddy/skills/wps-api/`，需手工复制，仓库内没有安装脚本）
 - 每个报告 API 的成员清单、探测结果和使用说明：`skills/wps-api/references/`
-- 重新从诊断报告包生成 API 技能：`python3 scripts/generate-wps-api-skill.py <reports.zip>`（报告包目前不在工作区，可用 `git show HEAD:reports.zip > reports.zip` 取回）
+- 重新从诊断报告包生成 API 技能：`python3 scripts/generate-wps-api-skill.py <reports.zip>`；报告包需另行提供，当前检出的仓库不附带该文件。
 - 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。一次 macOS 联调记录见 [`docs/macos-codex-validation.md`](docs/macos-codex-validation.md)：其中 Codex 只是当时使用的测试客户端/工具，报告中的客户端限制不构成项目运行依赖。
 - 2026-09-29 的真实 WPS 冒烟记录：[ET/WPP](docs/macos-live-et-wpp-smoke-2026-09-29.md)、[Writer](docs/macos-live-writer-smoke-2026-09-29.md)。
 
-## 助手任务窗格
+## 代码导航
 
-启动服务后，在 WPS 的「WPS MCP」选项卡选择「助手面板」或「变量管理」。也可以用浏览器打开 [任务窗格](http://127.0.0.1:18766/addon/taskpane.html)。首次使用在「设置」中填写模型配置并测试连接：支持 DeepSeek 内置目录和自定义 OpenAI 兼容端点（completions / responses）。需要 Node.js 22.19 或更高版本。
+| 路径 | 职责 |
+| --- | --- |
+| `src/server.ts` | MCP、HTTP、WebSocket 和进程生命周期 |
+| `src/tools.ts` | 八个工具、文档路由、WPS RPC、变量与规则持久化 |
+| `src/api.ts` / `src/agent.ts` | 面板 API、内嵌 Agent、聊天与工具事件 |
+| `src/config.ts` / `src/paths.ts` | 模型配置、凭据和平台数据目录 |
+| `src/logger.ts` | 结构化日志、异步写入、轮转、脱敏和上下文关联 |
+| `src/readonly-guard.ts` / `src/guard-budget.ts` | 只读语法检查与按模型轮次计算的重试额度 |
+| `addon/` | WPS 宿主桥接、Ribbon、助手面板和视图渲染 |
+| `skills/wps-api/` | 提供给外部 Agent 的 WPS API 技能与参考资料 |
+| `scripts/` / `test/` | 安装、重启、调试、常规与真实 WPS 测试 |
 
-- 会话支持流式回复、思考过程、工具执行详情、停止生成，以及 `@` 文档、选区快照、变量和 Render 引用。
-- 变量管理支持搜索、源文档筛选、取值与脚本预览、单条/全部重算和重写。操作失败会显示具体原因；停止生成不回滚已经完成的写入。
-- `config.json` 和 `state.json` 存在 `WPS_MCP_DATA_DIR` 指定的数据目录；默认目录与原服务一致。API Key 仅在服务端保存，读取配置只返回存在标记。更换端点时不会自动沿用旧密钥与请求头。
-- 单会话历史由 pi 保存在数据目录下的 `pi/sessions`，重新打开页面或重启服务后可恢复。内嵌 Agent 只挂载八个 WPS 工具，关闭内置文件/终端工具和外部资源自动发现，不读取 `~/.pi`。
-- 新建绑定保存文档路径到稳定 ID 的映射，重连后恢复关联。旧版绑定没有历史路径映射时，不会猜测它对应的新文档；需要重新创建绑定。文件移动或另存为新路径也被视为新文档。
-
-开发验证：`npm test` 覆盖 MCP、UI API、完整 Agent 工具往返、配置隐私、取消与重启恢复；`npm run test:wps-live` 验证真实 ET/WPP 和任务窗格复用；`npm run test:wps-writer-live` 验证真实 Writer。真人式浏览器验证记录见 [审计与验收报告](docs/ui-audit-and-validation.md)。
+浏览器验证记录见 [审计与验收报告](docs/ui-audit-and-validation.md)。

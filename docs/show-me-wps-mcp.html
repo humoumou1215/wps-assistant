@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="description" content="用最简单的方式看懂 wps-mcp：让 Agent 通过一个很薄的 MCP 桥安全地读写 WPS。" />
+  <meta name="description" content="一页看懂 WPS 内置助手、外部 MCP、Transform / Variable / Render、读写守卫与结构化运行日志。" />
   <title>wps-mcp · 一眼看懂</title>
   <style>
     :root{
@@ -39,6 +39,11 @@
       line-height:1.55;
     }
     a{color:inherit}
+    .page-nav{display:flex;flex-wrap:wrap;gap:10px;margin:24px 4px 0;align-items:center}
+    .page-nav a{padding:8px 13px;border:1px solid var(--line);border-radius:999px;background:var(--paper);font-size:13px;font-weight:700;text-decoration:none}
+    .page-nav a:hover{color:var(--mcp);border-color:var(--mcp)}
+    .page-nav a:focus-visible{outline:3px solid var(--agent);outline-offset:3px}
+    .page-nav small{color:var(--muted);font-size:12px;margin-left:auto}
     /* 内联 SVG 图标：跨平台渲染一致，不再依赖 emoji 字体 */
     .sprite{position:absolute;width:0;height:0;overflow:hidden}
     .icon{width:1em;height:1em;display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
@@ -91,6 +96,9 @@
     .bridge .icon{width:22px;height:22px;margin:0 auto 6px}
     .bridge small{display:block;margin-top:6px;font-size:12px;font-weight:600;color:#2f8a6b;line-height:1.4}
     section{margin-top:34px}
+    section[id]{scroll-margin-top:20px}
+    .panel,.rule,.dev-callout,.book,.codepath{min-width:0}
+    .rule p,.simple-note,.dev-callout p,.codepath,.dev-rule{overflow-wrap:anywhere}
     .section-head{display:flex;justify-content:space-between;gap:20px;align-items:end;margin:0 4px 16px}
     h2{font-size:clamp(27px,4vw,40px);letter-spacing:-.035em;line-height:1.1;margin:0}
     .section-head p{max-width:520px;margin:0;color:var(--muted)}
@@ -147,6 +155,12 @@
     .ok .icon{color:var(--agent)}.lock .icon{color:var(--mcp)}
     .okline,.lockline{margin-top:18px;padding:14px 16px;border-radius:14px;font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
     .okline{background:#f2f4ff;color:#4346b2}.lockline{background:#eaf7f2;color:#126d50}
+    .okline,.lockline{overflow-wrap:anywhere}
+    .log-flow{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-top:18px}
+    .log-flow code{background:#17191c;color:#b7eed7;padding:10px 12px}
+    .log-config{overflow-x:auto;margin-top:18px}
+    .log-config .guard-table{margin:0;min-width:540px}
+    .log-config code{font-size:12px}
     .skillbook{padding:30px;display:grid;grid-template-columns:.88fr 1.12fr;gap:18px;align-items:stretch}
     .book{padding:26px;border-radius:20px;background:linear-gradient(180deg,var(--gold-tint),#fff);border:1px solid #ecd9b7;display:flex;flex-direction:column;justify-content:center}
     .book .fig{font-size:38px;line-height:1;color:var(--gold)}
@@ -185,6 +199,8 @@
     @media (max-width:560px){
       .mini-flow{grid-template-columns:1fr;gap:8px}.mini-flow .arrow{transform:rotate(90deg)}
       .grid-demo{font-size:11px}.grid-demo th,.grid-demo td{padding:6px 5px}
+      .owners{grid-template-columns:1fr}.rule,.work,.skillbook,.dev-intro{padding:20px}
+      .page-nav small{width:100%;margin-left:0}.guard-table td:first-child{white-space:normal}
     }
   </style>
 </head>
@@ -208,20 +224,47 @@
       <div>
         <div class="eyebrow"><span class="dot"></span> wps-mcp</div>
         <h1 id="title">给 AI 一根<br>WPS 对讲机。</h1>
-        <p class="lead">你告诉 Agent：<strong>“把 Excel 里的数字放进 PPT。”</strong><br>Agent 先看说明书、直接写 WPS API 代码，<strong>wps-mcp 只负责把代码送到 WPS 里执行。</strong></p>
-        <p class="tiny">核心原则：能简单，就不要多造一层。</p>
+        <p class="lead">在 WPS 助手面板里说：<strong>“把 Excel 里的数字放进 PPT。”</strong><br>Agent 生成 WPS API 代码，桥接服务把它送进当前打开的文档。<strong>也支持外部 MCP 客户端。</strong></p>
+        <p class="tiny">表格 · 演示 · 文字文档<br>Node.js ≥ 22.19.0 · 本机 WPS JS Add-in</p>
       </div>
       <div class="walkie" aria-label="Agent 通过 MCP 和 WPS 通信">
-        <div class="title">它不是一个“大脑”，它是一座小桥。</div>
+        <div class="title">助手负责想，桥接负责送。</div>
         <div class="mini-flow">
-          <div class="mini-card agent"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-agent"></use></svg>Agent<small>读 Skill，直接写 WPS API</small></div>
+          <div class="mini-card agent"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-agent"></use></svg>Agent<small>WPS 内置助手 / 外部客户端</small></div>
           <div class="arrow" aria-hidden="true">→</div>
-          <div class="bridge"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-bridge"></use></svg>wps-mcp<small>只送代码，不做翻译</small></div>
+          <div class="bridge"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-bridge"></use></svg>桥接服务<small>路由 · 规则 · 日志</small></div>
           <div class="arrow" aria-hidden="true">→</div>
           <div class="mini-card wps"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-file"></use></svg>WPS<small>真的打开着的文档</small></div>
         </div>
         <div class="tiny" style="margin:0;text-align:center">中间这根绿色小桥，就是 wps-mcp。</div>
       </div>
+    </section>
+
+    <nav class="page-nav" aria-label="页面章节">
+      <a href="#assistant">两种入口</a><a href="#concepts">三个积木</a><a href="#guards">读写护栏</a><a href="#connect">安装接入</a><a href="#logging">运行日志</a><a href="#developers">代码导航</a>
+      <small>按当前实现更新 · 2026-09-30</small>
+    </nav>
+
+    <section id="assistant">
+      <div class="section-head"><h2>在 WPS 里聊，也能接 MCP</h2><p>两种入口共用八个工具、文档连接、变量和规则。</p></div>
+      <div class="rules">
+        <article class="panel rule">
+          <div class="caption">WPS 内置助手</div><h3>打开面板就能用</h3>
+          <p>在「WPS MCP」选项卡打开「助手面板」，先配置模型、测试连接并保存。支持 DeepSeek 内置目录及自定义 OpenAI 兼容端点。</p>
+          <div class="okline">助手面板 → /api/chat → 内嵌 pi Agent → 共用工具</div>
+        </article>
+        <article class="panel rule">
+          <div class="caption">外部 MCP 客户端</div><h3>接入你自己的 Agent</h3>
+          <p>通过 Streamable HTTP 或 stdio 调用八个 WPS 工具。外部 Agent 可按需加载仓库提供的 WPS API Skill / Reference。</p>
+          <div class="lockline">外部 Agent → /mcp 或 stdio → 共用工具</div>
+        </article>
+      </div>
+      <div class="trio" style="margin-top:16px">
+        <article class="panel rule"><div class="caption">会话</div><h3>过程看得见</h3><p>流式回复、Markdown、思考过程、工具参数与结果、耗时、Token 和上下文用量。停止生成后，已完成的写入仍保留。</p></article>
+        <article class="panel rule"><div class="caption">引用与变量</div><h3>位置说得清</h3><p><code>@</code> 引用文档、选区、变量或 Render；支持全拼与首字母搜索。表格选区预览最多 5 行 × 6 列，执行时沿用明确位置的快照。</p></article>
+        <article class="panel rule"><div class="caption">恢复与配置</div><h3>下次接着做</h3><p>变量、规则和会话保存在本机；重连恢复文档身份映射。多面板配置冲突会提示加载最新配置，同一服务只运行一个助手轮次。</p></article>
+      </div>
+      <div class="simple-note">内嵌 Agent 只挂载八个 WPS 工具，关闭内置文件与终端工具、外部资源自动发现；它不会自动读取仓库 Skill。模型请求发送到设置中的服务商，文档操作由本机 WPS Add-in 执行。</div>
     </section>
 
     <section>
@@ -233,7 +276,7 @@
         <div class="track">
           <div class="node user"><div class="fig"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-user"></use></svg></div><h3>你</h3><p>说自然语言，也可以引用 <code>@当前选区</code>。</p></div>
           <div class="connector" aria-hidden="true">→</div>
-          <div class="node agent"><div class="fig"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-agent"></use></svg></div><h3>Agent</h3><p>看懂任务，读取 Skill / Reference，然后直接写要执行的 WPS JS API 代码。</p></div>
+          <div class="node agent"><div class="fig"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-agent"></use></svg></div><h3>Agent</h3><p>理解任务和引用快照，直接生成 WPS JS API 查询、Transform 与 Render 代码。</p></div>
           <div class="connector" aria-hidden="true">→</div>
           <div class="node mcp"><div class="fig"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-bridge"></use></svg></div><h3>wps-mcp</h3><p>接收 Agent 写好的 WPS API 代码，保存 Transform / Render，并调用 Add-in。保持很薄。</p></div>
           <div class="connector" aria-hidden="true">→</div>
@@ -243,7 +286,7 @@
       </div>
     </section>
 
-    <section>
+    <section id="concepts">
       <div class="section-head">
         <h2>只记住 3 个词</h2>
         <p>复杂的 Excel、PPT 最后都先缩成这三个积木。</p>
@@ -264,7 +307,7 @@
         <article class="panel concept r">
           <div class="n">3</div><span class="pill">RENDER</span>
           <h3>把盒子里的东西放回去</h3>
-          <p>把 Variable 渲染进 PPT / Excel 的指定位置。一个 Variable 可以有多个 Render。</p>
+          <p>把 Variable 写入 PPT / Excel / Writer 的指定位置。一个 Variable 可以有多个 Render。</p>
           <div class="toy ppt"><div class="row"><svg class="icon" style="font-size:18px" aria-hidden="true" focusable="false"><use href="#i-box"></use></svg> 部门预算Top5</div><div class="down">↓</div><div class="row"><svg class="icon" style="font-size:18px" aria-hidden="true" focusable="false"><use href="#i-slide"></use></svg> PPT 第 3 页图表</div></div>
         </article>
       </div>
@@ -313,7 +356,7 @@
     <section>
       <div class="section-head">
         <h2>Agent 怎么会写 WPS API？</h2>
-        <p>不是 MCP 教它，也不是 Server 把 WPS API 再封装一遍。Agent 先读项目提供的 Skill / Reference。</p>
+        <p>外部 Agent 可加载 Skill / Reference；内嵌助手使用系统提示和八个工具的描述约束代码生成。</p>
       </div>
       <div class="panel skillbook">
         <div class="book">
@@ -323,8 +366,8 @@
           <p>里面告诉 Agent：WPS JS API 有哪些对象、怎么读工作簿/幻灯片/图表、常见代码怎么写，以及哪些操作必须放进 Render。</p>
         </div>
         <div class="codepath" aria-label="Agent 从 Skill 学会 WPS API 后直接生成代码">
-          <div class="line"><span class="n">1</span><span><span class="warn">Agent 读取 Skill / Reference</span><br><span class="muted">知道 Application、Workbook、Worksheet、Presentation、Shape、Chart… 怎么用</span></span></div>
-          <div class="line"><span class="n">2</span><span><span class="hot">Agent 自己生成 JavaScript</span><br><span class="api">const workbook = Application.ActiveWorkbook; // 直接使用 WPS JS API</span></span></div>
+          <div class="line"><span class="n">1</span><span><span class="warn">先核实文档与 API</span><br><span class="muted">通过工具取得文档和位置；外部 Agent 可按需查阅 Skill / Reference。</span></span></div>
+          <div class="line"><span class="n">2</span><span><span class="hot">Agent 自己生成 JavaScript</span><br><span class="api">return Application.Workbooks.Item("预算.xlsx").Name;</span></span></div>
           <div class="line"><span class="n">3</span><span><span class="hot">代码交给 wps-mcp</span><br><span class="muted">查询代码 → wps.exec　　提取代码 → Transform　　写入代码 → Render</span></span></div>
           <div class="line"><span class="n">4</span><span><span class="hot">Add-in 在 WPS 里执行</span><br><span class="muted">MCP 不把它翻译成另一套“自创 WPS API”。</span></span></div>
         </div>
@@ -332,7 +375,7 @@
       <div class="simple-note"><strong>所以项目能保持简单：</strong> WPS 已经有一套很大的 API。我们只需要教 Agent 会用它，而不是复制它。</div>
     </section>
 
-    <section>
+    <section id="guards">
       <div class="section-head">
         <h2>两条护栏，就够了</h2>
         <p>不是把 WPS API 包得很厚，而是只把“读”和“写”的边界说清楚。</p>
@@ -341,7 +384,7 @@
         <article class="panel rule">
           <div class="ok"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-eye"></use></svg></div>
           <h3>想看，可以直接看</h3>
-          <p>Agent 先根据 Skill / Reference 写出只读的 WPS JS API 代码，再通过 <code>wps.exec</code> 执行，了解表格、幻灯片、选区、图表等内容。</p>
+          <p>Agent 生成只读的 WPS JS API 代码，通过 <code>wps.exec</code> 查询表格、幻灯片、选区、图表或文字文档。先核实文档与具体位置，再执行查询。</p>
           <div class="okline">workspace.list_documents → document.get → wps.exec</div>
         </article>
         <article class="panel rule">
@@ -366,8 +409,9 @@
           </tbody>
         </table>
         <div class="runtime-note"><strong>记住这个方向：</strong> 上面这些写法在 <strong>Render 里全部合法</strong> —— Render 的代码根本不经过这道守卫。所以“想改文档”不要跟守卫较劲，直接写成 Render。</div>
+        <div class="simple-note"><strong>内嵌助手的修复额度：</strong>每个聊天轮次最多消耗 3 次守卫违规额度，按模型轮次计数；同一模型轮次的多个违规调用只算一次，用尽后中断。外部 MCP 调用不施加这份 Agent 额度。</div>
       </div>
-      <div class="simple-note"><strong>老实说一句：</strong>“只读”来自 Acorn 静态检查——拦住成员赋值、<code>new</code>、删除和常见写入方法，属于 best-effort，<strong>不是 JavaScript 沙箱</strong>，绕过去仍然可能写出有副作用的代码。真正有写权限的只有 Render，所以只运行可信代码。</div>
+      <div class="simple-note"><strong>执行边界：</strong>Acorn 静态检查属于 best-effort，<strong>不是 JavaScript 沙箱</strong>；只运行可信代码。Render 是正式修改入口，用户已请求的写入在核实目标后执行。多条 Render 分别报告结果，部分失败和停止生成都不会自动回滚已完成的修改。</div>
     </section>
 
     <section>
@@ -390,26 +434,26 @@
     <section id="connect">
       <div class="section-head">
         <h2>怎么把它接上？</h2>
-        <p>顺序不能反：先起服务，再注册 Add-in，最后完全重启 WPS。细节见 README。</p>
+        <p>先完全退出 WPS，构建并安装本机服务与 Add-in，再启动 WPS、确认连接。要求 Node.js ≥ 22.19.0。</p>
       </div>
       <div class="rules">
         <article class="panel rule">
-          <div class="caption">Step 1 · 起服务</div>
+          <div class="caption">Step 1 · 构建项目</div>
           <h3>只监听本机</h3>
-          <p>一个进程同时提供 MCP（stdio + Streamable HTTP）、Add-in 资源和 WebSocket，默认端口 <code>18766</code>，只绑定 <code>127.0.0.1</code>。</p>
-          <div class="okline">npm ci &amp;&amp; npm run build &amp;&amp; npm start</div>
+          <p>一个进程提供面板 API、HTTP MCP、Add-in 资源和 WebSocket，默认端口 <code>18766</code>，只绑定 <code>127.0.0.1</code>；默认还连接 stdio MCP。</p>
+          <div class="okline">npm ci<br>npm run build</div>
         </article>
         <article class="panel rule">
           <div class="caption">Step 2 · 注册 Add-in</div>
           <h3>写进 publish.xml</h3>
-          <p>把 ET / WPP / WPS 三个本地 Add-in 注册进去；脚本只增删自己的条目，改前先备份，也可 <code>--uninstall</code> 回滚。</p>
-          <div class="okline">node scripts/install-addin.mjs</div>
+          <p>Windows 注册 ET / WPP / WPS 条目并启动服务。macOS 安装常驻服务与专用 Add-in，补齐 Writer 启用记录。完成后重新启动 WPS。</p>
+          <div class="okline">Windows PowerShell:<br>node scripts/install-addin.mjs<br>$env:WPS_MCP_TRANSPORT = "http"<br>npm start<br><br>macOS:<br>scripts/install-macos-service.sh<br>scripts/install-macos-addin.sh</div>
         </article>
         <article class="panel rule">
-          <div class="caption">Step 3 · 接 MCP 客户端</div>
-          <h3>填这个地址</h3>
-          <p>传输方式选 <strong>Streamable HTTP</strong>。客户端要跑在能访问本机 loopback 的环境里。</p>
-          <div class="okline">http://127.0.0.1:18766/mcp</div>
+          <div class="caption">Step 3 · 选择入口</div>
+          <h3>面板或客户端</h3>
+          <p>WPS 中打开「助手面板」并配置模型；外部客户端选择 <strong>Streamable HTTP</strong>，填写本机 MCP 地址。两种方式都需要 Add-in 在线。</p>
+          <div class="okline">WPS MCP → 助手面板<br>外部客户端: http://127.0.0.1:18766/mcp</div>
         </article>
         <article class="panel rule">
           <div class="caption">Step 4 · 验证</div>
@@ -418,45 +462,60 @@
           <div class="okline">curl http://127.0.0.1:18766/health</div>
         </article>
       </div>
-      <div class="simple-note">这份页面只讲结构；安装、端口、状态目录（macOS <code>~/Library/Application Support/wps-mcp</code>、Windows <code>%APPDATA%\wps-mcp</code>）与安全边界以项目 <strong>README.md</strong> 为准。</div>
+      <div class="simple-note">具体命令与平台限制见 <a href="../README.md">README</a>。Windows Writer 仅通过 <code>publish.xml</code> 加载的兼容性尚未实测。更新代码后运行 <code>npm run build</code> 并重启桥接，再重新加载面板。Windows 可用 <code>scripts/restart-local-bridge.ps1</code> 检查空闲状态、保留数据并重启。</div>
+    </section>
+
+    <section id="logging">
+      <div class="section-head"><h2>出了问题，从日志找起</h2><p>默认有文件日志和 stderr 输出。MCP 的 stdout 只传协议消息。</p></div>
+      <div class="rules">
+        <article class="panel rule"><div class="caption">JSON Lines · 默认 info</div><h3>沿一次操作往下查</h3><p>记录启动与退出、连接、配置、HTTP、聊天、模型用量、工具及 WPS RPC 的状态、耗时和错误码。HTTP 响应提供 <code>x-request-id</code>。</p><div class="log-flow" aria-label="日志关联链路"><code>requestId</code><span>→</span><code>turnId</code><span>→</span><code>toolCallId</code><span>→</span><code>rpcId</code></div><div class="simple-note">外部 MCP 调用没有聊天 <code>turnId</code>；stdio 调用没有 HTTP <code>requestId</code>。正常 GET 与静态资源在 debug 级别记录。</div></article>
+        <article class="panel rule"><div class="caption">10 MiB × 5 份</div><h3>记录有限，内容克制</h3><p>默认每份日志 10 MiB，保留当前文件与 4 份归档，自动删除最旧归档。记录操作元信息，省去聊天正文、文档内容、代码、请求头和工具结果；凭据统一脱敏。</p><div class="lockline">&lt;数据目录&gt;/logs/wps-mcp.log<br>wps-mcp.log.1 → .4</div><div class="simple-note">文件写入失败时继续输出 stderr；队列最多 1000 条，满时丢弃新增文件副本。正常信号或致命异常退出前最多等待 2 秒落盘。</div></article>
+      </div>
+      <div class="panel work" style="margin-top:16px">
+        <div class="work-title"><strong>按需要调节日志</strong><p>环境变量在服务启动时读取，修改后重启生效。</p></div>
+        <div class="log-config"><table class="guard-table" aria-label="日志环境变量"><thead><tr><th scope="col">环境变量</th><th scope="col">默认</th><th scope="col">用途</th></tr></thead><tbody>
+          <tr><td><code>WPS_MCP_LOG_LEVEL</code></td><td>info</td><td>debug / info / warn / error / silent</td></tr>
+          <tr><td><code>WPS_MCP_LOG_DIR</code></td><td>数据目录/logs</td><td>自定义日志目录</td></tr>
+          <tr><td><code>WPS_MCP_LOG_FILE</code></td><td>1</td><td>设为 0，只保留 stderr</td></tr>
+          <tr><td><code>WPS_MCP_LOG_MAX_BYTES</code></td><td>10485760</td><td>单文件上限，最小 1 KiB</td></tr>
+          <tr><td><code>WPS_MCP_LOG_MAX_FILES</code></td><td>5</td><td>包含当前文件，最多 100 份</td></tr>
+        </tbody></table></div>
+        <div class="okline">Windows: %APPDATA%\wps-mcp\logs\wps-mcp.log<br>macOS: ~/Library/Application Support/wps-mcp/logs/wps-mcp.log</div>
+      </div>
+      <div class="simple-note"><strong>两类记录各有用途：</strong><code>logs/</code> 用于运行排障；<code>pi/sessions/</code> 用于恢复会话，可能包含工具结果和文档数据，独立于日志脱敏与轮转。强制结束进程不能保证尚未落盘的日志被保存。</div>
     </section>
 
     <section id="developers">
       <div class="section-head">
-        <h2>给开发者：代码只认 4 个目录</h2>
-        <p>这是职责地图，不是鼓励把项目拆成很多层。目录名可以调整，但边界最好别混。下面这棵树是<strong>目标形状</strong>；v0.1 的实现还很集中。</p>
+        <h2>给开发者：从这些文件开始</h2>
+        <p>这棵树对应当前实现。工具、助手、日志和守卫各有明确入口。</p>
       </div>
       <div class="panel dev-intro">
         <div class="dev-callout">
           <div class="caption">Developer mental model</div>
           <h3>读代码时，先问：这件事属于谁？</h3>
-          <p><strong>Skill / Reference</strong> 教 Agent WPS JS API；<strong>Server</strong> 管 MCP、规则和路由；<strong>Add-in</strong> 只负责在 WPS 里执行；<strong>Shared</strong> 只放最小协议。Agent 不在这 4 个目录里——它是外面的使用者。</p>
-          <div class="dev-rule">Skill = 教 WPS API<br>Agent = 想 + 写 WPS API 代码<br>MCP Server = 管代码 / 规则 / 路由<br>readonly-guard = 只读判据的唯一来源<br>WPS Add-in = 执行代码<br>WPS = 真正的文档</div>
+          <p><strong>tools.ts</strong> 让内嵌助手和 MCP 共用实现；<strong>agent.ts</strong> 管聊天与模型；<strong>server.ts</strong> 管传输；<strong>Add-in</strong> 在 WPS 中执行代码。规则重算和重写直接调用工具，无需模型参与。</p>
+          <div class="dev-rule">Skill / Reference = 外部 Agent 的 API 资料<br>Agent = 生成查询和规则<br>Tools = 管变量 / 规则 / RPC<br>Guard = 只读检查与修复额度<br>Logger = 脱敏 / 轮转 / 关联<br>WPS Add-in = 执行代码</div>
         </div>
-        <pre class="tree" aria-label="wps-mcp 目标目录结构"><span class="dir">wps-mcp/</span>
-├─ <span class="dir">skills/</span>            <span class="dim"># Agent 的“WPS API 说明书”</span>
-│  ├─ SKILL.md         <span class="dim"># 什么时候读、什么时候写、调用约束</span>
-│  └─ references/      <span class="dim"># WPS JS API 对象、示例、常用模式</span>
-│
-├─ <span class="dir">server/</span>            <span class="dim"># MCP Server：项目的“交通警察”</span>
-│  ├─ mcp/             <span class="dim"># 少量 MCP 工具的定义与入口</span>
-│  ├─ documents/       <span class="dim"># 当前打开文档的发现与 documentId 路由</span>
-│  ├─ rules/           <span class="dim"># 保存 Agent 写好的 Transform / Render 代码</span>
-│  └─ variables/       <span class="dim"># Variable 的执行与最新值</span>
-│
-├─ <span class="dir">addin/</span>             <span class="dim"># WPS JS Add-in：项目的“手”</span>
-│  ├─ bridge/          <span class="dim"># 和 Server 通信，报告当前文档</span>
-│  └─ runner/          <span class="dim"># 在 WPS 进程内直接执行 WPS JS API 代码</span>
-│
-└─ <span class="dir">shared/</span>            <span class="dim"># 少量共享类型 / 消息协议</span>
-
-<span class="hot">原则：不要为了“看起来像架构”继续加层。</span>
-
-<span class="dim">v0.1 现状：src/server.ts 单体（MCP + HTTP + WebSocket 都在里面）</span>
-<span class="dim">          src/readonly-guard.ts · 只读判据的唯一来源，server 与外部校验工具都 import 它，</span>
-<span class="dim">                                  避免判据以副本形式散落各处、各自静默过时</span>
-<span class="dim">          addon/{index.html, main.js, manifest.xml, ribbon.xml, status.html}</span>
-<span class="dim">          skills/wps-api/ · scripts/ · test/ · docs/</span></pre>
+        <pre class="tree" aria-label="wps-mcp 当前目录结构"><span class="dir">wps-mcp/</span>
+├─ <span class="dir">src/</span>
+│  ├─ server.ts         <span class="dim"># MCP / HTTP / WebSocket / 退出</span>
+│  ├─ tools.ts          <span class="dim"># 八个工具、规则、变量、WPS RPC</span>
+│  ├─ api.ts            <span class="dim"># 面板 API 与 SSE</span>
+│  ├─ agent.ts          <span class="dim"># 内嵌 pi Agent 与会话</span>
+│  ├─ config.ts         <span class="dim"># 模型配置与凭据</span>
+│  ├─ paths.ts          <span class="dim"># 平台数据目录</span>
+│  ├─ logger.ts         <span class="dim"># JSONL、轮转、脱敏、关联 ID</span>
+│  ├─ readonly-guard.ts <span class="dim"># 只读语法判据</span>
+│  └─ guard-budget.ts   <span class="dim"># 按模型轮次计算修复额度</span>
+├─ <span class="dir">addon/</span>
+│  ├─ main.js           <span class="dim"># WPS 宿主桥接与 Ribbon 回调</span>
+│  ├─ taskpane.*        <span class="dim"># 会话、变量、设置面板</span>
+│  └─ taskpane-view.js  <span class="dim"># 消息、代码与取值渲染</span>
+├─ <span class="dir">skills/wps-api/</span>     <span class="dim"># API Skill / Reference</span>
+├─ <span class="dir">scripts/</span>            <span class="dim"># 安装、重启、调试</span>
+├─ <span class="dir">test/</span>               <span class="dim"># 模拟与真实宿主测试</span>
+└─ <span class="dir">docs/</span>               <span class="dim"># 规范、ADR、验证记录</span></pre>
       </div>
     </section>
 
@@ -466,7 +525,7 @@
         <p>边界越清楚，项目越不容易从“小桥”长成“大平台”。</p>
       </div>
       <div class="owners">
-        <article class="panel owner agent"><div class="who"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-agent"></use></svg></div><h3>Agent</h3><p>理解自然语言，按需读取 Skill / Reference，直接生成 WPS JS API 查询代码、Transform 代码和 Render 代码。</p><div class="owns"><b>关键点：</b>不是调用一套“封装好的 WPS 业务 API”，而是自己写 WPS JS API。</div></article>
+        <article class="panel owner agent"><div class="who"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-agent"></use></svg></div><h3>Agent</h3><p>内嵌或外部 Agent 理解自然语言和引用，直接生成 WPS JS API 查询、Transform 与 Render 代码。</p><div class="owns"><b>拥有：</b>意图理解与规则生成；按已保存规则运行的重算、重写无需模型。</div></article>
         <article class="panel owner mcp"><div class="who"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-bridge"></use></svg></div><h3>MCP Server</h3><p>暴露少量工具、登记文档、保存 Agent 写好的代码规则、按 documentId 找到正确的 Add-in。</p><div class="owns"><b>拥有：</b>Variable / Transform / Render 的定义与执行入口。</div></article>
         <article class="panel owner addin"><div class="who"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-plug"></use></svg></div><h3>WPS Add-in</h3><p>待在真实 WPS 进程里，接收执行请求，直接运行 Agent 生成的 WPS JS API 代码。</p><div class="owns"><b>不负责：</b>理解用户意图，也不自己发明 Transform / Render。</div></article>
         <article class="panel owner wps"><div class="who"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-file"></use></svg></div><h3>WPS</h3><p>真正拥有工作簿、幻灯片、选区、图表、样式和当前编辑状态。</p><div class="owns"><b>事实来源：</b>文档内容以 WPS 当前状态为准。</div></article>
@@ -482,7 +541,7 @@
         <div class="work-title"><strong>建立绑定：只需要走完这 8 步</strong><p>先学会 API、再看清文档；随后定义 Transform / Variable / Render，最后执行写入。</p></div>
         <div class="steps">
           <article class="step"><div class="num">1</div><h4>收到任务</h4><p>自然语言 + <code>@当前选区</code> / 文件引用交给 Agent。</p></article>
-          <article class="step storestep"><div class="num">2</div><h4>读取 Skill</h4><p>Agent 查看 <code>SKILL.md</code> / WPS API Reference，知道该写哪些 WPS JS API。</p></article>
+          <article class="step storestep"><div class="num">2</div><h4>核实约束</h4><p>内嵌助手按提示与工具约束执行；外部 Agent 可查阅 <code>SKILL.md</code> / Reference。</p></article>
           <article class="step readstep"><div class="num">3</div><h4>找到文档</h4><p><code>workspace.list_documents</code><br><code>document.get</code></p></article>
           <article class="step readstep"><div class="num">4</div><h4>写代码调查</h4><p>Agent 直接生成只读 WPS JS API 代码，交给 <code>wps.exec</code> 执行。</p></article>
           <article class="step storestep"><div class="num">5</div><h4>写 Transform</h4><p>Agent 生成提取数据的 WPS JS API 代码，<code>transform.create</code> 保存它（同时建出 Variable）。</p></article>
@@ -490,25 +549,25 @@
           <article class="step storestep"><div class="num">7</div><h4>写 Render</h4><p>Agent 生成修改目标文档的 WPS JS API 代码，<code>render.create</code> 保存它。</p></article>
           <article class="step writestep"><div class="num">8</div><h4>真正写入</h4><p><code>variable.render</code><br>Add-in 在目标 WPS 文档执行 Render 代码。</p></article>
         </div>
-        <div class="runtime-note"><strong>绑定建好以后：</strong> 再执行同步时，不需要 Agent 重新思考。程序直接跑 Transform → 更新 Variable → 跑 Render。Agent 只在“创建或修改规则”时出现。</div>
+        <div class="runtime-note"><strong>绑定建好以后：</strong>在变量面板显式点击重算、重写，程序直接跑 Transform → 更新 Variable → 跑 Render，无需再次请求模型。重算和重写是两个操作；当前没有文件变化监听或定时同步。</div>
       </div>
     </section>
 
     <section>
       <div class="section-head">
-        <h2>开发时，最重要的 3 个“不”</h2>
-        <p>这三个地方一旦破坏，项目就会迅速变复杂。</p>
+        <h2>开发时守住三个边界</h2>
+        <p>复用 WPS API、保持查询只读、直接执行已保存规则。</p>
       </div>
       <div class="mistakes">
         <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>不要复制 WPS API</h3><p>不要为每个 WPS JS API 再包一层 MCP Tool。Skill / Reference 负责“教”，Agent 负责直接生成 WPS JS API 代码。</p></article>
         <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>不要让查询偷偷写</h3><p><code>wps.exec</code> 和 Transform 都应该是只读。文档修改只有 Render 一个正式入口。</p></article>
-        <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>不要把 Agent 塞进运行时</h3><p>同步执行是确定性的程序流程：Transform → Variable → Render，不应该每次都重新问模型。</p></article>
+        <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>规则运行直接执行</h3><p>Agent 可以内嵌在服务中，但已保存规则的重算、重写直接由工具执行，保持行为可检查、可重复。</p></article>
       </div>
     </section>
 
     <section class="panel manifesto">
       <h2>Simple means powerful.</h2>
-      <p><strong>wps-mcp 不想成为另一个 Office 框架。</strong><br>它只想用 Skill 教 Agent 写 WPS API，让 Agent 能找到 WPS、看懂 WPS、保存 Transform / Render，然后在正确的时候执行这些代码。</p>
+      <p><strong>让 AI 找到文档，保存规则，再把结果写对位置。</strong><br>内置助手、外部 MCP、同一套工具；Transform / Variable / Render 把一次任务变成可重复执行的绑定。</p>
       <div class="less">
         <span>不复制整套 WPS API</span>
         <span>不发明新的复杂 DSL</span>

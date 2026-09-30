@@ -246,4 +246,6 @@ npm run test:wps-writer-live
 | `skills/wps-api/` | 提供给外部 Agent 的 WPS API 技能与参考资料 |
 | `scripts/` / `test/` | 安装、重启、调试、常规与真实 WPS 测试 |
 
-浏览器验证记录见 [审计与验收报告](docs/ui-audit-and-validation.md)。
+浏览器验证记录见 [初期审计与验收报告](docs/ui-audit-and-validation.md)、[2026-09-30 规范对照检查](docs/ui-spec-audit-2026-09-30.md)和[修复复查记录](docs/ui-fix-validation-2026-09-30.md)。
+
+复杂文档与跨文件语义映射的手工测试素材见 [`test/pressure/`](test/pressure/README.md)。仓库只保存合成数据生成器、场景说明和评阅答案；Office 产物默认生成到已忽略的 `.dev/pressure-test/`。

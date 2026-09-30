@@ -126,6 +126,7 @@
       online = true; state = next; lastState = JSON.stringify(next);
       const count = state.documents.filter(d => d.connected).length;
       $('livePill').innerHTML = '<span class="dot"></span>' + (count ? `已连接 · ${count} 个文档` : '桥接就绪 · 无文档'); $('livePill').classList.toggle('off', !count);
+      $('pluginVersion').textContent = state.pluginVersion ? `v${state.pluginVersion}` : ''; $('pluginVersion').hidden = !state.pluginVersion;
       $('footMsg').textContent = count ? '变量与会话保存在本机' : '请在 WPS 中打开文档并加载 Add-in';
       $('footClock').textContent = new Date().toLocaleTimeString();
       if (changed) { renderVars(); if (!controller) renderTurns(); }

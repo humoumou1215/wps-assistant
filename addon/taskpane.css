@@ -63,6 +63,7 @@ button{font-family:inherit}
 }
 .live .dot{width:6px;height:6px;border-radius:50%;background:var(--ok)}
 .live.off .dot{background:#d93025}
+.plugin-version{font-size:10.5px;color:var(--text-dim);white-space:nowrap;flex-shrink:0}
 .drawer-head .grow{flex:1}
 .iconbtn{
   width:24px;height:24px;border:none;background:transparent;border-radius:4px;color:var(--text-muted);

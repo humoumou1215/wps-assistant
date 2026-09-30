@@ -22,6 +22,12 @@ release/
 test-results.xml
 coverage/
 
+# Historical UI screenshots; keep textual validation reports in Git.
+docs/pi-web-models-config/
+docs/ui-spec-audit-2026-09-30/
+docs/ui-fix-validation-2026-09-30/
+docs/ui-validation-*.png
+
 # Local Office locks, Python caches and legacy manual test outputs
 ~$*
 __pycache__/

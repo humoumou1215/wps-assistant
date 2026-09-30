@@ -315,7 +315,7 @@ Render 是唯一的破坏性动作（`variable.render` 的注解就是 `destruct
 
 ## 8. 参考：pi-web 的模型配置页（实测）
 
-截图见 [`docs/pi-web-models-config/`](pi-web-models-config/)（4 张，取自官方在线 demo 的真实渲染，非示意图）。
+当时参考了官方在线 demo 真实渲染的 4 张截图。历史截图已从工作区移除，可从清理前的 Git 提交查看；下面保留实测文字说明。
 
 ### 8.1 它的位置与壳
 

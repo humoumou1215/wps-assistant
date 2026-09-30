@@ -26,7 +26,7 @@ async function waitForHealth(child, serverLog) {
 }
 function callText(result) { return JSON.parse(result.content[0].text); }
 
-test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only calls", async (t) => {
+test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only calls", { timeout: 30000 }, async (t) => {
   const dataDir = await mkdtemp(join(tmpdir(), "wps-mcp-test-"));
   const child = spawn(process.execPath, [fileURLToPath(new URL("../dist/src/server.js", import.meta.url))], {
     env: { ...process.env, WPS_MCP_TRANSPORT: "http", WPS_MCP_PORT: String(PORT), WPS_MCP_DATA_DIR: dataDir },
@@ -59,10 +59,7 @@ test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only cal
     client = new Client({ name: "wps-mcp-integration-test", version: "1.0.0" });
     await client.connect(new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`)));
     socket = new WebSocket(WS);
-    await new Promise((resolve, reject) => {
-      socket.once("open", resolve);
-      socket.once("error", reject);
-    });
+    // Install message handlers before yielding: open and welcome can arrive in one packet.
     socket.on("message", async (raw) => {
       const request = JSON.parse(raw.toString());
       if (request.type === "request" && request.method === "execute") {
@@ -75,7 +72,9 @@ test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only cal
         }
       }
     });
-    const registered = new Promise((resolve) => socket.once("message", (raw) => {
+    const registered = new Promise((resolve, reject) => {
+      socket.once("error", reject);
+      socket.once("message", (raw) => {
       const msg = JSON.parse(raw.toString());
       if (msg.type === "welcome") {
         socket.send(JSON.stringify({ type: "register", hostType: "spreadsheet", documents: [{
@@ -84,7 +83,8 @@ test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only cal
         }] }));
         socket.on("message", (payload) => { const event = JSON.parse(payload.toString()); if (event.type === "registered") resolve(); });
       }
-    }));
+      });
+    });
     await registered;
 
     const tools = await client.listTools();

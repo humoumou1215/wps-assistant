@@ -32,11 +32,13 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
     ];
     let step = user.includes('验证绑定') ? steps[results.length] : null;
     if (user.includes('守卫验证')) step = ['transform_create', { variableName: 'blocked', sourceDocumentId: 'doc_001', code: 'Application.ActiveSheet.Name = "bad"; return true;' }];
-    const content = step ? null : user.includes('验证绑定') ? '绑定已完成：销售合计已写入销售数据!D3。' : 'OK，模型连接正常。';
+    const content = step ? null : user.includes('原型回归') ? '## 绑定已完成\n已将 **销售合计** 写入 `销售数据!D3`。\n\n| 指标 | 数值 |\n| --- | ---: |\n| 销售合计 | 120 |\n\n- 目标：UI验证.xlsx\n- 可在变量页重算、逐条重写。\n\n```js\nreturn variable.value;\n```' : user.includes('验证绑定') ? '绑定已完成：销售合计已写入销售数据!D3。' : 'OK，模型连接正常。';
     const toolCalls = step ? [{ index: 0, id: 'call_' + results.length, type: 'function', function: { name: step[0], arguments: JSON.stringify(step[1]) } }] : undefined;
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const chunk = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ id: 'completion-test', object: 'chat.completion.chunk', created: 1, model: body.model, choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
+    if (user.includes('原型回归')) chunk({ role: 'assistant', reasoning_content: '先核对引用快照与明确文档，再检查工具结果。' });
     chunk({ role: 'assistant', ...(toolCalls ? { tool_calls: toolCalls } : { content }) });
+    res.write(`data: ${JSON.stringify({ id: 'completion-test', choices: [], usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 } })}\n\n`);
     chunk({}, step ? 'tool_calls' : 'stop'); res.end('data: [DONE]\n\n');
   });
   await new Promise(r => model.listen(modelPort, '127.0.0.1', r)); modelPort = model.address().port;
@@ -47,6 +49,8 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   const workbook = { Name: 'UI验证.xlsx' };
   const app = { ActiveWorkbook: workbook, ActiveSheet: { Range(address) { return { get Value2() { return address === 'D3' ? appState.written : appState.value; }, set Value2(value) { if (appState.failRender) throw new Error('模拟文档写保护'); appState.written = value; } }; } } };
+  workbook.Worksheets = { Item(name) { if (name !== '销售数据') throw new Error('工作表不存在'); return app.ActiveSheet; } };
+  app.Workbooks = { Item(name) { if (name !== workbook.Name) throw new Error('文档不存在'); return workbook; } };
   await new Promise((resolve, reject) => {
     socket.on('error', reject);
     socket.on('message', async raw => {

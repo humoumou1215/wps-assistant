@@ -1,0 +1,53 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { startHarness } from './helpers/ui-harness.mjs';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+
+test('UI metadata, bounded selection reads, revision conflicts, partial writes and restart recovery', { timeout: 60000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wps-ui-recovery-')); let h, client;
+  try {
+    h = await startHarness({ dataDir: dir });
+    const post = (path, body) => fetch(h.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const initial = await (await fetch(h.base + '/api/config')).json();
+    const cfg = { ...h.cfg, model: { ...h.cfg.model, reasoning: true }, compat: { thinkingFormat: 'deepseek', maxTokensField: '' }, thinkingLevel: 'low', expectedRevision: initial.revision };
+    const saved = await (await post('/api/config', cfg)).json(); assert.notEqual(saved.revision, initial.revision);
+    assert.equal((await post('/api/config', cfg)).status, 409);
+    for (const name of ['taskpane-view.js', 'pinyin-pro.js']) assert.equal((await fetch(h.base + '/addon/' + name)).status, 200);
+    const preview = await (await post('/api/ref-preview', { kind: 'sel', id: 'doc_001', selection: { sheet: '销售数据', address: '$A$1:$XFD$1048576' } })).json();
+    assert.equal(preview.hasValue, true); assert.equal(preview.address, 'A1:F5'); assert.equal(preview.truncated, true); assert.equal(preview.value, 120);
+    assert.equal(h.appState.written, null);
+    const missing = await (await post('/api/ref-preview', { kind: 'sel', id: 'doc_001', selection: { address: 'A1' } })).json();
+    assert.equal(missing.hasValue, false);
+    assert.equal((await post('/api/ref-preview', { kind: 'sel', id: 'doc_001', selection: { sheet: '销售数据', address: 'A0' } })).status, 400);
+    const stream = await (await post('/api/chat', { message: '验证绑定 原型回归 [引用1:当前选区]', refs: [{ kind: 'sel', id: 'doc_001', label: '当前选区', marker: '引用1', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' } }] })).text();
+    assert.match(stream, /event: thinking.delta/); assert.match(stream, /event: message.start/); assert.match(stream, /workspace.list_documents/);
+    const history = await (await fetch(h.base + '/api/chat')).json();
+    const meta = history.turns.at(-1); assert.ok(meta.userTimestamp); assert.equal(meta.refs[0].marker, '引用1');
+    assert.equal(meta.calls, 9); assert.equal(meta.usage.totalTokens, 450);
+    assert.ok(meta.messageOrders.length >= 9);
+    const write = Object.values(meta.tools).find(t => t.toolName === 'variable.render');
+    assert.ok(write.durationMs >= 0); assert.equal(write.facts[0].targetDocumentName, 'UI验证.xlsx');
+    assert.equal(write.result.renders[0].success, true); assert.equal(write.result.renders[0].description, '销售数据!D3');
+    client = new Client({ name: 'ui-regression', version: '1' }); await client.connect(new StreamableHTTPClientTransport(new URL(h.base + '/mcp')));
+    const variable = (await (await fetch(h.base + '/api/state')).json()).variables[0];
+    const badRender = await client.callTool({ name: 'render.create', arguments: { variableId: variable.variableId, targetDocumentId: 'doc_001', description: '模拟失效目标', code: 'throw new Error("目标不可写");' } });
+    assert.ok(!badRender.isError);
+    const partial = await post('/api/actions', { op: 'render', variableId: variable.variableId });
+    assert.equal(partial.status, 422);
+    const value = await partial.json(); assert.equal(value.renders.filter(r => r.success).length, 1); assert.equal(value.renders.filter(r => !r.success).length, 1);
+    await client.close(); client = undefined; await h.close();
+    h = await startHarness({ dataDir: dir });
+    const restored = await (await fetch(h.base + '/api/chat')).json();
+    assert.deepEqual(restored.turns, history.turns);
+    assert.ok(restored.messages.some(m => m.role === 'assistant' && m.content.some(b => b.type === 'thinking')));
+    assert.ok(restored.contextUsage);
+    const catalog = await (await fetch(h.base + '/api/config')).json();
+    const official = await (await post('/api/config', { ...h.cfg, kind: 'builtin', baseUrl: '', label: 'DeepSeek 官方', api: 'openai-responses', compat: { thinkingFormat: 'qwen', maxTokensField: 'max_completion_tokens' }, model: catalog.builtinModels[0], expectedRevision: catalog.revision })).json();
+    assert.equal(official.api, 'openai-completions'); assert.deepEqual(official.compat, { thinkingFormat: '', maxTokensField: '' });
+    assert.equal(official.model.cost, undefined); assert.ok(catalog.builtinModels[0].cost);
+  } finally { if (client) await client.close(); if (h) await h.close(); await rm(dir, { recursive: true, force: true }); }
+});

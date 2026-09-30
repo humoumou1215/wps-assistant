@@ -150,7 +150,7 @@ test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only cal
     const after = callText(await client.callTool({ name: "variable.get", arguments: { variableId } }));
     assert.deepEqual(after.value, transformed.value);
     assert.equal(after.renders.length, 1);
-    assert.match(serverLog, /registered doc_001/);
+    assert.ok(serverLog.split(/\r?\n/).filter(Boolean).some(line => { try { const record = JSON.parse(line); return record.event === 'document.registered' && record.documentId === 'doc_001'; } catch { return false; } }));
   } finally {
     if (socket && socket.readyState === WebSocket.OPEN) socket.close();
     if (client) await client.close().catch(() => {});

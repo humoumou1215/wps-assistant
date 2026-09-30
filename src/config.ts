@@ -2,7 +2,8 @@ import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { DATA_DIR } from "./tools.js";
+import { DATA_DIR } from "./paths.js";
+import { logger } from "./logger.js";
 
 const configFile = join(DATA_DIR, "config.json");
 const modelSchema = z.object({
@@ -38,17 +39,24 @@ export const defaults: ModelConfig = {
 };
 let current: ModelConfig = structuredClone(defaults);
 let configured = false;
+let revision = randomUUID();
 export async function loadConfig() {
-  try { current = configSchema.parse(JSON.parse(await readFile(configFile, "utf8"))); configured = true; }
+  try {
+    current = configSchema.parse(JSON.parse(await readFile(configFile, "utf8"))); configured = true;
+    logger.setSecrets([current.apiKey, ...Object.values(current.headers ?? {})]);
+    logger.info("config.loaded", { kind: current.kind, model: current.model.id });
+  }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
 }
 export function getConfig() { return structuredClone(current); }
 export function publicConfig() {
   const { apiKey, headers, ...safe } = current;
-  return { ...safe, configured, hasKey: !!apiKey, hasHeaders: !!headers && Object.keys(headers).length > 0 };
+  return { ...safe, revision, configured, hasKey: !!apiKey, hasHeaders: !!headers && Object.keys(headers).length > 0 };
 }
 export function parseConfig(input: unknown): ModelConfig {
   const next = configSchema.parse(input);
+  // Built-in models own their protocol/compatibility; never persist ineffective overrides.
+  if (next.kind === "builtin") { next.api = "openai-completions"; next.compat = { thinkingFormat: "", maxTokensField: "" }; }
   // A saved credential belongs to its endpoint. Never silently send it to another endpoint.
   const sameEndpoint = next.kind === current.kind && (next.kind === "builtin" || next.baseUrl.replace(/\/$/, "") === current.baseUrl.replace(/\/$/, ""));
   return { ...next, apiKey: next.apiKey ?? (sameEndpoint ? current.apiKey : ""), headers: next.headers ?? (sameEndpoint ? current.headers : {}) };
@@ -59,7 +67,10 @@ export async function saveConfig(next: ModelConfig) {
   await writeFile(temp, JSON.stringify(next, null, 2), { mode: 0o600 });
   await rename(temp, configFile);
   current = next;
+  logger.setSecrets([current.apiKey, ...Object.values(current.headers ?? {})]);
   configured = true;
+  revision = randomUUID();
+  logger.info("config.saved", { kind: current.kind, model: current.model.id });
   return publicConfig();
 }
 export function redact(message: string) {

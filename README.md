@@ -78,6 +78,30 @@ npm run debug:local    # 连接两个模拟 Add-in（表格 + 演示），执行
 
 harness 只验证 MCP/WebSocket/桥接层，**不代表** WPS JS API 的真实兼容性；真实宿主下的 API 行为仍需按下方“自动化测试”在做实机验证。
 
+## 运行日志
+
+服务默认向 **stderr** 和 `<数据目录>/logs/wps-mcp.log` 写入 JSON Lines 日志，每行一条事件。Windows 默认路径为 `%APPDATA%\wps-mcp\logs\wps-mcp.log`；macOS 为 `~/Library/Application Support/wps-mcp/logs/wps-mcp.log`。stdout 保留给 MCP stdio 协议。原启动脚本的 stdout/stderr 重定向仍有效。
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `WPS_MCP_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` / `silent`；非法值回退到 `info` |
+| `WPS_MCP_LOG_DIR` | `<数据目录>/logs` | 自定义日志目录 |
+| `WPS_MCP_LOG_FILE` | `1` | 设为 `0` 关闭文件日志，保留 stderr |
+| `WPS_MCP_LOG_MAX_BYTES` | `10485760` | 每个文件上限，默认 10 MiB，最小 1 KiB |
+| `WPS_MCP_LOG_MAX_FILES` | `5` | 保留文件总数，含当前文件；最多 100 个 |
+
+轮转文件为 `wps-mcp.log.1` 至 `.4`，`.1` 为最近归档；超过保留数量会删除最旧文件。文件写入异步串行执行；目录不可写时会向 stderr 报告 `logger.file_unavailable`，本进程继续使用 stderr。写入队列最多容纳 1000 条，满时仅丢弃新增记录的文件副本并报告 `logger.queue_full`；stderr 仍输出。SIGINT/SIGTERM（平台支持时）和致命异常退出前会等待日志落盘，最多 2 秒；强制结束进程不能保证队列落盘。
+
+日志覆盖服务启动/退出、Add-in 连接、文档注册、配置操作、HTTP 请求、聊天轮次、模型用量、工具调用及 WPS RPC。按 `requestId` → `turnId` → `toolCallId` → `rpcId` 关联；外部 MCP 工具调用不含 `turnId`，stdio 调用不含 HTTP `requestId`。HTTP 响应包含 `x-request-id`。正常 GET/静态资源/健康检查只在 `debug` 记录，失败及 POST 请求在默认级别可见。
+
+默认只记录操作元信息、稳定 ID、耗时、状态和错误码，不记录聊天正文、文档名称/路径/内容、执行代码、工具参数或结果、请求头与 URL 查询参数。已保存 API Key、自定义 Header 值及连接测试中的临时凭据会脱敏；即使 `debug` 也不启用内容日志。`pi/sessions` 中原有的会话历史仍独立保存，不受运行日志的脱敏和轮转设置管理。
+
+Windows 查看最近日志：
+
+```powershell
+Get-Content "$env:APPDATA\wps-mcp\logs\wps-mcp.log" -Tail 30 -Wait
+```
+
 ## 接入 MCP 客户端
 
 服务启动后，可在支持 **MCP Streamable HTTP** 的客户端中添加服务器：

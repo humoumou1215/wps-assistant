@@ -58,7 +58,7 @@ async function waitForWriterDocument(client, expectedPath, serverLogs) {
     try { lastHealth = await (await fetch(`${BASE}/health`)).json(); } catch {}
     await pause(1_000);
   }
-  const addinConnections = serverLogs().split(/\r?\n/).filter((line) => line.includes("Add-in connected")).length;
+  const addinConnections = serverLogs().split(/\r?\n/).filter((line) => line.includes('"event":"addin.connected"')).length;
   throw new Error(`WPS Writer Add-in did not register the disposable test document (test connections=${lastHealth.connections ?? "?"}, registered documents=${lastHealth.documents ?? "?"}, Add-in connections=${addinConnections})`);
 }
 

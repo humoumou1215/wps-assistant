@@ -1,21 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { z } from "zod";
 import { analyzeReadOnlyCode, formatReadOnlyViolations, MAX_CODE_LENGTH } from "./readonly-guard.js";
+import { DATA_DIR } from "./paths.js";
+import { logger } from "./logger.js";
 
 const APP_DIR = resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const PORT = Number(process.env.WPS_MCP_PORT ?? "18766");
-/** Per-user state directory; keeps the macOS default and uses platform-native paths elsewhere. */
-function defaultDataDir() {
-  if (process.platform === "win32") return join(process.env.APPDATA ?? join(homedir(), "AppData", "Roaming"), "wps-mcp");
-  if (process.platform === "darwin") return join(homedir(), "Library/Application Support/wps-mcp");
-  return join(process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config"), "wps-mcp");
-}
-const DATA_DIR = resolve(process.env.WPS_MCP_DATA_DIR ?? defaultDataDir());
 const STATE_FILE = join(DATA_DIR, "state.json");
 const RPC_TIMEOUT_MS = 45_000;
 
@@ -74,7 +68,6 @@ const connections = new Map<string, Connection>();
 const pending = new Map<string, Pending>();
 const state: PersistedState = { variables: [], counters: {}, documentIds: {} };
 
-function log(...args: unknown[]) { console.error("[wps-mcp]", ...args); }
 function nextId(kind: string) {
   state.counters[kind] = (state.counters[kind] ?? 0) + 1;
   return `${kind}_${String(state.counters[kind]).padStart(3, "0")}`;
@@ -159,7 +152,7 @@ function registerDocument(connection: Connection, item: AddinDocument) {
   if (!documentId) {
     documentId = state.documentIds[identity] ?? nextId("doc");
     state.documentIds[identity] = documentId;
-    void persist().catch(error => log("document identity persistence failed", error));
+    void persist().catch(error => logger.error("state.persist_failed", { error }));
     connection.documents.set(item.documentKey, documentId);
   }
   const previous = documents.get(documentId);
@@ -175,7 +168,7 @@ function registerDocument(connection: Connection, item: AddinDocument) {
     ...(item.activeSlide !== undefined ? { activeSlide: item.activeSlide } : {}),
     ...(item.selection !== undefined ? { selection: item.selection } : {}),
   });
-  if (!previous) log(`registered ${documentId}: ${item.name} (${item.type})`);
+  if (!previous) logger.info("document.registered", { documentId, documentType: item.type, connectionId: connection.id });
   return documentId;
 }
 function cleanDocument(doc: DocumentRecord) {
@@ -187,16 +180,30 @@ function cleanDocument(doc: DocumentRecord) {
     connected: doc.connected,
   };
 }
-function sendRpc(doc: DocumentRecord, method: string, params: Record<string, unknown>) {
+async function sendRpc(doc: DocumentRecord, method: string, params: Record<string, unknown>) {
   const connection = connections.get(doc.connectionId);
   if (!connection || connection.socket.readyState !== WebSocket.OPEN) throw new ToolError("DOCUMENT_DISCONNECTED", `Document '${doc.documentId}' is disconnected`);
   const id = randomUUID();
-  const promise = new Promise<unknown>((resolve, reject) => {
-    const timer = setTimeout(() => { pending.delete(id); reject(new ToolError("WPS_EXEC_ERROR", `WPS API request timed out after ${RPC_TIMEOUT_MS}ms`)); }, RPC_TIMEOUT_MS);
-    pending.set(id, { connectionId: doc.connectionId, resolve, reject, timer });
+  return logger.withContext({ rpcId: id, connectionId: doc.connectionId, documentId: doc.documentId }, async () => {
+    const started = Date.now();
+    logger.info("rpc.start", { method, mode: params.mode });
+    try {
+      const response = await new Promise<unknown>((resolve, reject) => {
+        const fail = (error: Error) => { clearTimeout(timer); pending.delete(id); reject(error); };
+        const timer = setTimeout(() => fail(new ToolError("WPS_EXEC_ERROR", `WPS API request timed out after ${RPC_TIMEOUT_MS}ms`)), RPC_TIMEOUT_MS);
+        pending.set(id, { connectionId: doc.connectionId, resolve, reject: fail, timer });
+        try {
+          connection.socket.send(JSON.stringify({ type: "request", id, method, documentKey: doc.documentKey, ...params }), error => { if (error) fail(error); });
+        } catch (error) { fail(error instanceof Error ? error : new Error("WPS request send failed")); }
+      });
+      const success = !!(response as { success?: boolean } | null)?.success;
+      logger[success ? "info" : "warn"]("rpc.end", { success, durationMs: Date.now() - started, ...(!success ? { errorCode: "WPS_EXEC_ERROR" } : {}) });
+      return response;
+    } catch (error) {
+      logger.warn("rpc.failed", { errorCode: asToolError(error).code, durationMs: Date.now() - started, timeout: error instanceof ToolError && error.message.includes("timed out") });
+      throw error;
+    }
   });
-  connection.socket.send(JSON.stringify({ type: "request", id, method, documentKey: doc.documentKey, ...params }));
-  return promise;
 }
 async function executeWps(doc: DocumentRecord, code: string, variable?: unknown, mode: "query" | "render" = "query") {
   if (mode === "query") assertReadOnlyCode(code);
@@ -218,10 +225,27 @@ function documentResponse(doc: DocumentRecord) {
 
 export const toolDefinitions: { name: string; config: any; invoke: (args: any) => Promise<any> }[] = [];
 function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema: S; title: string; description: string; annotations: Record<string, boolean> }, handler: (args: z.infer<z.ZodObject<S>>) => Promise<any>) {
-  toolDefinitions.push({ name, config, invoke: async (args) => {
-    try { return await handler(z.object(config.inputSchema).parse(args)); }
-    catch (error) { return toolError(error, "INVALID_REQUEST"); }
-  } });
+  toolDefinitions.push({ name, config, invoke: args => logger.withContext({ toolCallId: randomUUID() }, async () => {
+    const started = Date.now();
+    let parsed: z.infer<z.ZodObject<S>>;
+    try { parsed = z.object(config.inputSchema).parse(args); }
+    catch (error) { logger.warn("tool.end", { toolName: name, success: false, errorCode: "INVALID_REQUEST", durationMs: Date.now() - started }); return toolError(error, "INVALID_REQUEST"); }
+    const ids = Object.fromEntries(Object.entries(parsed).filter(([key, value]) => /^(documentId|sourceDocumentId|targetDocumentId|variableId|renderId)$/.test(key) && typeof value === "string" && /^(doc|var|render)_\d+$/.test(value)));
+    logger.info("tool.start", { toolName: name, ...ids });
+    let result;
+    try { result = await handler(parsed); }
+    catch (error) { result = toolError(error, "INTERNAL_ERROR"); }
+    const value = result.structuredContent ?? JSON.parse(result.content[0].text);
+    const createdIds = Object.fromEntries(Object.entries(value).filter(([key, value]) => /^(variableId|transformId|renderId)$/.test(key) && typeof value === "string" && /^(var|transform|render)_\d+$/.test(value)));
+    const failures = value.renders?.filter((r: { success: boolean }) => !r.success);
+    const success = !result.isError && value.success !== false;
+    logger[success ? "info" : "warn"]("tool.end", {
+      toolName: name, ...ids, ...createdIds, success, durationMs: Date.now() - started,
+      errorCode: value.error?.code, failedRenderCount: failures?.length,
+      errorCodes: failures?.map((r: { error?: { code?: string } }) => r.error?.code),
+    });
+    return result;
+  }) });
 }
 defineTool("workspace.list_documents", {
   title: "List WPS documents",
@@ -375,5 +399,5 @@ export async function callTool(name: string, args: unknown) {
 export function getState() {
   return { documents: [...documents.values()].map(documentResponse), variables: state.variables };
 }
-export { APP_DIR, PORT, DATA_DIR, log, loadState, nextId, registerDocument, connections, documents, pending, asToolError };
+export { APP_DIR, PORT, DATA_DIR, loadState, nextId, registerDocument, connections, documents, pending, asToolError };
 export type { Connection, AddinDocument };

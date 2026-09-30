@@ -4,3 +4,20 @@ dist/
 .DS_Store
 npm-debug.log*
 .workbuddy
+
+# Local credentials and runtime data
+.env
+.env.*
+!.env.example
+config.json
+state.json
+logs/
+pi/sessions/
+*.log
+
+# Generated validation and release artifacts
+docs/.wheels/
+docs/*.ref/
+release/
+test-results.xml
+coverage/

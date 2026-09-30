@@ -1,5 +1,11 @@
 # WPS MCP Server
 
+[![CI](https://github.com/humoumou1215/wps-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/humoumou1215/wps-mcp/actions/workflows/ci.yml)
+[![Security](https://github.com/humoumou1215/wps-mcp/actions/workflows/security.yml/badge.svg)](https://github.com/humoumou1215/wps-mcp/actions/workflows/security.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+开发与贡献见 [CONTRIBUTING.md](CONTRIBUTING.md)，CI、依赖维护和版本发布见 [自动化维护指南](docs/automation.md)。
+
 通过本机桥接服务，让 AI 读取和修改当前打开的 WPS 表格、演示与文字文档。可以在 WPS 的助手面板里直接对话，也可以让外部 MCP 客户端接入；文档访问由 WPS Add-in 在真实宿主中执行 WPS JS API。
 
 核心流程是 **Transform → Variable → Render**：保存只读提取规则，得到 JSON 值，再按已保存的规则写入目标文档。创建绑定可以由 Agent 完成；之后在变量面板执行重算或重写，直接运行规则，无需再次请求模型。设计约束见 [`docs/spec.md`](docs/spec.md)。

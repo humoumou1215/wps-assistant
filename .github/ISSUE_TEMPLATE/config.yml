@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 安全漏洞
+    url: https://github.com/humoumou1215/wps-mcp/security/advisories/new
+    about: 请通过私密漏洞报告提交凭据泄露或安全问题

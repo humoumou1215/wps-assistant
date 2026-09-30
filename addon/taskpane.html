@@ -18,7 +18,14 @@
       <div id="notice" class="notice" role="status" hidden></div>
 <!-- ---------- 会话面板 ---------- -->
       <div class="panel" id="panel-chat">
-        <div class="chat-top"><span class="chip" id="modelChip">尚未配置模型</span><span class="chip mono" id="contextChip" title="由模型用量及后续消息估算"><span>上下文</span><span class="ctxbar"><i id="ctxFill"></i></span><span id="ctxPercent">—</span></span><span class="chip doc" id="activeDocChip" hidden></span><span id="usageLabel"></span></div>
+        <div class="chat-top">
+          <nav class="agent-actions" aria-label="会话资源">
+            <button class="agent-action" data-agent-view="system" aria-haspopup="dialog" aria-expanded="false" aria-controls="agentDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6M8 13h8M8 17h6"/></svg>系统</button>
+            <button class="agent-action" data-agent-view="skills" aria-haspopup="dialog" aria-expanded="false" aria-controls="agentDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 10 5-10 5L2 8zM2 12l10 5 10-5M2 16l10 5 10-5"/></svg>技能</button>
+            <button class="agent-action" data-agent-view="tools" aria-haspopup="dialog" aria-expanded="false" aria-controls="agentDialog"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.7 6.3a5.5 5.5 0 0 0-7 7L3 18a2.1 2.1 0 0 0 3 3l4.7-4.7a5.5 5.5 0 0 0 7-7l-3.4 3.4-3-3z"/></svg>工具</button>
+          </nav>
+          <div class="chat-status"><span class="chip mono" id="contextChip" title="由模型用量及后续消息估算"><span>上下文</span><span class="ctxbar"><i id="ctxFill"></i></span><span id="ctxPercent">—</span></span><span id="usageLabel"></span></div>
+        </div>
         <div class="chat-scroll" id="chatScroll">
           <div class="chat-inner" id="chatInner"></div>
         </div>
@@ -29,7 +36,7 @@
           <div class="composer-foot">
             <span class="hint"><kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · <kbd>@</kbd> 引用对象</span>
             <button class="atbtn" id="atBtn" title="插入引用">@</button>
-            <button class="mini" id="stopBtn" hidden>停止</button><button class="send" id="sendBtn">发送</button>
+            <button class="mini" id="stopBtn" hidden>停止</button><span class="chip composer-model" id="modelChip">尚未配置模型</span><button class="send" id="sendBtn">发送</button>
           </div>
         </div>
       </div>
@@ -222,5 +229,16 @@
       
       
       <div id="refPop" class="refpop" role="dialog" aria-label="引用对象预览" hidden></div>
+      <div class="agent-overlay" id="agentOverlay" hidden>
+        <section class="agent-dialog" id="agentDialog" role="dialog" aria-modal="true" aria-labelledby="agentTitle" tabindex="-1">
+          <header class="agent-head"><strong id="agentTitle">会话资源</strong><button class="mini" id="agentClose" aria-label="关闭会话资源">关闭</button></header>
+          <nav class="agent-tabs" aria-label="查看资源类型">
+            <button class="mini" data-agent-section="system" aria-pressed="true">系统提示词</button>
+            <button class="mini" data-agent-section="skills" aria-pressed="false">技能</button>
+            <button class="mini" data-agent-section="tools" aria-pressed="false">工具</button>
+          </nav>
+          <div class="agent-content" id="agentContent" aria-live="polite"></div>
+        </section>
+      </div>
     </aside>
 </body></html>

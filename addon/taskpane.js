@@ -27,6 +27,56 @@
     return value;
   }
   function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error', error); }
+  let agentView = 'system', agentData, agentRequest = 0, agentReturnFocus;
+  function renderAgentResources() {
+    const titles = { system: '系统提示词', skills: '已安装技能', tools: '当前会话工具' };
+    $('agentTitle').textContent = titles[agentView];
+    document.querySelectorAll('[data-agent-view]').forEach(button => button.setAttribute('aria-expanded', String(button.dataset.agentView === agentView && !$('agentOverlay').hidden)));
+    document.querySelectorAll('[data-agent-section]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.agentSection === agentView)));
+    if (!agentData) { $('agentContent').textContent = '正在读取当前会话资源…'; return; }
+    if (agentView === 'system') {
+      $('agentContent').innerHTML = '<p class="agent-description">当前会话实际使用的系统提示词，包含可按需读取的技能列表。</p><pre>' + esc(agentData.systemPrompt) + '</pre>';
+    } else if (agentView === 'skills') {
+      const skills = agentData.skills || [];
+      $('agentContent').innerHTML = '<p class="agent-description">已安装 ' + skills.length + ' 个技能。助手会按任务需要读取技能和参考资料。</p><div class="agent-path">' + esc(agentData.skillDirectory) + '</div>' +
+        (skills.length ? skills.map(skill => '<details><summary>' + esc(skill.name) + (skill.disableModelInvocation ? ' · 仅手动调用' : '') + '</summary><p class="agent-description">' + esc(skill.description) + '</p><div class="agent-path">' + esc(skill.filePath) + '</div><div class="body-text">' + V.markdown(skill.content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '')) + '</div></details>').join('') : '<p>暂无已安装技能。</p>') +
+        (agentData.diagnostics?.length ? '<details><summary>技能加载提示</summary><pre>' + esc(JSON.stringify(agentData.diagnostics, null, 2)) + '</pre></details>' : '');
+    } else {
+      const tools = agentData.tools || [];
+      $('agentContent').innerHTML = '<p class="agent-description">当前启用 ' + tools.length + ' 个工具。</p>' + tools.map(tool => '<details><summary>' + esc(tool.name) + '</summary><p class="agent-description">' + esc(tool.description) + '</p><div class="agent-description">参数定义</div><pre>' + esc(JSON.stringify(tool.parameters, null, 2)) + '</pre></details>').join('');
+    }
+  }
+  async function openAgentResources(view, trigger) {
+    if ($('agentOverlay').hidden) agentReturnFocus = trigger || document.activeElement;
+    agentView = view; agentData = undefined; $('agentOverlay').hidden = false; hideRefPop();
+    renderAgentResources(); $('agentClose').focus();
+    const request = ++agentRequest;
+    try {
+      const value = await api('/api/agent');
+      if (request !== agentRequest || $('agentOverlay').hidden) return;
+      agentData = value; renderAgentResources();
+    } catch (error) {
+      if (request === agentRequest && !$('agentOverlay').hidden) $('agentContent').textContent = '读取会话资源失败：' + error.message;
+    }
+  }
+  function closeAgentResources() {
+    agentRequest++; $('agentOverlay').hidden = true; agentReturnFocus?.focus();
+    document.querySelectorAll('[data-agent-view]').forEach(button => button.setAttribute('aria-expanded', 'false'));
+  }
+  document.querySelectorAll('[data-agent-view]').forEach(button => { button.onclick = () => openAgentResources(button.dataset.agentView, button); });
+  document.querySelectorAll('[data-agent-section]').forEach(button => { button.onclick = () => { agentView = button.dataset.agentSection; renderAgentResources(); }; });
+  $('agentClose').onclick = closeAgentResources;
+  $('agentOverlay').onclick = event => { if (event.target === $('agentOverlay')) closeAgentResources(); };
+  document.addEventListener('keydown', event => {
+    if ($('agentOverlay').hidden) return;
+    if (event.key === 'Escape') { event.preventDefault(); closeAgentResources(); }
+    if (event.key === 'Tab') {
+      const controls = [...$('agentDialog').querySelectorAll('button, summary, a[href]')];
+      const first = controls[0], last = controls.at(-1);
+      if (event.shiftKey && (document.activeElement === first || !$('agentDialog').contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || !$('agentDialog').contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
+    }
+  });
   function page(name) {
     if (!['chat', 'vars', 'settings'].includes(name)) name = 'chat';
     document.querySelectorAll('[data-tab]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.tab === name)));
@@ -78,7 +128,6 @@
       $('livePill').innerHTML = '<span class="dot"></span>' + (count ? `已连接 · ${count} 个文档` : '桥接就绪 · 无文档'); $('livePill').classList.toggle('off', !count);
       $('footMsg').textContent = count ? '变量与会话保存在本机' : '请在 WPS 中打开文档并加载 Add-in';
       $('footClock').textContent = new Date().toLocaleTimeString();
-      const active = state.documents.find(d => d.connected && d.selection); $('activeDocChip').hidden = !active; $('activeDocChip').textContent = active?.name || '';
       if (changed) { renderVars(); if (!controller) renderTurns(); }
     } catch {
       online = false; $('livePill').innerHTML = '<span class="dot"></span>桥接已断开'; $('livePill').classList.add('off'); $('footMsg').textContent = '无法连接本机服务，正在重试'; renderVars();
@@ -129,6 +178,7 @@
     $('stNowName').textContent = config.configured ? (config.label || config.model.id) : '尚未保存配置';
     $('stNowDetail').textContent = `provider=${config.kind === 'builtin' ? 'deepseek' : 'wps-custom'}${config.kind === 'custom' ? ' · ' + config.baseUrl : ''} · model=${config.model.id} · 上下文 ${config.model.contextWindow.toLocaleString()} · 最大输出 ${config.model.maxTokens.toLocaleString()} · 思考 ${config.model.reasoning ? config.thinkingLevel : 'off'}${config.hasKey ? ' · 密钥已保存' : ' · 无密钥'}`;
     $('modelChip').textContent = config.configured ? config.model.id : '尚未配置模型';
+    $('modelChip').title = $('modelChip').textContent;
   }
   async function loadSettings(force = false) {
     const next = await api('/api/config'), changed = !config || config.revision !== next.revision; config = next; models = config.builtinModels;

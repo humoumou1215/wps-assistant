@@ -31,8 +31,9 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
       ['variable_render', { variableId }], ['variable_get', { variableId }],
     ];
     let step = user.includes('验证绑定') ? steps[results.length] : null;
+    if (user.includes('技能读取')) step = [['read', { path: 'wps-api/SKILL.md' }], ['read', { path: 'wps-api/references/spreadsheet.md' }]][results.length];
     if (user.includes('守卫验证')) step = ['transform_create', { variableName: 'blocked', sourceDocumentId: 'doc_001', code: 'Application.ActiveSheet.Name = "bad"; return true;' }];
-    const content = step ? null : user.includes('原型回归') ? '## 绑定已完成\n已将 **销售合计** 写入 `销售数据!D3`。\n\n| 指标 | 数值 |\n| --- | ---: |\n| 销售合计 | 120 |\n\n- 目标：UI验证.xlsx\n- 可在变量页重算、逐条重写。\n\n```js\nreturn variable.value;\n```' : user.includes('验证绑定') ? '绑定已完成：销售合计已写入销售数据!D3。' : 'OK，模型连接正常。';
+    const content = step ? null : user.includes('技能读取') ? '技能资料已读取。' : user.includes('原型回归') ? '## 绑定已完成\n已将 **销售合计** 写入 `销售数据!D3`。\n\n| 指标 | 数值 |\n| --- | ---: |\n| 销售合计 | 120 |\n\n- 目标：UI验证.xlsx\n- 可在变量页重算、逐条重写。\n\n```js\nreturn variable.value;\n```' : user.includes('验证绑定') ? '绑定已完成：销售合计已写入销售数据!D3。' : 'OK，模型连接正常。';
     const toolCalls = step ? [{ index: 0, id: 'call_' + results.length, type: 'function', function: { name: step[0], arguments: JSON.stringify(step[1]) } }] : undefined;
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     const chunk = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ id: 'completion-test', object: 'chat.completion.chunk', created: 1, model: body.model, choices: [{ index: 0, delta, finish_reason }] })}\n\n`);

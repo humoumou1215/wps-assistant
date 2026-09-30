@@ -1,5 +1,6 @@
 import { handleApi } from "./api.js";
 import { loadConfig } from "./config.js";
+import { initializeAgentResources } from "./agent.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
@@ -169,6 +170,7 @@ async function startBridge() {
 async function main() {
   await loadState();
   await loadConfig();
+  await initializeAgentResources();
   await startBridge();
   if (process.env.WPS_MCP_TRANSPORT === "http") {
     logger.info("mcp.ready", { transport: "http", port: PORT });

@@ -259,7 +259,19 @@
       row('位置', selectionPosition(ref)) +
       (typeof s.text === 'string' ? row(s.type === 'caret' ? '插入点' : '选中文字', s.text || '（空）') : '');
   }
-  function referenceCatalog(state, online = true) {
+  function variablesInMode(state, mode, online = true) {
+    const connected = new Set(online ? state.documents.filter(doc => doc.connected).map(doc => doc.documentId) : []);
+    return mode === 'all' ? state.variables : state.variables.filter(variable => connected.has(variable.transform.sourceDocumentId) || variable.renders.some(render => connected.has(render.targetDocumentId)));
+  }
+  function variableActions(state, mode, op, online = true) {
+    const connected = new Set(online ? state.documents.filter(doc => doc.connected).map(doc => doc.documentId) : []);
+    return variablesInMode(state, mode, online).flatMap(variable => {
+      if (op === 'transform') return connected.has(variable.transform.sourceDocumentId) ? [{ op, variableId: variable.variableId }] : [];
+      if (!variable.hasValue) return [];
+      return variable.renders.filter(render => connected.has(render.targetDocumentId)).map(render => ({ op, variableId: variable.variableId, renderId: render.renderId }));
+    });
+  }
+  function referenceCatalog(state, mode = 'current', online = true) {
     if (!online) return [];
     const docName = id => state.documents.find(doc => doc.documentId === id)?.name || id + '（未注册）';
     return [
@@ -270,11 +282,11 @@
           return { ...ref, label: selectionLabel(ref), sub: selectionMode === 'current' ? '跟随文档中的选择 · 发送时读取最新位置' : '保留引用时的位置 · 后续移动选区不影响' };
         }) : []),
       ]),
-      ...state.variables.flatMap(variable => [
+      ...variablesInMode(state, mode, online).flatMap(variable => [
         { kind: 'var', id: variable.variableId, label: variable.name, sub: typeOf(variable) + ' · ' + (variable.transform.sourceRef || '') },
         ...variable.renders.map(render => ({ kind: 'render', id: render.renderId, label: render.renderId + ' · ' + variable.name, sub: docName(render.targetDocumentId) + ' › ' + (render.description || '未标注写入位置') })),
       ]),
     ];
   }
-  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, referenceCatalog, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML };
+  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, variablesInMode, variableActions, referenceCatalog, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML };
 })();

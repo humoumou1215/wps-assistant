@@ -77,16 +77,39 @@ function nextId(kind: string) {
   return `${kind}_${String(state.counters[kind]).padStart(3, "0")}`;
 }
 let persistence = Promise.resolve();
-function persist() {
-  const snapshot = JSON.stringify(state, null, 2);
+function persist(variables?: Variable[]) {
   const write = persistence.then(async () => {
-  await mkdir(DATA_DIR, { recursive: true });
-  const temp = `${STATE_FILE}.${randomUUID()}.tmp`;
-  await writeFile(temp, snapshot, { mode: 0o600 });
-  await rename(temp, STATE_FILE);
+    const snapshot = JSON.stringify({ ...state, variables: variables ?? state.variables }, null, 2);
+    await mkdir(DATA_DIR, { recursive: true });
+    const temp = `${STATE_FILE}.${randomUUID()}.tmp`;
+    await writeFile(temp, snapshot, { mode: 0o600 });
+    await rename(temp, STATE_FILE);
+    if (variables) state.variables = variables;
   });
   persistence = write.catch(() => {});
   return write;
+}
+let variableMutation = Promise.resolve();
+function mutateVariables<T>(operation: () => Promise<T>): Promise<T> {
+  const result = variableMutation.then(operation);
+  variableMutation = result.then(() => {}, () => {});
+  return result;
+}
+
+// UI-only deletion: never execute WPS code or clear already-written content.
+// Commit to disk before publishing the new list; serialize with tool mutations.
+export function deleteVariableDefinition(variableId: string, renderId?: string) {
+  return mutateVariables(async () => {
+    const variable = variableById(variableId);
+    if (renderId && !variable.renders.some(render => render.renderId === renderId)) {
+      throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
+    }
+    const variables = renderId
+      ? state.variables.map(item => item === variable ? { ...variable, renders: variable.renders.filter(render => render.renderId !== renderId) } : item)
+      : state.variables.filter(item => item !== variable);
+    await persist(variables);
+    return { success: true, variableId, ...(renderId ? { renderId } : { deletedRenderCount: variable.renders.length }) };
+  });
 }
 async function loadState() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -253,7 +276,10 @@ function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema
     const ids = Object.fromEntries(Object.entries(parsed).filter(([key, value]) => /^(documentId|sourceDocumentId|targetDocumentId|variableId|renderId)$/.test(key) && typeof value === "string" && /^(doc|var|render)_\d+$/.test(value)));
     logger.info("tool.start", { toolName: name, ...ids });
     let result;
-    try { result = await handler(parsed); }
+    try {
+      result = ["transform.create", "render.create", "variable.transform", "variable.render"].includes(name)
+        ? await mutateVariables(() => handler(parsed)) : await handler(parsed);
+    }
     catch (error) { result = toolError(error, "INTERNAL_ERROR"); }
     const value = result.structuredContent ?? JSON.parse(result.content[0].text);
     const createdIds = Object.fromEntries(Object.entries(value).filter(([key, value]) => /^(variableId|transformId|renderId)$/.test(key) && typeof value === "string" && /^(var|transform|render)_\d+$/.test(value)));

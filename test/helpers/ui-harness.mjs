@@ -9,7 +9,7 @@ import WebSocket from 'ws';
 export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
   if (!port) { const probe = createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r)); port = probe.address().port; await new Promise(r => probe.close(r)); }
   const dir = dataDir || await mkdtemp(join(tmpdir(), 'wps-ui-test-'));
-  const requests = [], appState = { value: 120, written: null, failRender: false };
+  const requests = [], appState = { value: 120, written: null, failRender: false, activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' }, inspected: 0, reads: [] };
   const model = createServer(async (req, res) => {
     let raw = ''; for await (const data of req) raw += data;
     const body = JSON.parse(raw || '{}'); requests.push({ body, headers: req.headers });
@@ -49,17 +49,23 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
   for (let i = 0; i < 100; i++) { try { if ((await fetch(base + '/health')).ok) break; } catch {} if (child.exitCode !== null) throw new Error(log); await new Promise(r => setTimeout(r, 100)); }
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
   const workbook = { Name: 'UI验证.xlsx' };
-  const app = { ActiveWorkbook: workbook, ActiveSheet: { Range(address) { return { get Value2() { return address === 'D3' ? appState.written : appState.value; }, set Value2(value) { if (appState.failRender) throw new Error('模拟文档写保护'); appState.written = value; } }; } } };
-  workbook.Worksheets = { Item(name) { if (name !== '销售数据') throw new Error('工作表不存在'); return app.ActiveSheet; } };
+  const app = { ActiveWorkbook: workbook, ActiveSheet: { Range(address) { appState.reads.push(address); return { get Value2() { return address === 'D3' ? appState.written : appState.value; }, set Value2(value) { if (appState.failRender) throw new Error('模拟文档写保护'); appState.written = value; } }; } } };
+  workbook.Worksheets = { Item(name) { if (!['销售数据', 'Summary'].includes(name)) throw new Error('工作表不存在'); return app.ActiveSheet; } };
   app.Workbooks = { Item(name) { if (name !== workbook.Name) throw new Error('文档不存在'); return workbook; } };
   await new Promise((resolve, reject) => {
     socket.on('error', reject);
     socket.on('message', async raw => {
       const message = JSON.parse(raw);
-      if (message.type === 'welcome') socket.send(JSON.stringify({ type: 'register', documents: [{ documentKey: 'ui-fixture', name: workbook.Name, type: 'spreadsheet', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' } }] }));
+      if (message.type === 'welcome') socket.send(JSON.stringify({ type: 'register', documents: [{ documentKey: 'ui-fixture', name: workbook.Name, type: 'spreadsheet', selectionVersion: 2, activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' } }] }));
       if (message.type === 'registered') resolve();
       if (message.type === 'request') {
-        try { const result = await new Function('Application', 'wps', 'variable', message.code)(app, app, message.variable); socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: true, result } })); }
+        try {
+          if (message.method === 'inspect') appState.inspected++;
+          const result = message.method === 'inspect'
+            ? { documentKey: 'ui-fixture', name: workbook.Name, type: 'spreadsheet', selectionVersion: 2, activeSheet: appState.activeSheet, ...(appState.selection ? { selection: appState.selection } : {}) }
+            : await new Function('Application', 'wps', 'variable', message.code)(app, app, message.variable);
+          socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: true, result } }));
+        }
         catch (error) { socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: false, error: error.message } })); }
       }
     });

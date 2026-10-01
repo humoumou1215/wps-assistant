@@ -61,6 +61,7 @@
       return {
         ...(getProp(sheet, "Name") ? { sheet: toStringValue(getProp(sheet, "Name")) } : {}),
         ...(address !== undefined ? { address: toStringValue(address) } : {}),
+        ...(getCount(getProp(selection, "Areas")) > 1 ? { areas: enumerate(getProp(selection, "Areas")).map(area => ({ address: toStringValue(safe(() => typeof area.Address === "function" ? area.Address() : area.Address, "")) })) } : {}),
       };
     }
     if (type === "presentation") {
@@ -69,17 +70,41 @@
       const slide = getProp(getProp(windowObject, "View"), "Slide");
       const shapes = getProp(selection, "ShapeRange");
       const shapeNames = [];
+      const shapeIds = [];
       for (const shape of enumerate(shapes)) {
         const name = getProp(shape, "Name");
         if (name) shapeNames.push(toStringValue(name));
+        const id = getProp(shape, "Id");
+        if (typeof id === "number") shapeIds.push(id);
       }
+      // TextRange2 can return placeholder text on macOS. Only use TextRange
+      // when WPS explicitly reports a text selection (ppSelectionText = 3).
+      const nativeType = Number(getProp(selection, "Type"));
+      const range = nativeType === 3 ? getProp(selection, "TextRange") : undefined;
+      const text = getProp(range, "Text"), start = getProp(range, "Start"), length = getProp(range, "Length");
       return {
+        type: nativeType === 3 ? "text" : shapeNames.length ? "shape" : "none",
+        ...(nativeType ? { nativeType } : {}),
         ...(getProp(slide, "SlideIndex") !== undefined ? { slide: Number(getProp(slide, "SlideIndex")) } : {}),
+        ...(getProp(slide, "SlideID") !== undefined ? { slideId: Number(getProp(slide, "SlideID")) } : {}),
         ...(shapeNames.length ? { shapeNames } : {}),
+        ...(shapeIds.length ? { shapeIds } : {}),
+        ...(typeof text === "string" ? { text } : {}),
+        ...(typeof start === "number" ? { start } : {}),
+        ...(typeof length === "number" ? { length } : {}),
       };
     }
     const selection = getProp(app, "Selection");
-    return { ...(getProp(selection, "Type") !== undefined ? { type: getProp(selection, "Type") } : {}) };
+    if (!selection) return { type: "none" };
+    const start = getProp(selection, "Start"), end = getProp(selection, "End");
+    return {
+      type: typeof start === "number" && start === end ? "caret" : "text",
+      ...(getProp(selection, "Type") !== undefined ? { nativeType: getProp(selection, "Type") } : {}),
+      ...(typeof start === "number" ? { start } : {}),
+      ...(typeof end === "number" ? { end } : {}),
+      ...(typeof getProp(selection, "Text") === "string" ? { text: getProp(selection, "Text") } : {}),
+      ...(typeof getProp(selection, "StoryType") === "number" ? { storyType: getProp(selection, "StoryType") } : {}),
+    };
   }
   function describeDocument(doc, type, app) {
     if (!doc) return null;
@@ -89,14 +114,11 @@
     const active = type === "spreadsheet" ? getProp(app, "ActiveWorkbook") : type === "presentation" ? getProp(app, "ActivePresentation") : getProp(app, "ActiveDocument");
     const isActive = active === doc || (fullName && fullName === toStringValue(getProp(active, "FullName")));
     const current = isActive ? selectionInfo(app, type) : {};
-    const selection = type === "spreadsheet"
-      ? { ...(current.sheet ? { sheet: current.sheet } : {}), ...(current.address ? { address: current.address } : {}) }
-      : type === "presentation"
-        ? { type: current.shapeNames?.length ? "shape" : "none", ...(current.shapeNames ? { shapeNames: current.shapeNames } : {}) }
-        : current;
+    const selection = current;
     return {
       documentKey: fullName || `${type}:${name}`,
       type,
+      selectionVersion: 2,
       name: name.split(/[\\/]/).pop() || name,
       ...(fullName ? { path: fullName } : {}),
       ...(current.sheet ? { activeSheet: current.sheet } : {}),
@@ -150,11 +172,15 @@
         setState(true, `${docs.length} WPS document(s) available`, docs);
         return;
       }
-      if (message.type !== "request" || message.method !== "execute") return;
+      if (message.type !== "request" || !["execute", "inspect"].includes(message.method)) return;
       let payload;
       try {
         const docs = currentDocuments();
         if (!docs.some((doc) => doc.documentKey === message.documentKey)) throw new Error("The selected WPS document is no longer available in this Add-in context");
+        if (message.method === "inspect") {
+          send({ type: "response", id: message.id, payload: { success: true, result: docs.find(doc => doc.documentKey === message.documentKey) } });
+          return;
+        }
         const app = getApplication();
         const wps = (typeof window !== "undefined" && window.wps) || app;
         const variable = message.variable;
@@ -208,10 +234,15 @@
     window.WpsMcpShowAssistant = () => showPane("chat");
     window.WpsMcpShowVariables = () => showPane("vars");
   }
-  if (typeof setInterval !== "undefined") setInterval(() => {
+  function publishDocuments() {
     if (socket?.readyState !== WebSocket.OPEN) return;
     const docs = currentDocuments();
     send({ type: "documents", documents: docs });
     setState(true, `${docs.length} WPS document(s) available`, docs);
-  }, 2500);
+  }
+  if (typeof setInterval !== "undefined") setInterval(publishDocuments, 750);
+  const events = getProp(getApplication(), "ApiEvent");
+  for (const name of ["WindowSelectionChange", "SheetSelectionChange"]) {
+    safe(() => events?.AddApiEventListener(name, publishDocuments), null);
+  }
 })();

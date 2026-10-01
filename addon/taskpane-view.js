@@ -93,6 +93,7 @@
     return { key: String(timestamp), user: text, refs, timestamp, blocks: [], tools: {}, done: false };
   }
   function reduceEvent(turn, name, data) {
+    if (name === 'refs.resolved') turn.refs = data.refs;
     if (name === 'turn.start') turn.model = data.model;
     if (name === 'message.start') { turn.model = data.model || turn.model; turn.segment = undefined; }
     if (name === 'message.end') turn.segment = undefined;
@@ -192,7 +193,7 @@
     for (const m of text.matchAll(pattern)) {
       html += esc(text.slice(end, m.index));
       const marker = m[0].slice(1).split(':')[0], ref = refs.find(r => r.marker === marker);
-      html += ref ? `<button type="button" class="ref" data-ref-marker="${esc(marker)}">@ ${esc(ref.label || ref.name || ref.id || ref.variableId || ref.renderId)}</button>` : esc(m[0]);
+      html += ref ? `<button type="button" class="ref" data-ref-marker="${esc(marker)}" title="${esc(ref.label || referenceChipLabel(ref))}" aria-label="${esc(ref.label || referenceChipLabel(ref))}">${referenceContentHTML(ref)}</button>` : esc(m[0]);
       end = m.index + m[0].length;
     }
     return html + esc(text.slice(end));
@@ -212,5 +213,68 @@
     }
     return false;
   }
-  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane };
+  function selectionPosition(ref, compact = false) {
+    const s = ref.selection || {};
+    if (s.address) return (s.sheet || ref.activeSheet || '') + '!' + s.address;
+    return [ref.activeSlide ? (compact ? '第' + ref.activeSlide + '页' : '第 ' + ref.activeSlide + ' 页') : '', s.shapeNames?.join('、'),
+      s.type === 'text' && typeof s.text === 'string' ? '「' + s.text.slice(0, 40) + (s.text.length > 40 ? '…' : '') + '」' : '',
+      s.start !== undefined ? (compact ? s.start + '起' + (s.end !== undefined ? s.end - s.start : s.length ?? 0) + '字' :
+        s.end !== undefined ? '字符 ' + s.start + '–' + s.end : '起点 ' + s.start + ' · ' + (s.length ?? 0) + ' 字符') : '',
+    ].filter(Boolean).join(compact ? '›' : ' › ') || '无选区';
+  }
+  function selectionLabel(ref) {
+    const label = (ref.selectionMode === 'current' ? '当前选区' : '固定选区') + ' · ' + (ref.name || ref.id) + ' › ' + selectionPosition(ref);
+    return label.length > 900 ? label.slice(0, 900) + '…' : label;
+  }
+  // Compact display only: the full label and captured selection remain in message metadata.
+  function referenceChipLabel(ref) {
+    const fallback = ref.label || ref.name || ref.id || ref.variableId || ref.renderId || '';
+    if (ref.kind !== 'sel') return fallback;
+    if (!ref.selection) return fallback.replace(/^(?:当前选区|固定选区)\s*[·›]?\s*/, '').replace(/\s*›\s*/g, '›');
+    return (ref.name || ref.id) + '›' + selectionPosition(ref, true) + (ref.unavailable ? '（不可用）' : '');
+  }
+  function selectionPinHTML(ref) {
+    return '<span class="selection-pin' + (ref.selectionMode === 'current' ? '' : ' is-fixed') + '" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" focusable="false"><path class="pin-head" d="M8 3h8v6l3 3v2H5v-2l3-3Z"/><path class="pin-stem" d="M12 14v7"/></svg></span>';
+  }
+  function referenceContentHTML(ref) {
+    return (ref.kind === 'sel' ? selectionPinHTML(ref) : '') + '<span data-ref-label>' + esc(referenceChipLabel(ref)) + '</span>';
+  }
+  function selectionReference(ref, state, online = true) {
+    if (ref.kind !== 'sel') return ref;
+    const next = structuredClone(ref);
+    if (ref.selectionMode === 'current' && !ref.selectionResolved) {
+      const doc = state.documents.find(doc => doc.documentId === ref.id && doc.connected);
+      next.selection = doc?.selection ? structuredClone(doc.selection) : undefined;
+      next.activeSheet = doc?.activeSheet; next.activeSlide = doc?.activeSlide;
+      next.name = doc?.name || ref.name;
+      next.unavailable = !online || !doc || !doc.selection || doc.selection.type === 'none';
+    }
+    next.label = selectionLabel(next) + (next.unavailable ? '（不可用）' : '');
+    return next;
+  }
+  function selectionDetailsHTML(ref) {
+    const s = ref.selection || {};
+    const row = (key, value) => '<div class="rkv"><span class="k">' + key + '</span><span class="v">' + esc(value) + '</span></div>';
+    return row('类型', ref.selectionMode === 'current' ? (ref.selectionResolved ? '当前选区 · 本次发送时的位置' : '当前选区 · 跟随文档中的选择') : '固定选区 · 保留引用时的位置') +
+      row('位置', selectionPosition(ref)) +
+      (typeof s.text === 'string' ? row(s.type === 'caret' ? '插入点' : '选中文字', s.text || '（空）') : '');
+  }
+  function referenceCatalog(state, online = true) {
+    if (!online) return [];
+    const docName = id => state.documents.find(doc => doc.documentId === id)?.name || id + '（未注册）';
+    return [
+      ...state.documents.filter(doc => doc.connected).flatMap(doc => [
+        { kind: 'doc', id: doc.documentId, label: doc.name, sub: doc.type },
+        ...(doc.selection && doc.selection.type !== 'none' ? ['current', 'fixed'].map(selectionMode => {
+          const ref = { kind: 'sel', id: doc.documentId, name: doc.name, selectionMode, selection: structuredClone(doc.selection), activeSheet: doc.activeSheet, activeSlide: doc.activeSlide };
+          return { ...ref, label: selectionLabel(ref), sub: selectionMode === 'current' ? '跟随文档中的选择 · 发送时读取最新位置' : '保留引用时的位置 · 后续移动选区不影响' };
+        }) : []),
+      ]),
+      ...state.variables.flatMap(variable => [
+        { kind: 'var', id: variable.variableId, label: variable.name, sub: typeOf(variable) + ' · ' + (variable.transform.sourceRef || '') },
+        ...variable.renders.map(render => ({ kind: 'render', id: render.renderId, label: render.renderId + ' · ' + variable.name, sub: docName(render.targetDocumentId) + ' › ' + (render.description || '未标注写入位置') })),
+      ]),
+    ];
+  }
+  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, referenceCatalog, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML };
 })();

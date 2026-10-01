@@ -129,9 +129,9 @@
       $('pluginVersion').textContent = state.pluginVersion ? `v${state.pluginVersion}` : ''; $('pluginVersion').hidden = !state.pluginVersion;
       $('footMsg').textContent = count ? '变量与会话保存在本机' : '请在 WPS 中打开文档并加载 Add-in';
       $('footClock').textContent = new Date().toLocaleTimeString();
-      if (changed) { renderVars(); if (!controller) renderTurns(); }
+      if (changed) { renderVars(); syncComposerRefs(); if (!controller) renderTurns(); }
     } catch {
-      online = false; $('livePill').innerHTML = '<span class="dot"></span>桥接已断开'; $('livePill').classList.add('off'); $('footMsg').textContent = '无法连接本机服务，正在重试'; renderVars();
+      online = false; $('livePill').innerHTML = '<span class="dot"></span>桥接已断开'; $('livePill').classList.add('off'); $('footMsg').textContent = '无法连接本机服务，正在重试'; renderVars(); syncComposerRefs();
     }
   }
   $('refreshState').onclick = () => syncShared();
@@ -243,10 +243,7 @@
 
   const categories = [['', '全部'], ['doc', '文档'], ['sel', '选区'], ['var', '变量'], ['render', 'Render']];
   const refKinds = Object.fromEntries(categories);
-  function catalog() {
-    return [...state.documents.filter(d => d.connected).flatMap(d => [{ kind: 'doc', id: d.documentId, label: d.name, sub: d.type }, ...(d.selection ? [{ kind: 'sel', id: d.documentId, label: '当前选区 ' + (d.selection.address || (d.activeSlide ? '第 ' + d.activeSlide + ' 页' : '')), sub: d.name + ' › ' + (d.activeSheet || ''), selection: structuredClone(d.selection), activeSheet: d.activeSheet, activeSlide: d.activeSlide }] : [])]),
-      ...state.variables.flatMap(v => [{ kind: 'var', id: v.variableId, label: v.name, sub: typeOf(v) + ' · ' + (v.transform.sourceRef || '') }, ...v.renders.map(r => ({ kind: 'render', id: r.renderId, label: r.renderId + ' · ' + v.name, sub: docName(r.targetDocumentId) + ' › ' + (r.description || '未标注写入位置') }))])];
-  }
+  function catalog() { return V.referenceCatalog(state, online); }
   let mentionItems = [], popCategory = '', popIndex = 0, mentionRange;
   function beforeCaret() {
     const selection = window.getSelection(); if (!selection?.rangeCount || !$('editor').contains(selection.anchorNode)) return null;
@@ -268,15 +265,58 @@
     mentionRange = range; renderMention(match[1]);
   }
   function chipNode(ref) {
-    const key = String(++refSerial); composerRefs.set(key, structuredClone(ref));
+    ref = structuredClone(ref);
+    if (ref.kind === 'sel') { delete ref.selectionResolved; ref = V.selectionReference(ref, state, online); }
+    const key = String(++refSerial); composerRefs.set(key, ref);
     const chip = document.createElement('span'); chip.className = 'ref'; chip.contentEditable = 'false'; chip.dataset.refkey = key; chip.tabIndex = 0; chip.setAttribute('role', 'button'); chip.setAttribute('aria-label', '预览引用 ' + ref.label);
-    const label = document.createElement('span'); label.textContent = '@ ' + ref.label;
+    const label = document.createElement('span'); label.dataset.refLabel = ''; label.textContent = V.referenceChipLabel(ref);
     const remove = document.createElement('button'); remove.type = 'button'; remove.dataset.removeRef = key; remove.textContent = '×'; remove.setAttribute('aria-label', '移除引用 ' + ref.label);
-    chip.append(label, remove); return chip;
+    if (ref.kind === 'sel') {
+      const toggle = document.createElement('button'); toggle.type = 'button'; toggle.dataset.selectionMode = key;
+      toggle.innerHTML = V.selectionPinHTML(ref); chip.append(toggle);
+    }
+    chip.append(label, remove); chip.title = ref.label;
+    if (ref.kind === 'sel') renderSelectionChip(chip, ref);
+    return chip;
   }
-  function insertRef(ref) {
+  function renderSelectionChip(chip, ref) {
+    chip.querySelector('[data-ref-label]').textContent = V.referenceChipLabel(ref);
+    chip.title = ref.label; chip.setAttribute('aria-label', '预览引用 ' + ref.label);
+    chip.querySelector('[data-remove-ref]').setAttribute('aria-label', '移除引用 ' + ref.label);
+    const toggle = chip.querySelector('[data-selection-mode]');
+    const fixed = ref.selectionMode !== 'current';
+    toggle.querySelector('.selection-pin').classList.toggle('is-fixed', fixed);
+    toggle.setAttribute('aria-pressed', String(fixed));
+    toggle.title = fixed ? '固定选区：保留引用位置。点击改为跟随当前选区' : '活动选区：跟随文档中的选择。点击固定到现在的位置';
+    toggle.setAttribute('aria-label', toggle.title);
+    chip.classList.toggle('unavailable', !!ref.unavailable);
+  }
+  function syncComposerRefs() {
+    $('editor').querySelectorAll('[data-refkey]').forEach(chip => {
+      const ref = composerRefs.get(chip.dataset.refkey); if (!ref || ref.kind !== 'sel') return;
+      const next = V.selectionReference(ref, state, online);
+      const changed = JSON.stringify(next) !== JSON.stringify(ref);
+      Object.assign(ref, next);
+      renderSelectionChip(chip, ref);
+      if (changed && pinnedRef === ref) showRefPop(chip, ref, true);
+    });
+  }
+  let insertingRef = false;
+  async function insertRef(ref) {
+    if (!ref || insertingRef) return;
     if ($('editor').querySelectorAll('[data-refkey]').length >= 30) { notice('每条消息最多引用 30 个对象。', true); return; }
-    const range = mentionRange?.cloneRange(); $('editor').focus(); const at = range || document.createRange();
+    const range = mentionRange?.cloneRange();
+    if (ref.kind === 'sel') {
+      insertingRef = true;
+      try {
+        // Both kinds capture the exact selection at insertion; only current follows later moves.
+        const resolved = await api('/api/ref-resolve', { ...ref, selectionMode: 'current' });
+        ref = { ...resolved, selectionMode: ref.selectionMode }; delete ref.selectionResolved;
+        ref.label = V.selectionLabel(ref);
+      } catch (error) { notice(error.message, true); return; }
+      finally { insertingRef = false; }
+    }
+    $('editor').focus(); const at = range || document.createRange();
     if (!range) { at.selectNodeContents($('editor')); at.collapse(false); }
     at.deleteContents(); const space = document.createTextNode('\u00a0'), fragment = document.createDocumentFragment(); fragment.append(chipNode(ref), space); at.insertNode(fragment);
     at.setStart(space, space.length); at.collapse(true); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(at); closeMention();
@@ -323,7 +363,7 @@
   function previewHTML(ref) {
     if (ref.kind === 'doc' || ref.kind === 'sel') {
       const d = doc(ref.id || ref.documentId) || ref;
-      return '<div class="rkv"><span class="k">文档</span><span class="v">' + esc(d.name || ref.label) + '</span></div><div class="rkv"><span class="k">连接</span><span class="v">' + (connected(d.documentId || ref.id) ? '已连接' : '已断开') + '</span></div><div class="rkv"><span class="k">位置</span><span class="v">' + esc(ref.selection?.sheet || ref.activeSheet || d.activeSheet || '') + ' ' + esc(ref.selection?.address || d.selection?.address || (ref.activeSlide ? '第 ' + ref.activeSlide + ' 页' : '')) + '</span></div>' + (ref.kind === 'sel' ? '<div class="rkv"><span class="k">快照</span><span class="v">' + esc(preview(ref.selection)) + '</span></div><div id="selectionPreview" class="st-hint">正在读取选区预览…</div>' : '');
+      return '<div class="rkv"><span class="k">文档</span><span class="v">' + esc(ref.name || d.name || ref.label) + '</span></div><div class="rkv"><span class="k">连接</span><span class="v">' + (connected(d.documentId || ref.id) ? '已连接' : '已断开') + '</span></div>' + (ref.kind === 'sel' ? V.selectionDetailsHTML(ref) + '<div id="selectionPreview" class="st-hint">正在读取选区预览…</div>' : '');
     }
     const v = state.variables.find(v => ref.kind === 'var' ? v.variableId === (ref.id || ref.variableId) : v.renders.some(r => r.renderId === (ref.id || ref.renderId)));
     if (!v) return '<div class="render-empty">该引用对象已不可用。</div>';
@@ -334,10 +374,19 @@
   function showRefPop(anchor, ref, pin = false) {
     if (!ref || (pinnedRef && !pin)) return; if (pin) pinnedRef = ref;
     clearTimeout(hoverTimer); const sequence = ++previewSequence;
-    $('refPop').innerHTML = '<div class="rh"><strong>' + esc(refKinds[ref.kind]) + ' · ' + esc(ref.label || ref.name || ref.renderId || ref.variableId || '') + '</strong><button type="button" data-close-preview aria-label="关闭引用预览">×</button></div><div class="rb">' + previewHTML(ref) + '</div><div class="rf">' + (pin ? '预览已固定 · Esc 关闭' : '点击引用可固定预览') + '</div>'; $('refPop').hidden = false;
+    $('refPop').innerHTML = '<div class="rh"><strong>' + esc(refKinds[ref.kind]) + ' · ' + esc(ref.label || ref.name || ref.renderId || ref.variableId || '') + '</strong><button type="button" data-close-preview aria-label="关闭引用预览">×</button></div><div class="rb">' + previewHTML(ref) + '</div><div class="rf">' + (pin ? '预览保持打开 · Esc 关闭' : '点击引用可保持预览打开') + '</div>'; $('refPop').hidden = false;
     const rect = anchor.getBoundingClientRect(), p = $('refPop'); p.style.left = '10px'; p.style.width = Math.min(380, innerWidth - 20) + 'px'; p.style.top = Math.max(10, Math.min(rect.top - p.offsetHeight - 8, innerHeight - p.offsetHeight - 10)) + 'px';
-    if (ref.kind === 'sel') api('/api/ref-preview', { ...ref, id: ref.id || ref.documentId }).then(value => {
-      if (sequence === previewSequence && $('selectionPreview')) $('selectionPreview').innerHTML = value.hasValue ? V.valueHTML(value.value) : esc(value.message);
+    if (ref.kind === 'sel') api('/api/ref-preview', { ...ref, id: ref.id || ref.documentId, selectionMode: ref.selectionResolved ? 'fixed' : ref.selectionMode || 'fixed' }).then(value => {
+      if (sequence !== previewSequence || !$('selectionPreview')) return;
+      if (value.ref && !ref.selectionResolved && ref.selectionMode === 'current') {
+        const resolved = { ...value.ref, selectionMode: ref.selectionMode }; delete resolved.selectionResolved;
+        Object.assign(ref, resolved);
+        $('refPop').querySelector('.rh strong').textContent = refKinds[ref.kind] + ' · ' + ref.label;
+        $('refPop').querySelector('.rb').innerHTML = previewHTML(ref);
+        const chip = [...$('editor').querySelectorAll('[data-refkey]')].find(chip => composerRefs.get(chip.dataset.refkey) === ref);
+        if (chip) renderSelectionChip(chip, ref);
+      }
+      $('selectionPreview').innerHTML = value.hasValue ? V.valueHTML(value.value) + (value.truncated ? '<div class="st-hint">仅预览部分数据，引用保留完整选区。</div>' : '') : esc(value.message);
     }).catch(error => { if (sequence === previewSequence && $('selectionPreview')) $('selectionPreview').textContent = '预览不可用：' + error.message; });
   }
   function referenceAt(target) {
@@ -349,7 +398,22 @@
   document.addEventListener('mouseover', e => { const hit = referenceAt(e.target); if (hit) { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => showRefPop(hit.anchor, hit.ref), 250); } });
   document.addEventListener('mouseout', e => { if (e.target.closest('[data-refkey], [data-ref-marker]') && !e.relatedTarget?.closest?.('#refPop')) { clearTimeout(hoverTimer); hoverTimer = setTimeout(hideRefPop, 200); } });
   $('refPop').onmouseenter = () => clearTimeout(hoverTimer); $('refPop').onmouseleave = hideRefPop;
-  document.addEventListener('click', e => {
+  document.addEventListener('click', async e => {
+    const toggle = e.target.closest('[data-selection-mode]');
+    if (toggle) {
+      const ref = composerRefs.get(toggle.dataset.selectionMode); if (!ref || toggle.disabled) return;
+      toggle.disabled = true;
+      try {
+        const resolved = await api('/api/ref-resolve', { ...ref, selectionMode: 'current' });
+        Object.assign(ref, resolved, { selectionMode: ref.selectionMode === 'current' ? 'fixed' : 'current' });
+        delete ref.selectionResolved; ref.label = V.selectionLabel(ref);
+        delete ref.unavailable;
+        renderSelectionChip(toggle.closest('[data-refkey]'), ref);
+        pinnedRef = undefined; hideRefPop();
+      } catch (error) { notice(error.message, true); }
+      finally { toggle.disabled = false; }
+      return;
+    }
     const remove = e.target.closest('[data-remove-ref]'); if (remove) { composerRefs.delete(remove.dataset.removeRef); remove.closest('[data-refkey]').remove(); pinnedRef = undefined; hideRefPop(); return; }
     if (e.target.closest('[data-close-preview]')) { pinnedRef = undefined; hideRefPop(); return; }
     const hit = referenceAt(e.target); if (hit) showRefPop(hit.anchor, hit.ref, true); else if (!e.target.closest('#refPop')) { pinnedRef = undefined; hideRefPop(); }
@@ -377,7 +441,7 @@
       const lastText = t.blocks.map(b => b.kind).lastIndexOf('text'), processes = t.blocks.filter((_, i) => i !== lastText), tools = t.blocks.filter(b => b.kind === 'tool');
       const group = processes.length ? '<details class="process-group" data-detail="group-' + esc(t.key) + '" ' + (lastText < 0 ? 'open' : '') + '><summary>过程详情 · ' + processes.length + ' 条 · ' + tools.length + ' 次工具调用' + (tools.some(b => b.status === 'error') ? ' · 含失败' : '') + '</summary><div class="blocks">' + t.blocks.map((b, i) => i === lastText ? '' : blockHTML(b, t, i)).join('') + '</div></details>' : '';
       const recap = tools.filter(b => b.toolName === 'variable.render').map(factsHTML).join('');
-      const legacyRefs = t.refs.length && !t.refs.some(r => r.marker) ? '<div class="refline">' + t.refs.map((r, n) => '<button class="ref" data-ref-marker="legacy-' + n + '">@ ' + esc(r.label || r.name || r.id || r.variableId || r.renderId) + '</button>').join('') + '</div>' : '';
+      const legacyRefs = t.refs.length && !t.refs.some(r => r.marker) ? '<div class="refline">' + t.refs.map((r, n) => '<button class="ref" data-ref-marker="legacy-' + n + '" title="' + esc(r.label || V.referenceChipLabel(r)) + '">' + V.referenceContentHTML(r) + '</button>').join('') + '</div>' : '';
       return '<section class="turn" data-turn="' + esc(t.key) + '"><div class="msg-user"><div class="bubble">' + V.userHTML(t.user, t.refs) + legacyRefs + '</div><div class="msg-meta"><span>' + clock(t.timestamp) + '</span><button data-copy-turn="' + esc(t.key) + '">复制</button><button data-quote-turn="' + esc(t.key) + '">引用以继续</button></div></div><div class="msg-assistant"><div class="model-line">' + esc(t.model || config?.model.id || 'WPS 助手') + (!t.done ? ' · 正在处理…' : '') + '</div>' +
         (t.done ? group + (recap ? '<div class="turn-writes" aria-label="本轮写入结果">' + recap + '</div>' : '') + (lastText >= 0 ? blockHTML(t.blocks[lastText], t, lastText) : '') : '<div class="blocks">' + t.blocks.map((b, i) => blockHTML(b, t, i)).join('') + '</div>') +
         (t.error ? '<div class="action-error">' + esc(t.error) + '</div>' : '') + (t.stopped ? '<div class="tool-state">已停止，已经完成的写入仍然有效。</div>' : '') + (t.stopReason === 'length' ? '<div class="tool-state">达到模型输出上限，可继续追问。</div>' : '') + '</div></section>';
@@ -417,7 +481,7 @@
     }
   };
   async function send() {
-    const input = readComposer(); if (!input.message || controller || peerBusy) return;
+    const input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || $('editor').querySelector('[data-selection-mode]:disabled')) return;
     const turn = V.newTurn(input.message, input.refs); turns.push(turn); controller = new AbortController(); followTail = true;
     turn.model = config?.model.id; showUsage(undefined, turn);
     $('sendBtn').disabled = true; $('stopBtn').hidden = false; $('editor').replaceChildren(); closeMention(); pinnedRef = undefined; hideRefPop(); notice(''); renderTurns();
@@ -453,6 +517,8 @@
   $('sendBtn').onclick = send; $('stopBtn').onclick = () => controller?.abort();
   $('editor').onkeydown = event => {
     if (event.isComposing || event.keyCode === 229) return;
+    // Let native chip buttons handle Enter/Space without submitting the message.
+    if (event.target.closest('[data-selection-mode], [data-remove-ref]')) return;
     if ($('mentionPop').classList.contains('show')) {
       if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); popIndex = Math.max(0, Math.min(mentionItems.length - 1, popIndex + (event.key === 'ArrowDown' ? 1 : -1))); renderMention($('mentionPop').dataset.query); return; }
       if (['Tab', 'ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); const step = event.key === 'ArrowLeft' || event.shiftKey ? -1 : 1; popCategory = categories[(categories.findIndex(c => c[0] === popCategory) + step + categories.length) % categories.length][0]; popIndex = 0; renderMention($('mentionPop').dataset.query); return; }
@@ -475,4 +541,11 @@
   document.addEventListener('visibilitychange', () => { if (!document.hidden) void syncShared(); });
   void syncShared();
   async function poll() { if (!document.hidden) await syncShared(); setTimeout(poll, 2500); } setTimeout(poll, 2500);
+  let selectionPolling = false;
+  setInterval(async () => {
+    const hasCurrent = [...$('editor').querySelectorAll('[data-refkey]')].some(chip => composerRefs.get(chip.dataset.refkey)?.selectionMode === 'current');
+    if (document.hidden || selectionPolling || (!hasCurrent && !$('mentionPop').classList.contains('show'))) return;
+    selectionPolling = true;
+    try { await refresh(); } finally { selectionPolling = false; }
+  }, 500);
 })();

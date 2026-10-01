@@ -7,6 +7,31 @@ vm.runInContext(await readFile(new URL('../addon/taskpane-view.js', import.meta.
 vm.runInContext(await readFile(new URL('../addon/pinyin-pro.js', import.meta.url), 'utf8'), context);
 const V = context.WpsPaneView;
 
+test('selection chips follow current sheet and text ranges while fixed and sent snapshots stay put', () => {
+  const state = { documents: [{ documentId: 'd', connected: true, name: '经营.xlsx', activeSheet: 'Sales', selection: { sheet: 'Sales', address: '$A$1:$B$4' } }], variables: [] };
+  const refs = V.referenceCatalog(state).filter(r => r.kind === 'sel');
+  const current = refs.find(r => r.selectionMode === 'current'), fixed = refs.find(r => r.selectionMode === 'fixed');
+  assert.match(current.label, /当前选区.*经营.xlsx.*Sales!\$A\$1:\$B\$4/);
+  assert.match(fixed.label, /固定选区.*Sales!/);
+  state.documents[0].activeSheet = 'Summary'; state.documents[0].selection = { sheet: 'Summary', address: 'D1:D4' };
+  const moved = V.selectionReference(current, state);
+  assert.match(moved.label, /Summary!D1:D4/); assert.equal(moved.selection.address, 'D1:D4');
+  assert.equal(V.selectionReference(fixed, state).selection.address, '$A$1:$B$4');
+  const sent = { ...moved, selectionResolved: true };
+  state.documents[0].selection.address = 'Z9';
+  assert.equal(V.selectionReference(sent, state).selection.address, 'D1:D4');
+  const turn = V.newTurn('[引用1:旧标签]', [{ ...current, marker: '引用1' }]);
+  V.reduceEvent(turn, 'refs.resolved', { refs: [{ ...sent, marker: '引用1' }] });
+  assert.match(V.userHTML(turn.user, turn.refs), /Summary!D1:D4/);
+  state.documents[0].connected = false;
+  assert.equal(V.selectionReference(current, state).selection, undefined);
+  assert.match(V.selectionReference(current, state).label, /不可用/);
+  const text = { kind: 'sel', name: '汇报.pptx', selectionMode: 'fixed', activeSlide: 1, selection: { type: 'text', shapeNames: ['TextBox 1'], text: '经营<script>', start: 3, length: 2 } };
+  assert.match(V.selectionLabel(text), /汇报.pptx.*第 1 页.*TextBox 1.*经营/);
+  const details = V.selectionDetailsHTML(text);
+  assert.match(details, /起点 3 · 2 字符/); assert.match(details, /经营&lt;script&gt;/); assert.ok(!details.includes('<script>'));
+});
+
 test('an old bridge missing new assets shows a recovery message rather than staying connecting', async () => {
   const elements = new Map();
   const document = { getElementById(id) { if (!elements.has(id)) elements.set(id, { classList: { add() {} }, hidden: true }); return elements.get(id); } };

@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { z } from "zod";
+import { boundedSelection } from "./selection.js";
 import { analyzeReadOnlyCode, formatReadOnlyViolations, MAX_CODE_LENGTH } from "./readonly-guard.js";
 import { DATA_DIR } from "./paths.js";
 import { logger } from "./logger.js";
@@ -205,7 +206,7 @@ function registerDocument(connection: Connection, item: AddinDocument) {
     ...(item.selectionVersion === 2 ? { selectionVersion: 2 } : {}),
     ...(item.activeSheet ? { activeSheet: item.activeSheet } : {}),
     ...(item.activeSlide !== undefined ? { activeSlide: item.activeSlide } : {}),
-    ...(item.selection !== undefined ? { selection: item.selection } : {}),
+    ...(item.selection !== undefined ? { selection: boundedSelection(item.selection) } : {}),
   });
   if (!previous) logger.info("document.registered", { documentId, documentType: item.type, connectionId: connection.id });
   return documentId;

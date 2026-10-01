@@ -5,15 +5,17 @@ import vm from 'node:vm';
 
 const source = await readFile(new URL('../addon/main.js', import.meta.url), 'utf8');
 
-function inspectHost(app, host) {
+function inspectHost(app, host, eventRoot = 'app') {
   const sent = [], callbacks = {}, handlers = {};
   class WS {
     static OPEN = 1; readyState = 1;
     addEventListener(name, callback) { handlers[name] = callback; if (name === 'open') callback(); }
     send(text) { sent.push(JSON.parse(text)); }
   }
-  app.ApiEvent = { AddApiEventListener(name, callback) { callbacks[name] = callback; } };
-  vm.runInNewContext(source, { window: { wps: { [{ et: 'EtApplication', wpp: 'WppApplication', wps: 'WpsApplication' }[host]]: () => app } }, URL, location: { href: 'http://127.0.0.1:18766/addins/' + host + '/', pathname: '/addins/' + host + '/' }, WebSocket: WS, clearTimeout() {}, setTimeout() {}, setInterval() {} });
+  const events = { AddApiEventListener(name, callback) { callbacks[name] = callback; } };
+  const wps = { [{ et: 'EtApplication', wpp: 'WppApplication', wps: 'WpsApplication' }[host]]: () => app };
+  if (eventRoot === 'app') app.ApiEvent = events; else wps.ApiEvent = events;
+  vm.runInNewContext(source, { window: { wps }, URL, location: { href: 'http://127.0.0.1:18766/addins/' + host + '/', pathname: '/addins/' + host + '/' }, WebSocket: WS, clearTimeout() {}, setTimeout() {}, setInterval() {} });
   return { sent, callbacks, handlers };
 }
 
@@ -34,6 +36,30 @@ test('PPT captures exact text and identity; inspect and events read fresh select
   selection.ShapeRange.Count = 0; selection.Type = 0;
   h.callbacks.WindowSelectionChange();
   assert.equal(h.sent.at(-1).documents[0].selection.type, 'none');
+});
+
+test('macOS global wps.ApiEvent publishes changed selections without Application.ApiEvent', () => {
+  const book = { Name: '经营.xlsx', FullName: '/经营.xlsx' };
+  const app = { ActiveWorkbook: book, Workbooks: { Count: 1, Item: () => book }, ActiveSheet: { Name: 'Sales' }, Selection: { Address: 'A1' } };
+  const h = inspectHost(app, 'et', 'wps');
+  assert.equal(app.ApiEvent, undefined);
+  assert.equal(typeof h.callbacks.SheetSelectionChange, 'function');
+  app.Selection.Address = 'B9'; h.callbacks.SheetSelectionChange();
+  assert.equal(h.sent.at(-1).documents[0].selection.address, 'B9');
+  assert.equal(typeof h.callbacks.WindowSelectionChange, 'function');
+});
+
+test('large Writer and PPT selections keep exact coordinates and bounded text previews', () => {
+  const text = '中'.repeat(350000), doc = { Name: '大文档.docx', FullName: '/大文档.docx' };
+  let textReads = 0;
+  const writer = inspectHost({ ActiveDocument: doc, Documents: { Count: 1, Item: () => doc }, Selection: { Start: 10, End: 350010, StoryType: 1, get Text() { textReads++; return text; } } }, 'wps');
+  const s = writer.sent[0].documents[0].selection;
+  assert.equal(s.text.length, 2000); assert.equal(s.textLength, 350000); assert.equal(s.textTruncated, true);
+  assert.equal(s.start, 10); assert.equal(s.end, 350010); assert.equal(textReads, 1);
+  assert.ok(Buffer.byteLength(JSON.stringify(writer.sent[0])) < 10000);
+  const ppt = inspectHost({ ActivePresentation: doc, Presentations: { Count: 1, Item: () => doc }, ActiveWindow: { Selection: { Type: 3, TextRange: { Text: text, Start: 3, Length: 350000 }, ShapeRange: { Count: 1, Item: () => ({ Name: 'TextBox 1', Id: 42 }) } }, View: { Slide: { SlideIndex: 1, SlideID: 256 } } } }, 'wpp');
+  const p = ppt.sent[0].documents[0].selection;
+  assert.equal(p.text.length, 2000); assert.equal(p.textLength, 350000); assert.equal(p.length, 350000);
 });
 
 test('Writer captures range and caret, and spreadsheet preserves disjoint areas', () => {

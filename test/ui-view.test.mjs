@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import vm from 'node:vm';
-const context = vm.createContext({});
+const context = vm.createContext({ structuredClone });
 vm.runInContext(await readFile(new URL('../addon/taskpane-view.js', import.meta.url), 'utf8'), context);
 vm.runInContext(await readFile(new URL('../addon/pinyin-pro.js', import.meta.url), 'utf8'), context);
 const V = context.WpsPaneView;

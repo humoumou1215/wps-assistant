@@ -78,16 +78,50 @@ function nextId(kind: string) {
   return `${kind}_${String(state.counters[kind]).padStart(3, "0")}`;
 }
 let persistence = Promise.resolve();
-function persist() {
-  const snapshot = JSON.stringify(state, null, 2);
+function persist(variables?: Variable[]) {
   const write = persistence.then(async () => {
-  await mkdir(DATA_DIR, { recursive: true });
-  const temp = `${STATE_FILE}.${randomUUID()}.tmp`;
-  await writeFile(temp, snapshot, { mode: 0o600 });
-  await rename(temp, STATE_FILE);
+    const snapshot = JSON.stringify({ ...state, variables: variables ?? state.variables }, null, 2);
+    await mkdir(DATA_DIR, { recursive: true });
+    const temp = `${STATE_FILE}.${randomUUID()}.tmp`;
+    await writeFile(temp, snapshot, { mode: 0o600 });
+    await rename(temp, STATE_FILE);
+    if (variables) state.variables = variables;
   });
   persistence = write.catch(() => {});
   return write;
+}
+let variableMutation = Promise.resolve();
+function mutateVariables<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  let cancelWaiting: (() => void) | undefined;
+  const result = variableMutation.then(() => {
+    // Once execution starts, keep its result and queue slot until it completes.
+    if (cancelWaiting) signal!.removeEventListener("abort", cancelWaiting);
+    return operation();
+  });
+  variableMutation = result.then(() => {}, () => {});
+  if (!signal) return result;
+  return new Promise<T>((resolve, reject) => {
+    cancelWaiting = () => reject(new ToolError("OPERATION_CANCELLED", "已停止，未执行此操作"));
+    if (signal.aborted) cancelWaiting();
+    else signal.addEventListener("abort", cancelWaiting, { once: true });
+    result.then(resolve, reject);
+  });
+}
+
+// UI-only deletion: never execute WPS code or clear already-written content.
+// Commit to disk before publishing the new list; serialize with tool mutations.
+export function deleteVariableDefinition(variableId: string, renderId?: string) {
+  return mutateVariables(async () => {
+    const variable = variableById(variableId);
+    if (renderId && !variable.renders.some(render => render.renderId === renderId)) {
+      throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
+    }
+    const variables = renderId
+      ? state.variables.map(item => item === variable ? { ...variable, renders: variable.renders.filter(render => render.renderId !== renderId) } : item)
+      : state.variables.filter(item => item !== variable);
+    await persist(variables);
+    return { success: true, variableId, ...(renderId ? { renderId } : { deletedRenderCount: variable.renders.length }) };
+  });
 }
 async function loadState() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -244,9 +278,9 @@ export async function refreshDocument(documentId: string) {
   return documentResponse(documentById(documentId));
 }
 
-export const toolDefinitions: { name: string; config: any; invoke: (args: any) => Promise<any> }[] = [];
+export const toolDefinitions: { name: string; config: any; invoke: (args: any, signal?: AbortSignal) => Promise<any> }[] = [];
 function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema: S; title: string; description: string; annotations: Record<string, boolean> }, handler: (args: z.infer<z.ZodObject<S>>) => Promise<any>) {
-  toolDefinitions.push({ name, config, invoke: args => logger.withContext({ toolCallId: randomUUID() }, async () => {
+  toolDefinitions.push({ name, config, invoke: (args, signal) => logger.withContext({ toolCallId: randomUUID() }, async () => {
     const started = Date.now();
     let parsed: z.infer<z.ZodObject<S>>;
     try { parsed = z.object(config.inputSchema).parse(args); }
@@ -254,7 +288,16 @@ function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema
     const ids = Object.fromEntries(Object.entries(parsed).filter(([key, value]) => /^(documentId|sourceDocumentId|targetDocumentId|variableId|renderId)$/.test(key) && typeof value === "string" && /^(doc|var|render)_\d+$/.test(value)));
     logger.info("tool.start", { toolName: name, ...ids });
     let result;
-    try { result = await handler(parsed); }
+    try {
+      // Check on dequeue, not just when the agent submits the call: Stop may
+      // happen while another document's mutation is still holding the queue.
+      const execute = () => {
+        if (signal?.aborted) throw new ToolError("OPERATION_CANCELLED", "已停止，未执行此操作");
+        return handler(parsed);
+      };
+      result = ["transform.create", "render.create", "variable.transform", "variable.render"].includes(name)
+        ? await mutateVariables(execute, signal) : await execute();
+    }
     catch (error) { result = toolError(error, "INTERNAL_ERROR"); }
     const value = result.structuredContent ?? JSON.parse(result.content[0].text);
     const createdIds = Object.fromEntries(Object.entries(value).filter(([key, value]) => /^(variableId|transformId|renderId)$/.test(key) && typeof value === "string" && /^(var|transform|render)_\d+$/.test(value)));
@@ -412,10 +455,10 @@ defineTool("variable.render", {
   } catch (error) { return toolError(error, "RENDER_EXECUTION_ERROR"); }
 });
 
-export async function callTool(name: string, args: unknown) {
+export async function callTool(name: string, args: unknown, signal?: AbortSignal) {
   const tool = toolDefinitions.find(t => t.name === name);
   if (!tool) throw new ToolError("INVALID_REQUEST", "Unknown tool");
-  return tool.invoke(args);
+  return tool.invoke(args, signal);
 }
 export function getState() {
   return { documents: [...documents.values()].map(documentResponse), variables: state.variables };

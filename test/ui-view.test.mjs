@@ -47,6 +47,88 @@ test('selection chips follow current sheet and text ranges while fixed and sent 
   assert.match(details, /起点 3 · 2 字符/); assert.match(details, /经营&lt;script&gt;/); assert.ok(!details.includes('<script>'));
 });
 
+test('composer variable and Render candidates follow the mode while document and selection candidates remain online', () => {
+  const state = {
+    documents: [{ documentId: 'live', name: '在线.xlsx', type: 'spreadsheet', connected: true, activeSheet: 'Sheet1', selection: { address: 'A1:B4' } }],
+    variables: [
+      { variableId: 'source', name: '在线来源', transform: { sourceDocumentId: 'live' }, renders: [] },
+      { variableId: 'target', name: '在线目标', transform: { sourceDocumentId: 'offline' }, renders: [{ renderId: 'r_live', targetDocumentId: 'live' }, { renderId: 'r_offline', targetDocumentId: 'offline' }] },
+      { variableId: 'history', name: '历史变量', transform: { sourceDocumentId: 'offline' }, renders: [{ renderId: 'r_history', targetDocumentId: 'offline' }] },
+    ],
+  };
+  const current = V.referenceCatalog(state, 'current');
+  assert.equal(Array.from(current.filter(ref => ref.kind === 'var'), ref => ref.id).join(','), 'source,target');
+  assert.equal(Array.from(current.filter(ref => ref.kind === 'render'), ref => ref.id).join(','), 'r_live,r_offline');
+  assert.equal(Array.from(current.filter(ref => ['doc', 'sel'].includes(ref.kind)), ref => ref.kind).join(','), 'doc,sel,sel');
+  const all = V.referenceCatalog(state, 'all');
+  assert.equal(all.filter(ref => ref.kind === 'var').length, 3);
+  assert.equal(all.filter(ref => ref.kind === 'render').length, 3);
+  assert.equal(current.filter(ref => V.matches(ref, '历史变量')).length, 0);
+  assert.equal(all.filter(ref => V.matches(ref, '历史变量')).length, 2);
+  state.documents[0].selection.address = 'D9';
+  assert.equal(current.find(ref => ref.selectionMode === 'fixed').selection.address, 'A1:B4', 'fixed selection candidates retain their original snapshot');
+  const liveSelection = current.find(ref => ref.selectionMode === 'current');
+  assert.equal(V.selectionReference(liveSelection, state).selection.address, 'D9');
+  for (const mode of ['current', 'all']) {
+    assert.equal(Array.from(V.referenceCatalog(state, mode).filter(ref => ref.kind === 'sel'), ref => ref.selectionMode).join(','), 'current,fixed', 'variable display mode preserves both selection types');
+  }
+  state.documents[0].connected = false;
+  assert.equal(V.referenceCatalog(state, 'current').length, 0);
+  assert.equal(V.referenceCatalog(state, 'all').length, 6);
+  assert.equal(V.referenceCatalog(state, 'all', false).length, 0);
+});
+
+test('draft and restored variable references mark deleted definitions, retain labels and preserve unrelated bindings', () => {
+  const state = { documents: [], variables: [{ variableId: 'var_001', name: '销售合计', renders: [{ renderId: 'render_001' }, { renderId: 'render_002' }] }] };
+  const variable = { kind: 'var', id: 'var_001', label: '销售合计', marker: '引用1' };
+  const render = { kind: 'render', id: 'render_001', label: 'render_001 · 销售合计', marker: '引用2' };
+  const other = { kind: 'render', id: 'render_002', label: 'render_002 · 销售合计' };
+  assert.equal(V.variableReference(variable, state).unavailable, false, 'offline definitions remain valid');
+  const sent = structuredClone(render);
+  state.variables[0].renders.shift();
+  const deleted = V.variableReference(render, state);
+  assert.equal(deleted.unavailable, true); assert.equal(deleted.label, render.label); assert.equal(deleted.marker, render.marker);
+  assert.match(V.referenceChipLabel(deleted), /已删除/);
+  assert.equal(V.variableReference(variable, state).unavailable, false);
+  assert.equal(V.variableReference(other, state).unavailable, false);
+  assert.equal(sent.unavailable, undefined, 'history snapshots are not mutated by draft validation');
+  state.variables.length = 0;
+  assert.equal(V.variableReference(variable, state).unavailable, true);
+  assert.equal(V.variableReference(other, state).unavailable, true);
+  assert.equal(V.variableReference({ kind: 'render', renderId: 'render_002' }, state).unavailable, true, 'legacy restored references are also checked');
+  const doc = { kind: 'doc', id: 'doc_001' }; assert.equal(V.variableReference(doc, state), doc);
+});
+
+test('current variables match online source OR target by ID, preserve every binding and deduplicate', () => {
+  const variable = (id, source, targets = []) => ({ variableId: id, transform: { sourceDocumentId: source }, renders: targets.map(targetDocumentId => ({ targetDocumentId })) });
+  const state = { documents: [{ documentId: 'online', name: '同名', connected: true }, { documentId: 'offline', name: '同名', connected: false }], variables: [
+    variable('source', 'online', ['offline']), variable('target', 'offline', ['online', 'offline']), variable('hidden', 'offline', ['offline']),
+    variable('unbound', 'online'), variable('offlineUnbound', 'offline'), variable('duplicate', 'online', ['online', 'online']), variable('unknown', 'unknown', ['closed']),
+  ] };
+  assert.equal(Array.from(V.variablesInMode(state, 'current'), v => v.variableId).join(','), 'source,target,unbound,duplicate');
+  assert.equal(V.variablesInMode(state, 'current')[1].renders.length, 2);
+  assert.equal(V.variablesInMode(state, 'all').length, 7);
+  assert.equal(V.variablesInMode(state, 'current', false).length, 0);
+  state.documents[0].connected = false;
+  assert.equal(V.variablesInMode(state, 'current').length, 0);
+  state.documents[1].connected = true;
+  assert.equal(Array.from(V.variablesInMode(state, 'current'), v => v.variableId).join(','), 'source,target,hidden,offlineUnbound');
+});
+
+test('mode batch actions skip offline sources and individual offline or valueless Render targets', () => {
+  const state = { documents: [{ documentId: 'online', connected: true }], variables: [
+    { variableId: 'source', hasValue: true, transform: { sourceDocumentId: 'online' }, renders: [{ renderId: 'off', targetDocumentId: 'offline' }] },
+    { variableId: 'target', hasValue: true, transform: { sourceDocumentId: 'offline' }, renders: [{ renderId: 'on', targetDocumentId: 'online' }, { renderId: 'off2', targetDocumentId: 'offline' }] },
+    { variableId: 'empty', hasValue: false, transform: { sourceDocumentId: 'online' }, renders: [{ renderId: 'unset', targetDocumentId: 'online' }] },
+    { variableId: 'hidden', hasValue: true, transform: { sourceDocumentId: 'offline' }, renders: [] },
+  ] };
+  for (const mode of ['all', 'current']) {
+    assert.equal(Array.from(V.variableActions(state, mode, 'transform'), action => action.variableId).join(','), 'source,empty');
+    assert.equal(Array.from(V.variableActions(state, mode, 'render'), action => action.renderId).join(','), 'on');
+    assert.equal(V.variableActions(state, mode, 'render', false).length, 0);
+  }
+});
+
 test('an old bridge missing new assets shows a recovery message rather than staying connecting', async () => {
   const elements = new Map();
   const document = { getElementById(id) { if (!elements.has(id)) elements.set(id, { classList: { add() {} }, hidden: true }); return elements.get(id); } };

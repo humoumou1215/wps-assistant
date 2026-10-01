@@ -11,7 +11,10 @@
   }
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let state = { documents: [], variables: [] }, online = false, config, models = [], kind = 'builtin', level = 'off';
-  let actionBusy = false, controller, filter = '', lastState = '', clearKey = false;
+  let actionBusy = false, controller, filter = '', lastState = '', clearKey = false, checkingRefs = false;
+  let variableMode = 'current', pendingDelete, stateRequest = 0;
+  const variableModeKey = 'wps-mcp.variable-mode';
+  try { if (localStorage.getItem(variableModeKey) === 'all') variableMode = 'all'; } catch {}
   let turns = [], peerBusy = false, lastHistory = '', syncing, settingsDirty = false, configConflict = false, formRevision, settingsBusy = false, followTail = true;
   const actionErrors = new Map(), composerRefs = new Map();
   let refSerial = 0;
@@ -95,35 +98,70 @@
   const stamp = run => run ? clock(run.at) : '尚未执行';
   const stampTitle = run => run ? new Date(run.at).toLocaleString('zh-CN') + ' · 耗时 ' + duration(run.durationMs) : '尚未执行';
   const typeOf = V.typeOf, preview = V.jsonPreview;
+  const modeVariables = () => V.variablesInMode(state, variableMode, online);
+  const modeActions = op => V.variableActions(state, variableMode, op, online);
+  function deleteButton(variableId, renderId) {
+    return '<button type="button" class="act sm delete-button" data-delete data-var="' + esc(variableId) + '"' + (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' title="' + (renderId ? '删除此 Render 绑定，保留文档内容' : '删除变量及全部关联 Render，保留文档内容') + '" ' + (actionBusy || !online ? 'disabled' : '') + '>删除</button>';
+  }
+  function cancelDelete() { pendingDelete = undefined; syncDeleteConfirmation(); }
+  function syncDeleteConfirmation() {
+    let anchor;
+    $('varsList').querySelectorAll('[data-delete]').forEach(button => {
+      const selected = pendingDelete && button.dataset.var === pendingDelete.variableId && (button.dataset.render || undefined) === pendingDelete.renderId;
+      button.textContent = selected ? '确认' : '删除';
+      button.classList.toggle('confirm', !!selected);
+      button.setAttribute('aria-expanded', String(!!selected));
+      if (selected) { anchor = button; button.setAttribute('aria-describedby', 'deleteTip'); }
+      else button.removeAttribute('aria-describedby');
+    });
+    const variable = pendingDelete && state.variables.find(item => item.variableId === pendingDelete.variableId);
+    if (!anchor || !variable || (pendingDelete.renderId && !variable.renders.some(render => render.renderId === pendingDelete.renderId))) {
+      pendingDelete = undefined; $('deleteTip').hidden = true; return;
+    }
+    $('deleteTip').textContent = pendingDelete.renderId ? '只删除此 Render 绑定，文档内容保留。再次点击「确认」删除。' : `将删除此变量及关联的 ${variable.renders.length} 个 Render，文档内容保留。再次点击「确认」删除。`;
+    const rect = anchor.getBoundingClientRect(), tip = $('deleteTip'), viewport = $('varsScroll').getBoundingClientRect();
+    if (rect.bottom <= viewport.top || rect.top >= viewport.bottom) { tip.hidden = true; return; }
+    tip.hidden = false;
+    const left = Math.max(8, Math.min(rect.right - tip.offsetWidth, window.innerWidth - tip.offsetWidth - 8));
+    tip.style.left = left + 'px';
+    tip.style.top = Math.max(8, rect.top - tip.offsetHeight - 8) + 'px';
+    tip.style.setProperty('--anchor-x', Math.max(12, Math.min(rect.left + rect.width / 2 - left, tip.offsetWidth - 12)) + 'px');
+  }
   function syncStripEdge() { const n = $('varsStrip'); $('varsBar').classList.toggle('over', n.scrollWidth - n.clientWidth - n.scrollLeft > 2); }
   function renderVars() {
     const expanded = new Set([...$('varsList').querySelectorAll('details[open]')].map(n => n.dataset.detail));
-    $('varCount').textContent = state.variables.length;
-    const sources = new Map(); state.variables.forEach(v => sources.set(v.transform.sourceDocumentId, (sources.get(v.transform.sourceDocumentId) || 0) + 1));
+    const scope = modeVariables();
+    $('varCount').textContent = scope.length;
+    document.querySelectorAll('[data-var-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.varMode === variableMode)));
+    const sources = new Map(); scope.forEach(v => sources.set(v.transform.sourceDocumentId, (sources.get(v.transform.sourceDocumentId) || 0) + 1));
     if (!sources.has(filter)) filter = '';
-    const renderTotal = state.variables.reduce((n, v) => n + v.renders.length, 0), unbound = state.variables.filter(v => !v.renders.length).length;
+    const renderTotal = scope.reduce((n, v) => n + v.renders.length, 0), unbound = scope.filter(v => !v.renders.length).length;
     const left = $('varsStrip').scrollLeft;
-    $('varsStrip').innerHTML = '<span class="p"><b>' + state.variables.length + '</b> 变量<span class="d">·</span><b>' + renderTotal + '</b> Render 绑定<span class="d">·</span><span class="warn"><b>' + unbound + '</b> 未绑定</span></span><span class="divider"></span><button class="ftag ' + (!filter ? 'on' : '') + '" data-filter="" aria-pressed="' + !filter + '">全部 <b>' + state.variables.length + '</b></button>' +
+    $('varsStrip').innerHTML = '<span class="p"><b>' + scope.length + '</b> 变量<span class="d">·</span><b>' + renderTotal + '</b> Render 绑定<span class="d">·</span><span class="warn"><b>' + unbound + '</b> 未绑定</span></span><span class="divider"></span><button class="ftag ' + (!filter ? 'on' : '') + '" data-filter="" aria-pressed="' + !filter + '">全部 <b>' + scope.length + '</b></button>' +
       [...sources].map(([id, n]) => '<button class="ftag ' + (filter === id ? 'on' : '') + '" data-filter="' + esc(id) + '" aria-pressed="' + (filter === id) + '" title="' + esc(docName(id)) + '"><span class="fn">▦ ' + esc(docName(id)) + '</span> <b>' + n + '</b></button>').join('');
     $('varsStrip').scrollLeft = left;
     const query = $('varSearch').value.trim().toLowerCase();
-    const list = state.variables.filter(v => (!filter || v.transform.sourceDocumentId === filter) && [v.name, v.description, v.transform.sourceRef, docName(v.transform.sourceDocumentId)].join(' ').toLowerCase().includes(query));
-    $('recalcAll').disabled = actionBusy || !online || !state.variables.length;
-    $('rerenderAll').disabled = actionBusy || !online || !renderTotal;
+    const list = scope.filter(v => (!filter || v.transform.sourceDocumentId === filter) && [v.name, v.description, v.transform.sourceRef, docName(v.transform.sourceDocumentId)].join(' ').toLowerCase().includes(query));
+    $('recalcAll').disabled = actionBusy || !modeActions('transform').length;
+    $('rerenderAll').disabled = actionBusy || !modeActions('render').length;
     $('varsList').innerHTML = list.length ? list.map(v => {
       const lastRender = v.renders.map(r => r.lastRun).filter(Boolean).sort((a, b) => b.at.localeCompare(a.at))[0];
-      const renders = v.renders.map(r => '<div class="render"><div class="rhead"><details class="render-detail" data-detail="' + esc(r.renderId) + '"><summary title="展开写入代码"><span class="tgt"><span class="t1">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.description || '未标注写入位置') + '</span><span class="t2" title="' + esc(stampTitle(r.lastRun)) + '">' + esc(r.renderId) + ' · 上次写入 ' + stamp(r.lastRun) + (r.lastRun ? '（' + duration(r.lastRun.durationMs) + '）' : '') + (connected(r.targetDocumentId) ? '' : ' · 已断开') + '</span></span></summary><div class="rbody"><div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">来源变量</span><span class="v">' + esc(v.name) + ' · ' + esc(typeOf(v)) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre></div></details><button data-op="render" data-var="' + esc(v.variableId) + '" data-render="' + esc(r.renderId) + '" title="只重写这一条 Render" ' + (actionBusy || !v.hasValue || !connected(r.targetDocumentId) ? 'disabled' : '') + '>重写</button></div></div>').join('');
+      const renders = v.renders.map(r => '<div class="render"><div class="rhead"><details class="render-detail" data-detail="' + esc(r.renderId) + '"><summary title="展开写入代码"><span class="tgt"><span class="t1">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.description || '未标注写入位置') + '</span><span class="t2" title="' + esc(stampTitle(r.lastRun)) + '">' + esc(r.renderId) + ' · 上次写入 ' + stamp(r.lastRun) + (r.lastRun ? '（' + duration(r.lastRun.durationMs) + '）' : '') + (connected(r.targetDocumentId) ? '' : ' · 已断开') + '</span></span></summary><div class="rbody"><div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">来源变量</span><span class="v">' + esc(v.name) + ' · ' + esc(typeOf(v)) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre></div></details><div class="render-actions"><button data-op="render" data-var="' + esc(v.variableId) + '" data-render="' + esc(r.renderId) + '" title="只重写这一条 Render" ' + (actionBusy || !v.hasValue || !connected(r.targetDocumentId) ? 'disabled' : '') + '>重写</button>' + deleteButton(v.variableId, r.renderId) + '</div></div></div>').join('');
       return '<article class="var" data-variable-id="' + esc(v.variableId) + '"><div class="var-head"><button class="var-toggle" data-toggle="' + esc(v.variableId) + '" aria-expanded="' + expanded.has(v.variableId) + '" title="展开当前值与 Transform">›</button><div class="mid"><div class="line1"><strong class="var-name">' + esc(v.name) + '</strong><span class="type ' + (typeof v.value === 'number' ? 'number' : 'table') + '">' + esc(typeOf(v)) + '</span><span class="sp"></span><span class="stamp" title="上次重算 ' + esc(stampTitle(v.transform.lastRun)) + '">' + stamp(v.transform.lastRun) + '</span><button class="act primary sm" data-op="transform" data-var="' + esc(v.variableId) + '" ' + (actionBusy || !connected(v.transform.sourceDocumentId) ? 'disabled' : '') + '>重算</button>' +
         (v.renders.length ? '<span class="stamp" title="上次重写 ' + esc(stampTitle(lastRender)) + '">' + stamp(lastRender) + '</span><button class="act sm" data-op="render" data-var="' + esc(v.variableId) + '" title="重写该变量下全部 Render" ' + (actionBusy || !v.hasValue || !v.renders.some(r => connected(r.targetDocumentId)) ? 'disabled' : '') + '>重写</button>' : '<span class="stamp none">尚未绑定 Render</span>') +
-        '</div><div class="line2"><span class="path" title="' + esc(docName(v.transform.sourceDocumentId)) + '">▦ ' + esc(docName(v.transform.sourceDocumentId)) + ' › ' + esc(v.transform.sourceRef || '未标注源区域') + '</span><span class="dotsep">·</span><span class="desc">' + esc(v.description || '未添加描述') + (connected(v.transform.sourceDocumentId) ? '' : ' · 已断开') + '</span></div></div></div>' +
+        deleteButton(v.variableId) + '</div><div class="line2"><span class="path" title="' + esc(docName(v.transform.sourceDocumentId)) + '">▦ ' + esc(docName(v.transform.sourceDocumentId)) + ' › ' + esc(v.transform.sourceRef || '未标注源区域') + '</span><span class="dotsep">·</span><span class="desc">' + esc(v.description || '未添加描述') + (connected(v.transform.sourceDocumentId) ? '' : ' · 已断开') + '</span></div></div></div>' +
         (actionErrors.has(v.variableId) ? '<div class="action-error" role="alert">' + esc(actionErrors.get(v.variableId)) + '</div>' : '') +
         '<div class="var-renders"><div class="rl-head">Render 清单 <b>' + v.renders.length + '</b><span class="rl-tip">' + (v.renders.length ? '常驻展示 · 点 › 看代码' : '') + '</span></div>' + (renders || '<div class="render-empty">还没有绑定 Render · 在会话里描述写入目标。</div>') + '</div><details class="var-data" data-detail="' + esc(v.variableId) + '"><summary>当前值与 Transform</summary><div class="sect"><div class="sh">当前值<span class="r">' + esc(typeOf(v)) + '</span></div>' + V.valueHTML(v.value, v.hasValue) + '</div><div class="sect"><div class="sh">数据来源 · Transform<span class="r">' + esc(v.transform.transformId) + '</span></div><pre class="code">' + V.highlight(v.transform.code) + '</pre></div></details></article>';
-    }).join('') : '<div class="empty-state">' + (state.variables.length ? '没有匹配的变量，请调整搜索或文档筛选。' : '还没有变量<br>在会话中描述需要提取的数据，助手会创建变量与绑定。') + '</div>';
-    $('varsList').querySelectorAll('[data-detail]').forEach(n => { n.open = expanded.has(n.dataset.detail); }); syncStripEdge();
+    }).join('') : '<div class="empty-state">' + (!scope.length && variableMode === 'current' ? '没有与在线文档相关的变量，可切换到展示全部。' : scope.length ? '没有匹配的变量，请调整搜索或文档筛选。' : '还没有变量<br>在会话中描述需要提取的数据，助手会创建变量与绑定。') + '</div>';
+    $('varsList').querySelectorAll('[data-detail]').forEach(n => { n.open = expanded.has(n.dataset.detail); }); syncStripEdge(); syncDeleteConfirmation();
+    if ($('mentionPop').classList.contains('show')) renderMention($('mentionPop').dataset.query);
   }
   async function refresh() {
+    const request = ++stateRequest;
     try {
-      const next = await api('/api/state'); const changed = !online || JSON.stringify(next) !== lastState;
+      const next = await api('/api/state');
+      if (request !== stateRequest) return;
+      const changed = !online || JSON.stringify(next) !== lastState;
       online = true; state = next; lastState = JSON.stringify(next);
       const count = state.documents.filter(d => d.connected).length;
       $('livePill').innerHTML = '<span class="dot"></span>' + (count ? `已连接 · ${count} 个文档` : '桥接就绪 · 无文档'); $('livePill').classList.toggle('off', !count);
@@ -132,6 +170,7 @@
       $('footClock').textContent = new Date().toLocaleTimeString();
       if (changed) { renderVars(); syncComposerRefs(); if (!controller) renderTurns(); }
     } catch {
+      if (request !== stateRequest) return;
       online = false; $('livePill').innerHTML = '<span class="dot"></span>桥接已断开'; $('livePill').classList.add('off'); $('footMsg').textContent = '无法连接本机服务，正在重试'; renderVars(); syncComposerRefs();
     }
   }
@@ -140,9 +179,23 @@
   $('varsStrip').addEventListener('wheel', e => { const n = $('varsStrip'); if (n.scrollWidth <= n.clientWidth || (e.deltaY < 0 && n.scrollLeft <= 0) || (e.deltaY > 0 && n.scrollLeft + n.clientWidth >= n.scrollWidth - 1)) return; e.preventDefault(); n.scrollLeft += e.deltaY; }, { passive: false });
   window.addEventListener('resize', syncStripEdge);
   $('varSearch').oninput = renderVars;
+  document.querySelectorAll('[data-var-mode]').forEach(button => { button.onclick = () => {
+    variableMode = button.dataset.varMode;
+    try { localStorage.setItem(variableModeKey, variableMode); } catch {}
+    renderVars(); $('varsScroll').scrollTop = 0;
+  }; });
+  window.addEventListener('storage', event => {
+    if (event.key !== variableModeKey) return;
+    variableMode = event.newValue === 'all' ? 'all' : 'current'; renderVars();
+  });
+  document.addEventListener('click', event => { if (!event.target.closest('[data-delete], #deleteTip')) cancelDelete(); }, true);
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') cancelDelete(); });
+  $('varsScroll').addEventListener('scroll', syncDeleteConfirmation);
+  window.addEventListener('resize', syncDeleteConfirmation);
   $('varsStrip').onclick = event => { const target = event.target.closest('[data-filter]'); if (target) { filter = target.dataset.filter; renderVars(); $('varsScroll').scrollTop = 0; } };
   async function actions(items) {
     if (actionBusy || !items.length) return;
+    cancelDelete();
     actionBusy = true; renderVars(); let succeeded = 0, failed = 0;
     for (const item of items) {
       actionErrors.delete(item.variableId);
@@ -152,9 +205,41 @@
     actionBusy = false; await refresh(); renderVars();
     notice(`${items[0]?.op === 'render' ? '重写' : '重算'}结束：成功 ${succeeded}，失败 ${failed}（${items[0]?.op === 'render' ? '条 Render' : '个变量'}）${failed ? '。请查看变量卡上的错误，成功写入仍然有效。' : ''}`, !!failed);
   }
-  $('varsList').onclick = event => { const toggle = event.target.closest('[data-toggle]'); if (toggle) { const detail = [...$('varsList').querySelectorAll('.var-data')].find(n => n.dataset.detail === toggle.dataset.toggle); detail.open = !detail.open; toggle.setAttribute('aria-expanded', String(detail.open)); return; } const target = event.target.closest('[data-op]'); if (target) actions([{ op: target.dataset.op, variableId: target.dataset.var, ...(target.dataset.render ? { renderId: target.dataset.render } : {}) }]); };
-  $('recalcAll').onclick = () => actions(state.variables.map(v => ({ op: 'transform', variableId: v.variableId })));
-  $('rerenderAll').onclick = () => actions(state.variables.filter(v => v.renders.length).map(v => ({ op: 'render', variableId: v.variableId })));
+  async function deleteDefinition(item) {
+    if (actionBusy || !online) return;
+    actionBusy = true; cancelDelete(); renderVars();
+    try {
+      await api('/api/delete', item);
+      stateRequest++; // Discard reads started before this committed deletion.
+      const variable = state.variables.find(v => v.variableId === item.variableId);
+      if (item.renderId && variable) variable.renders = variable.renders.filter(r => r.renderId !== item.renderId);
+      else state.variables = state.variables.filter(v => v.variableId !== item.variableId);
+      syncComposerRefs();
+      actionErrors.delete(item.variableId);
+      notice(item.renderId ? 'Render 绑定已删除，文档内容保留。' : '变量及关联 Render 已删除，文档内容保留。');
+    } catch (error) { actionErrors.set(item.variableId, '删除失败：' + error.message); notice('删除失败：' + error.message, true); }
+    finally { actionBusy = false; await refresh(); renderVars(); }
+  }
+  $('varsList').onclick = event => {
+    const deletion = event.target.closest('[data-delete]');
+    if (deletion) {
+      if (actionBusy || deletion.disabled) return;
+      const item = { variableId: deletion.dataset.var, ...(deletion.dataset.render ? { renderId: deletion.dataset.render } : {}) };
+      if (pendingDelete?.variableId === item.variableId && pendingDelete.renderId === item.renderId) void deleteDefinition(item);
+      else { pendingDelete = item; syncDeleteConfirmation(); }
+      return;
+    }
+    const toggle = event.target.closest('[data-toggle]');
+    if (toggle) { const detail = [...$('varsList').querySelectorAll('.var-data')].find(n => n.dataset.detail === toggle.dataset.toggle); detail.open = !detail.open; toggle.setAttribute('aria-expanded', String(detail.open)); return; }
+    const target = event.target.closest('[data-op]');
+    if (target && !target.disabled) {
+      const item = { op: target.dataset.op, variableId: target.dataset.var, ...(target.dataset.render ? { renderId: target.dataset.render } : {}) };
+      const variable = state.variables.find(v => v.variableId === item.variableId);
+      void actions(item.op === 'render' && !item.renderId ? V.variableActions({ documents: state.documents, variables: variable ? [variable] : [] }, 'all', 'render', online) : [item]);
+    }
+  };
+  $('recalcAll').onclick = () => actions(modeActions('transform'));
+  $('rerenderAll').onclick = () => actions(modeActions('render'));
 
   function markDirty() {
     settingsDirty = true; $('stDraftNotice').hidden = false;
@@ -244,7 +329,9 @@
 
   const categories = [['', '全部'], ['doc', '文档'], ['sel', '选区'], ['var', '变量'], ['render', 'Render']];
   const refKinds = Object.fromEntries(categories);
-  function catalog() { return V.referenceCatalog(state, online); }
+  function catalog() {
+    return V.referenceCatalog(state, variableMode, online);
+  }
   let mentionItems = [], popCategory = '', popIndex = 0, mentionRange;
   function beforeCaret() {
     const selection = window.getSelection(); if (!selection?.rangeCount || !$('editor').contains(selection.anchorNode)) return null;
@@ -268,6 +355,7 @@
   function chipNode(ref) {
     ref = structuredClone(ref);
     if (ref.kind === 'sel') { delete ref.selectionResolved; ref = V.selectionReference(ref, state, online); }
+    else ref = V.variableReference(ref, state);
     const key = String(++refSerial); composerRefs.set(key, ref);
     const chip = document.createElement('span'); chip.className = 'ref'; chip.contentEditable = 'false'; chip.dataset.refkey = key; chip.tabIndex = 0; chip.setAttribute('role', 'button'); chip.setAttribute('aria-label', '预览引用 ' + ref.label);
     const label = document.createElement('span'); label.dataset.refLabel = ''; label.textContent = V.referenceChipLabel(ref);
@@ -278,6 +366,7 @@
     }
     chip.append(label, remove); chip.title = ref.label;
     if (ref.kind === 'sel') renderSelectionChip(chip, ref);
+    else if (['var', 'render'].includes(ref.kind)) renderVariableChip(chip, ref);
     return chip;
   }
   function renderSelectionChip(chip, ref) {
@@ -292,15 +381,23 @@
     toggle.setAttribute('aria-label', toggle.title);
     chip.classList.toggle('unavailable', !!ref.unavailable);
   }
-  function syncComposerRefs() {
+  function syncComposerRefs(snapshot = state) {
     $('editor').querySelectorAll('[data-refkey]').forEach(chip => {
-      const ref = composerRefs.get(chip.dataset.refkey); if (!ref || ref.kind !== 'sel') return;
-      const next = V.selectionReference(ref, state, online);
+      const ref = composerRefs.get(chip.dataset.refkey); if (!ref) return;
+      const next = ref.kind === 'sel' ? V.selectionReference(ref, snapshot, online) : V.variableReference(ref, snapshot);
       const changed = JSON.stringify(next) !== JSON.stringify(ref);
       Object.assign(ref, next);
-      renderSelectionChip(chip, ref);
+      if (ref.kind === 'sel') renderSelectionChip(chip, ref);
+      else if (['var', 'render'].includes(ref.kind)) renderVariableChip(chip, ref);
       if (changed && pinnedRef === ref) showRefPop(chip, ref, true);
     });
+  }
+  function renderVariableChip(chip, ref) {
+    const label = V.referenceChipLabel(ref);
+    chip.querySelector('[data-ref-label]').textContent = label;
+    chip.title = ref.unavailable ? label + '，请移除后再发送' : label;
+    chip.setAttribute('aria-label', '预览引用 ' + label);
+    chip.classList.toggle('unavailable', !!ref.unavailable);
   }
   let insertingRef = false;
   async function insertRef(ref) {
@@ -462,7 +559,7 @@
   async function history() {
     const value = await api('/api/chat'); if (controller) return;
     const changed = JSON.stringify(value) !== lastHistory; lastHistory = JSON.stringify(value);
-    const previousBusy = peerBusy; peerBusy = value.busy; $('sendBtn').disabled = peerBusy;
+    const previousBusy = peerBusy; peerBusy = value.busy; $('sendBtn').disabled = peerBusy || checkingRefs;
     if (peerBusy && !previousBusy) notice('另一个面板正在运行会话；过程会自动同步，结束后可继续发送。');
     if (!peerBusy && previousBusy) notice('会话已完成，最新历史已同步。');
     if (changed) { turns = V.historyTurns(value.messages, value.turns, peerBusy); renderTurns(); showUsage(value.contextUsage, turns.at(-1)); }
@@ -482,7 +579,22 @@
     }
   };
   async function send() {
-    const input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || $('editor').querySelector('[data-selection-mode]:disabled')) return;
+    let input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || checkingRefs || $('editor').querySelector('[data-selection-mode]:disabled')) return;
+    if (input.refs.some(ref => ['var', 'render'].includes(ref.kind))) {
+      checkingRefs = true; $('sendBtn').disabled = true;
+      try {
+        // A peer may delete a definition between polls. Check before clearing
+        // the draft or opening a chat stream, retaining the user's message.
+        const latest = await api('/api/state'); syncComposerRefs(latest);
+        input = readComposer();
+        if (!input.message) return;
+        const deleted = input.refs.filter(ref => ['var', 'render'].includes(ref.kind) && V.variableReference(ref, latest).unavailable);
+        if (deleted.length) { notice('引用已删除：' + deleted.map(ref => ref.label || ref.id).join('、') + '。请点击引用上的 × 移除后再发送。', true); return; }
+      } catch (error) {
+        notice('无法核对变量引用：' + error.message + '。请连接本机服务后再发送。', true); return;
+      } finally { checkingRefs = false; $('sendBtn').disabled = peerBusy || !!controller; }
+      if (controller || peerBusy) return;
+    }
     const turn = V.newTurn(input.message, input.refs); turns.push(turn); controller = new AbortController(); followTail = true;
     turn.model = config?.model.id; showUsage(undefined, turn);
     $('sendBtn').disabled = true; $('stopBtn').hidden = false; $('editor').replaceChildren(); closeMention(); pinnedRef = undefined; hideRefPop(); notice(''); renderTurns();

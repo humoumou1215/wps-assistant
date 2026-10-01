@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
-export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
+export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps } = {}) {
   if (!port) { const probe = createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r)); port = probe.address().port; await new Promise(r => probe.close(r)); }
   const dir = dataDir || await mkdtemp(join(tmpdir(), 'wps-ui-test-'));
   const requests = [], appState = { value: 120, written: null, failRender: false, type: 'spreadsheet', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' }, inspected: 0, reads: [] };
@@ -22,7 +22,7 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
     const results = messages.slice(userIndex + 1).filter(m => m.role === 'tool');
     const parsed = results.map(m => { try { return JSON.parse(m.content); } catch { return {}; } });
     const variableId = parsed.find(v => v.variableId)?.variableId || 'var_001';
-    const steps = [
+    const steps = toolSteps ?? [
       ['workspace_list_documents', {}], ['document_get', { documentId: 'doc_001' }],
       ['wps_exec', { documentId: 'doc_001', code: 'return Application.ActiveWorkbook.Name;' }],
       ['transform_create', { variableName: '销售合计', sourceDocumentId: 'doc_001', sourceRef: '销售数据!A1:B3', description: 'UI 验证变量', code: 'return Application.ActiveSheet.Range("B3").Value2;' }],
@@ -30,7 +30,7 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
       ['render_create', { variableId, targetDocumentId: 'doc_001', description: '销售数据!D3', code: 'Application.ActiveSheet.Range("D3").Value2 = variable.value; return Application.ActiveSheet.Range("D3").Value2;' }],
       ['variable_render', { variableId }], ['variable_get', { variableId }],
     ];
-    let step = user.includes('验证绑定') ? steps[results.length] : null;
+    let step = toolSteps || user.includes('验证绑定') ? steps[results.length] : null;
     if (user.includes('技能读取')) step = [['read', { path: 'wps-api/SKILL.md' }], ['read', { path: 'wps-api/references/spreadsheet.md' }]][results.length];
     if (user.includes('守卫验证')) step = ['transform_create', { variableName: 'blocked', sourceDocumentId: 'doc_001', code: 'Application.ActiveSheet.Name = "bad"; return true;' }];
     const content = step ? null : user.includes('技能读取') ? '技能资料已读取。' : user.includes('原型回归') ? '## 绑定已完成\n已将 **销售合计** 写入 `销售数据!D3`。\n\n| 指标 | 数值 |\n| --- | ---: |\n| 销售合计 | 120 |\n\n- 目标：UI验证.xlsx\n- 可在变量页重算、逐条重写。\n\n```js\nreturn variable.value;\n```' : user.includes('验证绑定') ? '绑定已完成：销售合计已写入销售数据!D3。' : 'OK，模型连接正常。';
@@ -60,7 +60,18 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
     if (code === 'Application.ActiveSheet.Range("D3").Value2 = variable.value; return Application.ActiveSheet.Range("D3").Value2;') {
       app.ActiveSheet.Range('D3').Value2 = variable.value; return app.ActiveSheet.Range('D3').Value2;
     }
+    if (code === 'Application.ActiveSheet.Range("D3").Value2 = variable.value; return true;') {
+      app.ActiveSheet.Range('D3').Value2 = variable.value; return true;
+    }
+    if (code === 'return new Promise(resolve => setTimeout(() => { Application.ActiveSheet.Range("D3").Value2 = variable.value; resolve(true); }, 150));') {
+      return new Promise(resolve => setTimeout(() => { app.ActiveSheet.Range('D3').Value2 = variable.value; resolve(true); }, 150));
+    }
+    if (code === 'return Application.reviewGate.then(() => { Application.ActiveSheet.Range("D3").Value2 = variable.value; return true; });') {
+      return app.reviewGate.then(() => { app.ActiveSheet.Range('D3').Value2 = variable.value; return true; });
+    }
     if (code === 'throw new Error("目标不可写");') throw new Error('目标不可写');
+    const constant = code.match(/^return (.*);$/s)?.[1];
+    if (constant !== undefined) { try { return JSON.parse(constant); } catch {} }
     const list = code.match(/^return \[(.*)\];$/s)?.[1];
     if (list !== undefined) {
       const jsonString = '"(?:[^"\\\\]|\\\\.)*"';
@@ -83,7 +94,7 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
           if (message.method === 'inspect') appState.inspected++;
           const result = message.method === 'inspect'
             ? { documentKey: 'ui-fixture', name: workbook.Name, type: appState.type, selectionVersion: 2, activeSheet: appState.activeSheet, ...(appState.selection ? { selection: appState.selection } : {}) }
-            : executeFixture(message.code, message.variable);
+            : await executeFixture(message.code, message.variable);
           socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: true, result } }));
         }
         catch (error) { socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: false, error: error.message } })); }
@@ -91,6 +102,6 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
     });
   });
   const cfg = { kind: 'custom', label: '本地验证模型', baseUrl: `http://127.0.0.1:${modelPort}/v1`, api: 'openai-completions', apiKey: 'ui-test-secret', model: { id: 'ui-test-model', name: 'UI 验证模型', contextWindow: 32768, maxTokens: 2048, reasoning: false, vision: false }, compat: { thinkingFormat: '', maxTokensField: '' }, headers: { 'X-Test': 'header-secret' }, thinkingLevel: 'off' };
-  return { base, port, modelPort, dir, cfg, child, socket, requests, appState,
+  return { base, port, modelPort, dir, cfg, child, socket, requests, appState, app,
     async close() { socket.close(); child.kill(); await new Promise(r => child.exitCode !== null ? r() : child.once('exit', r)); model.closeAllConnections(); await new Promise(r => model.close(r)); if (!dataDir) await rm(dir, { recursive: true, force: true }); } };
 }

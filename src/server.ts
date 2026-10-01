@@ -9,11 +9,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { WebSocketServer } from "ws";
+import type { ZodRawShape } from "zod";
 import { APP_DIR, PORT, loadState, registerDocument, connections, documents, pending, toolDefinitions, type Connection, type AddinDocument } from "./tools.js";
 import { logger } from "./logger.js";
 function createMcpServer() {
   const mcp = new McpServer({ name: "wps-mcp", version: "0.1.0" });
-  for (const tool of toolDefinitions) mcp.registerTool(tool.name, tool.config, tool.invoke);
+  for (const tool of toolDefinitions) mcp.registerTool<ZodRawShape, ZodRawShape>(tool.name, tool.config, (args, extra) => tool.invoke(args, extra.signal));
   return mcp;
 }
 

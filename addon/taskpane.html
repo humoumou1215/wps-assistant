@@ -46,11 +46,15 @@
       <div class="panel" id="panel-vars" hidden>
         <div class="vars-top">
           <input id="varSearch" placeholder="搜索变量名 / 描述 / 数据来源…">
-          <button class="mini" id="recalcAll" title="按当前数据源重新执行全部 Transform">全部重算</button>
-          <button class="mini" id="rerenderAll" title="执行全部变量下的所有 Render，写回目标文档">全部重写</button>
+          <button class="mini" id="recalcAll" title="重算当前展示模式内源文档在线的变量，搜索和标签不缩小范围">全部重算</button>
+          <button class="mini" id="rerenderAll" title="重写当前展示模式内有值且目标在线的 Render，搜索和标签不缩小范围">全部重写</button>
         </div>
         <!-- 统计 + 文件筛选：一条横向滚动带，常驻 -->
         <div class="vars-bar" id="varsBar">
+          <div class="vars-mode" role="group" aria-label="变量展示模式">
+            <button type="button" data-var-mode="all" aria-pressed="false">展示全部</button>
+            <button type="button" data-var-mode="current" aria-pressed="true">展示当前</button>
+          </div>
           <div class="vars-strip" id="varsStrip"></div>
           <span class="edge"></span>
         </div>
@@ -230,6 +234,7 @@
       
       
       <div id="refPop" class="refpop" role="dialog" aria-label="引用对象预览" hidden></div>
+      <div id="deleteTip" class="delete-tip" role="status" hidden></div>
       <div class="agent-overlay" id="agentOverlay" hidden>
         <section class="agent-dialog" id="agentDialog" role="dialog" aria-modal="true" aria-labelledby="agentTitle" tabindex="-1">
           <header class="agent-head"><strong id="agentTitle">会话资源</strong><button class="mini" id="agentClose" aria-label="关闭会话资源">关闭</button></header>

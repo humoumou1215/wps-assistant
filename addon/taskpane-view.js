@@ -229,12 +229,18 @@
   // Compact display only: the full label and captured selection remain in message metadata.
   function referenceChipLabel(ref) {
     const fallback = ref.label || ref.name || ref.id || ref.variableId || ref.renderId || '';
-    if (ref.kind !== 'sel') return fallback;
+    if (ref.kind !== 'sel') return fallback + (['var', 'render'].includes(ref.kind) && ref.unavailable ? '（已删除）' : '');
     if (!ref.selection) return fallback.replace(/^(?:当前选区|固定选区)\s*[·›]?\s*/, '').replace(/\s*›\s*/g, '›');
     return (ref.name || ref.id) + '›' + selectionPosition(ref, true) + (ref.unavailable ? '（不可用）' : '');
   }
   function selectionPinHTML(ref) {
     return '<span class="selection-pin' + (ref.selectionMode === 'current' ? '' : ' is-fixed') + '" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" focusable="false"><path class="pin-head" d="M8 3h8v6l3 3v2H5v-2l3-3Z"/><path class="pin-stem" d="M12 14v7"/></svg></span>';
+  }
+  function variableReference(ref, state) {
+    if (!['var', 'render'].includes(ref.kind)) return ref;
+    const id = ref.id || (ref.kind === 'var' ? ref.variableId : ref.renderId);
+    const exists = state.variables.some(variable => ref.kind === 'var' ? variable.variableId === id : variable.renders.some(render => render.renderId === id));
+    return { ...ref, unavailable: !exists };
   }
   function referenceContentHTML(ref) {
     return (ref.kind === 'sel' ? selectionPinHTML(ref) : '') + '<span data-ref-label>' + esc(referenceChipLabel(ref)) + '</span>';
@@ -279,7 +285,19 @@
       (typeof s.text === 'string' ? row(s.type === 'caret' ? '插入点' : s.textTruncated ? '选中文字预览' : '选中文字', s.text || '（空）') : '') +
       (s.textTruncated && typeof s.text === 'string' ? row('预览范围', '仅显示前 ' + s.text.length + ' 字符；完整位置已保留') : '');
   }
-  function referenceCatalog(state, online = true) {
+  function variablesInMode(state, mode, online = true) {
+    const connected = new Set(online ? state.documents.filter(doc => doc.connected).map(doc => doc.documentId) : []);
+    return mode === 'all' ? state.variables : state.variables.filter(variable => connected.has(variable.transform.sourceDocumentId) || variable.renders.some(render => connected.has(render.targetDocumentId)));
+  }
+  function variableActions(state, mode, op, online = true) {
+    const connected = new Set(online ? state.documents.filter(doc => doc.connected).map(doc => doc.documentId) : []);
+    return variablesInMode(state, mode, online).flatMap(variable => {
+      if (op === 'transform') return connected.has(variable.transform.sourceDocumentId) ? [{ op, variableId: variable.variableId }] : [];
+      if (!variable.hasValue) return [];
+      return variable.renders.filter(render => connected.has(render.targetDocumentId)).map(render => ({ op, variableId: variable.variableId, renderId: render.renderId }));
+    });
+  }
+  function referenceCatalog(state, mode = 'current', online = true) {
     if (!online) return [];
     const docName = id => state.documents.find(doc => doc.documentId === id)?.name || id + '（未注册）';
     return [
@@ -290,11 +308,11 @@
           return { ...ref, label: selectionLabel(ref), sub: selectionMode === 'current' ? '跟随文档中的选择 · 发送时读取最新位置' : '保留引用时的位置 · 后续移动选区不影响' };
         }) : []),
       ]),
-      ...state.variables.flatMap(variable => [
+      ...variablesInMode(state, mode, online).flatMap(variable => [
         { kind: 'var', id: variable.variableId, label: variable.name, sub: typeOf(variable) + ' · ' + (variable.transform.sourceRef || '') },
         ...variable.renders.map(render => ({ kind: 'render', id: render.renderId, label: render.renderId + ' · ' + variable.name, sub: docName(render.targetDocumentId) + ' › ' + (render.description || '未标注写入位置') })),
       ]),
     ];
   }
-  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, referenceCatalog, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML, selectionRequest };
+  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, variablesInMode, variableActions, referenceCatalog, variableReference, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML, selectionRequest };
 })();

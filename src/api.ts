@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { APP_DIR, callTool, getState, PORT } from "./tools.js";
+import { APP_DIR, callTool, getState, PORT, deleteVariableDefinition, asToolError } from "./tools.js";
 import { publicConfig, parseConfig, saveConfig, redact } from "./config.js";
 import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema, chatHistory, agentResources } from "./agent.js";
 import { logger } from "./logger.js";
@@ -68,6 +68,15 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       const value = JSON.parse(result.content[0].text);
       if (result.isError) { json(res, 422, value); return; }
       json(res, 200, { ref, hasValue: true, value: addresses.length === 1 ? value.result[0] : addresses.map((area: { address: string }, i: number) => ({ address: area.address, value: value.result[i] })), address: addresses.map((area: { address: string }) => area.address).join(","), truncated: regions.length > 6 || addresses.some((area: { truncated: boolean }) => area.truncated) }); return;
+    }
+    if (path === "/api/delete" && req.method === "POST") {
+      const { variableId, renderId } = z.object({ variableId: z.string().min(1), renderId: z.string().min(1).optional() }).parse(await readJson(req));
+      try { json(res, 200, await deleteVariableDefinition(variableId, renderId)); }
+      catch (error) {
+        const detail = asToolError(error);
+        json(res, ["VARIABLE_NOT_FOUND", "RENDER_NOT_FOUND"].includes(detail.code) ? 404 : 500, { success: false, error: detail });
+      }
+      return;
     }
     if (path === "/api/actions" && req.method === "POST") {
       const { op, variableId, renderId } = z.object({ op: z.enum(["transform", "render"]), variableId: z.string().min(1), renderId: z.string().optional() }).parse(await readJson(req));

@@ -59,6 +59,11 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
       if (message.type === 'welcome') socket.send(JSON.stringify({ type: 'register', documents: [{ documentKey: 'ui-fixture', name: workbook.Name, type: 'spreadsheet', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' } }] }));
       if (message.type === 'registered') resolve();
       if (message.type === 'request') {
+        if (message.method === 'navigate') {
+          appState.navigation = { documentKey: message.documentKey, ...message.location };
+          socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: true, result: message.location } }));
+          return;
+        }
         try { const result = await new Function('Application', 'wps', 'variable', message.code)(app, app, message.variable); socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: true, result } })); }
         catch (error) { socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: false, error: error.message } })); }
       }

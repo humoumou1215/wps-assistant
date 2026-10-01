@@ -234,7 +234,7 @@
       ]),
       ...variablesInMode(state, mode, online).flatMap(variable => [
         { kind: 'var', id: variable.variableId, label: variable.name, sub: typeOf(variable) + ' · ' + (variable.transform.sourceRef || '') },
-        ...variable.renders.map(render => ({ kind: 'render', id: render.renderId, label: render.renderId + ' · ' + variable.name, sub: docName(render.targetDocumentId) + ' › ' + (render.description || '未标注写入位置') })),
+        ...variable.renders.map(render => ({ kind: 'render', id: render.renderId, label: render.renderId + ' · ' + variable.name, sub: docName(render.targetDocumentId) + ' › ' + ([render.targetRef, render.description].filter(Boolean).join(' · ') || '未标注写入位置') })),
       ]),
     ];
   }

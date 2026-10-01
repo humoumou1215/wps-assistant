@@ -126,6 +126,34 @@
     const expectedName = onlyDocumentPath.split(/[\\/]/).pop();
     return documents.filter((doc) => (doc.path && normalizePath(doc.path) === expectedPath) || doc.name === expectedName);
   }
+  function navigateToRange(app, documentKey, location) {
+    if (appType(app) !== "spreadsheet") throw new Error("目前仅支持表格区域定位");
+    const sheetName = location?.sheet, address = location?.address;
+    if (typeof sheetName !== "string" || !sheetName || sheetName.length > 31 || /[\[\]:*?/\\\x00-\x1f]/.test(sheetName)) throw new Error("工作表名称无效");
+    const match = typeof address === "string" && /^([A-Z]{1,3})([1-9]\d{0,6})(?::([A-Z]{1,3})([1-9]\d{0,6}))?$/.exec(address);
+    if (!match) throw new Error("定位区域无效");
+    const column = name => [...name].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
+    const c1 = column(match[1]), c2 = column(match[3] || match[1]), r1 = Number(match[2]), r2 = Number(match[4] || match[2]);
+    if (c2 > 16384 || r2 > 1048576 || c1 > c2 || r1 > r2) throw new Error("定位区域超出有效范围");
+    const workbook = enumerate(getProp(app, "Workbooks")).find(book => {
+      const key = toStringValue(getProp(book, "FullName")) || `spreadsheet:${toStringValue(getProp(book, "Name"))}`;
+      return key === documentKey;
+    });
+    if (!workbook) throw new Error("目标工作簿已关闭");
+    const sheet = workbook.Worksheets.Item(sheetName);
+    if (!sheet) throw new Error("目标工作表不存在");
+    const range = sheet.Range(address);
+    workbook.Activate();
+    sheet.Activate();
+    range.Select();
+    // Goto scrolls off-screen destinations into view. Older hosts expose only Select.
+    if (typeof app.Goto === "function") app.Goto(range, true);
+    else {
+      const win = getProp(app, "ActiveWindow");
+      if (win) { win.ScrollRow = r1; win.ScrollColumn = c1; }
+    }
+    return { sheet: sheetName, address };
+  }
   function setState(connected, message, docs = []) {
     if ($dot) $dot.classList.toggle("ok", connected);
     if ($status) $status.textContent = message;
@@ -150,12 +178,18 @@
         setState(true, `${docs.length} WPS document(s) available`, docs);
         return;
       }
-      if (message.type !== "request" || message.method !== "execute") return;
+      if (message.type !== "request" || !["execute", "navigate"].includes(message.method)) return;
       let payload;
       try {
         const docs = currentDocuments();
         if (!docs.some((doc) => doc.documentKey === message.documentKey)) throw new Error("The selected WPS document is no longer available in this Add-in context");
         const app = getApplication();
+        if (message.method === "navigate") {
+          const result = navigateToRange(app, message.documentKey, message.location);
+          send({ type: "response", id: message.id, payload: { success: true, result } });
+          send({ type: "documents", documents: currentDocuments() });
+          return;
+        }
         const wps = (typeof window !== "undefined" && window.wps) || app;
         const variable = message.variable;
         const run = new Function("Application", "wps", "variable", `"use strict"; return (async () => {\n${message.code}\n})()`);

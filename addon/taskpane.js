@@ -99,6 +99,19 @@
   const typeOf = V.typeOf, preview = V.jsonPreview;
   const modeVariables = () => V.variablesInMode(state, variableMode, online);
   const modeActions = op => V.variableActions(state, variableMode, op, online);
+  function locationButton(label, variableId, documentId, location, renderId) {
+    if (!location) return '<span title="未标注明确区域；目前支持表格区域定位">' + esc(label) + '</span>';
+    return '<button type="button" class="location-link" data-navigate data-var="' + esc(variableId) + '"' +
+      (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' title="' +
+      esc(connected(documentId) ? '在 WPS 中定位并选中 ' + docName(documentId) + ' › ' + location.ref : '目标文档已断开，请先在 WPS 中打开') + '" ' +
+      (actionBusy || !connected(documentId) ? 'disabled' : '') + '>' + esc(label) + '</button>';
+  }
+  function renderDestination(variable, render) {
+    const description = render.description || '未标注写入位置', location = render.targetLocation;
+    const link = label => locationButton(label, variable.variableId, render.targetDocumentId, location, render.renderId);
+    if (location?.start !== undefined) return esc(description.slice(0, location.start)) + link(description.slice(location.start, location.end)) + esc(description.slice(location.end));
+    return esc(description) + (render.targetRef ? ' · ' + link(render.targetRef) : '');
+  }
   function deleteButton(variableId, renderId) {
     return '<button type="button" class="act sm delete-button" data-delete data-var="' + esc(variableId) + '"' + (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' title="' + (renderId ? '删除此 Render 绑定，保留文档内容' : '删除变量及全部关联 Render，保留文档内容') + '" ' + (actionBusy || !online ? 'disabled' : '') + '>删除</button>';
   }
@@ -145,10 +158,10 @@
     $('rerenderAll').disabled = actionBusy || !modeActions('render').length;
     $('varsList').innerHTML = list.length ? list.map(v => {
       const lastRender = v.renders.map(r => r.lastRun).filter(Boolean).sort((a, b) => b.at.localeCompare(a.at))[0];
-      const renders = v.renders.map(r => '<div class="render"><div class="rhead"><details class="render-detail" data-detail="' + esc(r.renderId) + '"><summary title="展开写入代码"><span class="tgt"><span class="t1">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.description || '未标注写入位置') + '</span><span class="t2" title="' + esc(stampTitle(r.lastRun)) + '">' + esc(r.renderId) + ' · 上次写入 ' + stamp(r.lastRun) + (r.lastRun ? '（' + duration(r.lastRun.durationMs) + '）' : '') + (connected(r.targetDocumentId) ? '' : ' · 已断开') + '</span></span></summary><div class="rbody"><div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">来源变量</span><span class="v">' + esc(v.name) + ' · ' + esc(typeOf(v)) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre></div></details><div class="render-actions"><button data-op="render" data-var="' + esc(v.variableId) + '" data-render="' + esc(r.renderId) + '" title="只重写这一条 Render" ' + (actionBusy || !v.hasValue || !connected(r.targetDocumentId) ? 'disabled' : '') + '>重写</button>' + deleteButton(v.variableId, r.renderId) + '</div></div></div>').join('');
+      const renders = v.renders.map(r => '<div class="render"><div class="rhead"><details class="render-detail" data-detail="' + esc(r.renderId) + '"><summary title="展开写入代码"><span class="tgt"><span class="t1">' + esc(docName(r.targetDocumentId)) + ' › ' + renderDestination(v, r) + '</span><span class="t2" title="' + esc(stampTitle(r.lastRun)) + '">' + esc(r.renderId) + ' · 上次写入 ' + stamp(r.lastRun) + (r.lastRun ? '（' + duration(r.lastRun.durationMs) + '）' : '') + (connected(r.targetDocumentId) ? '' : ' · 已断开') + '</span></span></summary><div class="rbody"><div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.targetRef || r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">来源变量</span><span class="v">' + esc(v.name) + ' · ' + esc(typeOf(v)) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre></div></details><div class="render-actions"><button data-op="render" data-var="' + esc(v.variableId) + '" data-render="' + esc(r.renderId) + '" title="只重写这一条 Render" ' + (actionBusy || !v.hasValue || !connected(r.targetDocumentId) ? 'disabled' : '') + '>重写</button>' + deleteButton(v.variableId, r.renderId) + '</div></div></div>').join('');
       return '<article class="var" data-variable-id="' + esc(v.variableId) + '"><div class="var-head"><button class="var-toggle" data-toggle="' + esc(v.variableId) + '" aria-expanded="' + expanded.has(v.variableId) + '" title="展开当前值与 Transform">›</button><div class="mid"><div class="line1"><strong class="var-name">' + esc(v.name) + '</strong><span class="type ' + (typeof v.value === 'number' ? 'number' : 'table') + '">' + esc(typeOf(v)) + '</span><span class="sp"></span><span class="stamp" title="上次重算 ' + esc(stampTitle(v.transform.lastRun)) + '">' + stamp(v.transform.lastRun) + '</span><button class="act primary sm" data-op="transform" data-var="' + esc(v.variableId) + '" ' + (actionBusy || !connected(v.transform.sourceDocumentId) ? 'disabled' : '') + '>重算</button>' +
         (v.renders.length ? '<span class="stamp" title="上次重写 ' + esc(stampTitle(lastRender)) + '">' + stamp(lastRender) + '</span><button class="act sm" data-op="render" data-var="' + esc(v.variableId) + '" title="重写该变量下全部 Render" ' + (actionBusy || !v.hasValue || !v.renders.some(r => connected(r.targetDocumentId)) ? 'disabled' : '') + '>重写</button>' : '<span class="stamp none">尚未绑定 Render</span>') +
-        deleteButton(v.variableId) + '</div><div class="line2"><span class="path" title="' + esc(docName(v.transform.sourceDocumentId)) + '">▦ ' + esc(docName(v.transform.sourceDocumentId)) + ' › ' + esc(v.transform.sourceRef || '未标注源区域') + '</span><span class="dotsep">·</span><span class="desc">' + esc(v.description || '未添加描述') + (connected(v.transform.sourceDocumentId) ? '' : ' · 已断开') + '</span></div></div></div>' +
+        deleteButton(v.variableId) + '</div><div class="line2"><span class="path">' + locationButton('▦ ' + docName(v.transform.sourceDocumentId) + ' › ' + (v.transform.sourceRef || '未标注源区域'), v.variableId, v.transform.sourceDocumentId, v.transform.sourceLocation) + '</span><span class="dotsep">·</span><span class="desc">' + esc(v.description || '未添加描述') + (connected(v.transform.sourceDocumentId) ? '' : ' · 已断开') + '</span></div></div></div>' +
         (actionErrors.has(v.variableId) ? '<div class="action-error" role="alert">' + esc(actionErrors.get(v.variableId)) + '</div>' : '') +
         '<div class="var-renders"><div class="rl-head">Render 清单 <b>' + v.renders.length + '</b><span class="rl-tip">' + (v.renders.length ? '常驻展示 · 点 › 看代码' : '') + '</span></div>' + (renders || '<div class="render-empty">还没有绑定 Render · 在会话里描述写入目标。</div>') + '</div><details class="var-data" data-detail="' + esc(v.variableId) + '"><summary>当前值与 Transform</summary><div class="sect"><div class="sh">当前值<span class="r">' + esc(typeOf(v)) + '</span></div>' + V.valueHTML(v.value, v.hasValue) + '</div><div class="sect"><div class="sh">数据来源 · Transform<span class="r">' + esc(v.transform.transformId) + '</span></div><pre class="code">' + V.highlight(v.transform.code) + '</pre></div></details></article>';
     }).join('') : '<div class="empty-state">' + (!scope.length && variableMode === 'current' ? '没有与在线文档相关的变量，可切换到展示全部。' : scope.length ? '没有匹配的变量，请调整搜索或文档筛选。' : '还没有变量<br>在会话中描述需要提取的数据，助手会创建变量与绑定。') + '</div>';
@@ -218,7 +231,22 @@
     } catch (error) { actionErrors.set(item.variableId, '删除失败：' + error.message); notice('删除失败：' + error.message, true); }
     finally { actionBusy = false; await refresh(); renderVars(); }
   }
+  async function navigateLocation(item) {
+    if (actionBusy) return;
+    actionBusy = true; cancelDelete(); renderVars();
+    try {
+      const result = await api('/api/navigate', item);
+      notice('已定位：' + result.documentName + ' › ' + result.ref);
+    } catch (error) { notice('定位失败：' + error.message, true); }
+    finally { actionBusy = false; await refresh(); renderVars(); }
+  }
   $('varsList').onclick = event => {
+    const navigation = event.target.closest('[data-navigate]');
+    if (navigation) {
+      event.preventDefault(); event.stopPropagation();
+      if (!navigation.disabled && !actionBusy) void navigateLocation({ variableId: navigation.dataset.var, ...(navigation.dataset.render ? { renderId: navigation.dataset.render } : {}) });
+      return;
+    }
     const deletion = event.target.closest('[data-delete]');
     if (deletion) {
       if (actionBusy || deletion.disabled) return;
@@ -412,7 +440,7 @@
     if (!v) return '<div class="render-empty">该引用对象已不可用。</div>';
     if (ref.kind === 'var') return '<div class="rkv"><span class="k">变量</span><span class="v">' + esc(v.name) + ' · ' + esc(typeOf(v)) + '</span></div><div class="rkv"><span class="k">来源</span><span class="v">' + esc(docName(v.transform.sourceDocumentId)) + ' › ' + esc(v.transform.sourceRef || '未标注源区域') + '</span></div>' + V.valueHTML(v.value, v.hasValue);
     const r = v.renders.find(r => r.renderId === (ref.id || ref.renderId));
-    return '<div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">变量</span><span class="v">' + esc(v.name) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre>';
+    return '<div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.targetRef || r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">变量</span><span class="v">' + esc(v.name) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre>';
   }
   function showRefPop(anchor, ref, pin = false) {
     if (!ref || (pinnedRef && !pin)) return; if (pin) pinnedRef = ref;

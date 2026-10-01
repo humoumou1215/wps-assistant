@@ -120,6 +120,8 @@ harness 只验证 MCP/WebSocket/桥接层，**不代表** WPS JS API 的真实�
 - **变量**：默认「展示当前」，只展示源文档或任一 Render 目标文档在线的变量；「展示全部」可查看本机历史变量。统计和全部重算/重写使用当前模式的范围，搜索及源文档标签只筛选列表；批量操作跳过离线源/目标，重写还会跳过没有当前值的变量。卡片始终保留全部 Render，离线绑定标注「已断开」。变量和每条 Render 均可原位点击「删除」再点「确认」；点击外部取消，只删除本机定义和绑定，保留文档已写入内容。多条 Render 分别报告成功与失败；停止生成不回滚已完成的写入。
 - **设置**：DeepSeek 内置目录、自定义模型和协议、思考等级、兼容参数、额外 Headers。配置修订检查防止旧面板覆盖新配置；发生冲突时加载最新配置。更换端点不会自动沿用旧密钥与请求头；读取配置只返回凭据存在标记。
 
+变量页的表格来源区域和 Render 目标区域支持单击定位：切换到对应工作簿、工作表，滚动并选中单元格区域。定位不执行重算或重写。来源使用 `sourceRef`；新建表格 Render 时填写 `targetRef`（例如 `Summary!A1:B4`，带空格的工作表用 `'Sales Data'!A1:B4`）。旧 Render 的描述中只有一个明确区域时也可定位；缺失或含多个区域时不猜测目的地。离线文档的定位按钮禁用，目标工作表被删除等错误会显示在窗格中。目前支持表格区域，文字和演示位置暂不支持。
+
 同一桥接服务共用一份助手会话，同时只运行一个聊天轮次或配置操作。服务启动时自动将项目 `skills/`（包含参考资料）安装到应用数据目录的 `pi/skills/`，通过安装清单更新随项目提供的文件、清理已撤下的内置文件，并保留其他已安装技能及用户新增资料。清单建立前遗留的文件不会被推断为内置文件后删除。内嵌 Agent 加载该目录中的技能，挂载八个 WPS 工具和一个仅限技能目录的 `read` 工具，按需读取技能正文和参考资料；终端、通用文件写入和外部资源自动发现保持关闭，不读取 `~/.pi`。
 
 会话顶部提供「系统」「技能」「工具」入口，可查看当前会话实际使用的完整系统提示词、已安装技能的描述和正文，以及启用工具的说明与参数定义。查看这些资源无需填写 API Key，也不会请求模型。
@@ -176,7 +178,7 @@ tail -n 30 -f "$HOME/Library/Application Support/wps-mcp/logs/wps-mcp.log"
 - `document.get(documentId)`
 - `wps.exec(documentId, code)`
 - `transform.create(variableName, description?, sourceDocumentId, sourceRef?, code)`
-- `render.create(variableId, targetDocumentId, description?, code)`
+- `render.create(variableId, targetDocumentId, targetRef?, description?, code)`
 - `variable.get(variableId)`
 - `variable.transform(variableId)`
 - `variable.render(variableId, renderId?)`

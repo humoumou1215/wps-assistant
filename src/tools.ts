@@ -8,6 +8,7 @@ import { z } from "zod";
 import { analyzeReadOnlyCode, formatReadOnlyViolations, MAX_CODE_LENGTH } from "./readonly-guard.js";
 import { DATA_DIR } from "./paths.js";
 import { logger } from "./logger.js";
+import { parseSpreadsheetRef, renderLocation } from "./location.js";
 
 const sourceRoot = new URL("../", import.meta.url);
 const APP_DIR = resolve(fileURLToPath(existsSync(new URL("package.json", sourceRoot)) ? sourceRoot : new URL("../../", import.meta.url)));
@@ -39,6 +40,7 @@ type Transform = {
 type Render = {
   renderId: string;
   targetDocumentId: string;
+  targetRef?: string;
   description?: string;
   code: string;
   lastRun?: { at: string; durationMs: number };
@@ -237,6 +239,20 @@ async function executeWps(doc: DocumentRecord, code: string, variable?: unknown,
   if (!envelope?.success) throw new ToolError(mode === "render" ? "RENDER_EXECUTION_ERROR" : "WPS_EXEC_ERROR", envelope?.error ?? "WPS Add-in execution failed");
   return serializeResult(envelope.result);
 }
+
+// UI-only navigation: send a fixed command, never execute a Transform or Render.
+export async function navigateVariableLocation(variableId: string, renderId?: string) {
+  const variable = variableById(variableId);
+  const render = renderId ? variable.renders.find(r => r.renderId === renderId) : undefined;
+  if (renderId && !render) throw new ToolError("RENDER_NOT_FOUND", "此 Render 绑定已不存在");
+  const doc = documentById(render ? render.targetDocumentId : variable.transform.sourceDocumentId);
+  if (doc.type !== "spreadsheet") throw new ToolError("LOCATION_UNSUPPORTED", "目前仅支持表格工作表与单元格区域定位");
+  const location = render ? renderLocation(render) : parseSpreadsheetRef(variable.transform.sourceRef);
+  if (!location) throw new ToolError("LOCATION_MISSING", "未标注明确的工作表与区域，无法定位；请补充来源区域或 Render 目标区域");
+  const response = await sendRpc(doc, "navigate", { location: { sheet: location.sheet, address: location.address } }) as { success?: boolean; error?: string };
+  if (!response?.success) throw new ToolError("NAVIGATION_FAILED", response?.error || "WPS 定位失败");
+  return { success: true, documentId: doc.documentId, documentName: doc.name, ref: location.ref };
+}
 function findVariable(id: string) { return state.variables.find((v) => v.variableId === id); }
 function documentResponse(doc: DocumentRecord) {
   return {
@@ -336,20 +352,22 @@ defineTool("transform.create", {
 
 defineTool("render.create", {
   title: "Create Render rule",
-  description: "Attach a document-writing WPS JavaScript rule to an existing Variable; the rule is saved but not executed.",
+  description: "Attach a document-writing WPS JavaScript rule to an existing Variable; the rule is saved but not executed. For spreadsheets, provide targetRef as SheetName!A1:B13 so the UI can navigate to the destination.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),
     targetDocumentId: z.string().min(1),
+    targetRef: z.string().min(1).max(1000).optional(),
     description: z.string().optional(),
     code: z.string().min(1).max(MAX_CODE_LENGTH),
   },
-}, async ({ variableId, targetDocumentId, description, code }) => {
+}, async ({ variableId, targetDocumentId, targetRef, description, code }) => {
   try {
     const variable = variableById(variableId);
-    documentById(targetDocumentId);
+    const doc = documentById(targetDocumentId);
+    if (targetRef && doc.type === "spreadsheet" && !parseSpreadsheetRef(targetRef)) throw new ToolError("INVALID_REQUEST", "targetRef 必须是明确的工作表与 A1 区域，例如 Summary!A1:B4");
     const renderId = nextId("render");
-    variable.renders.push({ renderId, targetDocumentId, ...(description ? { description } : {}), code });
+    variable.renders.push({ renderId, targetDocumentId, ...(targetRef ? { targetRef } : {}), ...(description ? { description } : {}), code });
     await persist();
     return toolResult({ success: true, renderId });
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
@@ -368,7 +386,7 @@ defineTool("variable.get", {
       variableId: v.variableId, name: v.name, ...(v.description ? { description: v.description } : {}),
       ...(v.hasValue ? { value: v.value } : {}),
       transform: { transformId: transform.transformId, sourceDocumentId: transform.sourceDocumentId, ...(transform.sourceRef ? { sourceRef: transform.sourceRef } : {}), ...(transform.description ? { description: transform.description } : {}) },
-      renders: v.renders.map(({ renderId, targetDocumentId, description }) => ({ renderId, targetDocumentId, ...(description ? { description } : {}) })),
+      renders: v.renders.map(({ renderId, targetDocumentId, targetRef, description }) => ({ renderId, targetDocumentId, ...(targetRef ? { targetRef } : {}), ...(description ? { description } : {}) })),
     });
   } catch (error) { return toolError(error); }
 });
@@ -425,7 +443,11 @@ export async function callTool(name: string, args: unknown) {
   return tool.invoke(args);
 }
 export function getState() {
-  return { documents: [...documents.values()].map(documentResponse), variables: state.variables };
+  return { documents: [...documents.values()].map(documentResponse), variables: state.variables.map(v => ({
+    ...v,
+    transform: { ...v.transform, sourceLocation: documents.get(v.transform.sourceDocumentId)?.type === "spreadsheet" ? parseSpreadsheetRef(v.transform.sourceRef) : undefined },
+    renders: v.renders.map(r => ({ ...r, targetLocation: documents.get(r.targetDocumentId)?.type === "spreadsheet" ? renderLocation(r) : undefined })),
+  })) };
 }
 export { APP_DIR, PORT, DATA_DIR, loadState, nextId, registerDocument, connections, documents, pending, asToolError };
 export type { Connection, AddinDocument };

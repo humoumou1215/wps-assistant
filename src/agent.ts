@@ -124,7 +124,7 @@ async function createSession(version: number) {
     execute: (_id, args, signal) => logger.withContext({ modelToolCallId: _id }, async () => {
       if (signal?.aborted) throw new Error("已停止");
       if (guard.exhausted) throw new Error("只读守卫修复次数已用尽，请修改需求后重试");
-      const result = await callTool(tool.name, args);
+      const result = await callTool(tool.name, args, signal);
       const value = JSON.parse(result.content[0].text);
       if (result.isError || value.success === false) {
         if (value.error?.code === "READ_ONLY_VIOLATION") chargeGuardFailure();

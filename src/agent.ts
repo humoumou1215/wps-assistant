@@ -2,12 +2,13 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { ModelRuntime, createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader, type AgentSession, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { callTool, toolDefinitions, getState } from "./tools.js";
+import { callTool, toolDefinitions, getState, refreshDocument } from "./tools.js";
 import { getConfig, type ModelConfig } from "./config.js";
 import { createGuardBudget } from "./guard-budget.js";
 import { randomUUID } from "node:crypto";
 import { logger } from "./logger.js";
 import { AGENT_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, createSkillReadTool, readSkillContent } from "./agent-skills.js";
+import { resolveSelectionReference } from "./references.js";
 
 const agentDir = AGENT_DIR;
 const sessionDir = join(agentDir, "sessions");
@@ -15,6 +16,8 @@ const systemPrompt = `你是 WPS 文档助手，使用中文回答。通过提�
 技能列表中的技能已安装；当任务匹配技能描述时，先用 read 读取 SKILL.md，再按需读取技能目录内的参考资料。read 仅用于技能资料，不能读取其他本机文件。技能中的 MCP 工具名在本会话中将点号替换为下划线，例如 workspace.list_documents 对应 workspace_list_documents。
 技能若要求调用本机检查脚本，本会话没有终端工具；以 WPS 工具自动执行的只读守卫校验为准，不要声称已运行离线脚本。
 先 workspace_list_documents 和 document_get 核实文档与位置；从选区读取必须使用引用快照中的明确工作表与地址，不要假定之后的 ActiveSheet/Selection 仍然相同。
+选区引用的 selectionMode 为 current 时已在本轮发送时解析成明确位置，为 fixed 时使用引用时的位置。两种都必须按本轮快照读写；PPT 文字选区使用 slideId、shapeIds、start 和 length，不能把局部文字当作整个文本框；Writer 使用 start/end 和 storyType，caret 表示插入点。areas 表示不连续的多个区域，不能扩成包含未选中单元格的矩形。
+选区的 text 仅是最多 2000 字符的预览，textTruncated 表示预览已截断，textLength 是原文字长度。完整内容必须按保存的坐标通过 WPS 工具分段读取；不能把预览长度当作选区长度，也不能根据预览判断范围外的内容。
 请用明确文档名称匹配 Workbooks/Presentations/Documents，不能将另一个活动文档当成指定文档。
 Transform 和 wps_exec 是只读：禁止成员赋值 —— 含 out.a=1 与 out[k]=v 动态键，计数/分组不要用 acc[k]=acc[k]+1 累加，改用 arr.push([key, 1]) 收集明细后 return，或用 reduce 搭配 concat/filter 折叠；禁止 i++/--、一切 new（含 new Map()）、await、文件 I/O 和任何文档修改；replace 被守卫按名禁用（与 WPS 的 Replace 同名），字符串清洗用 split(...).join("") 或 trim()。代码必须 return JSON 可序列化结果。
 创建变量用 transform_create，sourceRef 格式为 工作表名!A1:B13。重算用 variable_transform；修改文档只能先 render_create，再 variable_render。Render 中 variable.value 是变量值。
@@ -77,20 +80,25 @@ export async function testConfig(cfg: ModelConfig) {
 
 export const chatSchema = z.object({
   message: z.string().trim().min(1).max(20000),
-  refs: z.array(z.object({ kind: z.enum(["sel", "doc", "var", "render"]), id: z.string().min(1), label: z.string().max(1000).optional(), marker: z.string().max(40).optional(), selection: z.unknown().optional(), activeSheet: z.string().optional(), activeSlide: z.number().optional() })).max(30).default([]),
+  refs: z.array(z.object({ kind: z.enum(["sel", "doc", "var", "render"]), id: z.string().min(1), label: z.string().max(1000).optional(), marker: z.string().max(40).optional(), selectionMode: z.enum(["current", "fixed"]).optional(), selection: z.unknown().optional(), activeSheet: z.string().optional(), activeSlide: z.number().optional() })).max(30).default([]),
 });
-export function resolveRefs(refs: z.infer<typeof chatSchema>["refs"]) {
+export async function resolveRefs(refs: z.infer<typeof chatSchema>["refs"]) {
   const state = getState();
-  return refs.map(ref => {
-    if (ref.kind === "doc" || ref.kind === "sel") {
+  const snapshots = new Map<string, ReturnType<typeof refreshDocument>>();
+  return Promise.all(refs.map(async ref => {
+    if (ref.kind === "sel") {
+      if (ref.selectionMode === "current" && !snapshots.has(ref.id)) snapshots.set(ref.id, refreshDocument(ref.id));
+      return resolveSelectionReference(ref, await snapshots.get(ref.id));
+    }
+    if (ref.kind === "doc") {
       const doc = state.documents.find(d => d.documentId === ref.id && d.connected);
       if (!doc) throw new Error(`引用文档已断开：${ref.id}`);
-      return { kind: ref.kind, label: ref.label, marker: ref.marker, ...doc, ...(ref.kind === "sel" ? { selection: ref.selection ?? doc.selection, activeSheet: ref.activeSheet ?? doc.activeSheet, activeSlide: ref.activeSlide ?? doc.activeSlide } : {}) };
+      return { kind: ref.kind, label: ref.label, marker: ref.marker, ...doc };
     }
     const variable = state.variables.find(v => ref.kind === "var" ? v.variableId === ref.id : v.renders.some(r => r.renderId === ref.id));
     if (!variable) throw new Error(`引用对象不存在：${ref.id}`);
     return ref.kind === "var" ? { kind: ref.kind, label: ref.label, marker: ref.marker, variableId: variable.variableId, name: variable.name, sourceRef: variable.transform.sourceRef, hasValue: variable.hasValue, value: variable.value } : { kind: ref.kind, label: ref.label, marker: ref.marker, variableId: variable.variableId, ...variable.renders.find(r => r.renderId === ref.id) };
-  });
+  }));
 }
 export function initializeAgentResources() {
   if (!resourcesPending) resourcesPending = (async () => {
@@ -192,7 +200,9 @@ async function runChatTurn(input: z.infer<typeof chatSchema>, emit: (event: stri
   try {
     const cfg = getConfig();
     if (cfg.kind === "builtin" && !cfg.apiKey) throw new Error("请先在设置中填写 API Key");
-    const refs = resolveRefs(input.refs);
+    const refs = await resolveRefs(input.refs);
+    metadata.refs = refs;
+    if (!signal.aborted) emit("refs.resolved", { refs });
     active = await ensureSession();
     const current = active;
     abort = () => { void current.abort(); };

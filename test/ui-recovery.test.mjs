@@ -20,8 +20,8 @@ test('UI metadata, bounded selection reads, revision conflicts, partial writes a
     const preview = await (await post('/api/ref-preview', { kind: 'sel', id: 'doc_001', selection: { sheet: '销售数据', address: '$A$1:$XFD$1048576' } })).json();
     assert.equal(preview.hasValue, true); assert.equal(preview.address, 'A1:F5'); assert.equal(preview.truncated, true); assert.equal(preview.value, 120);
     assert.equal(h.appState.written, null);
-    const missing = await (await post('/api/ref-preview', { kind: 'sel', id: 'doc_001', selection: { address: 'A1' } })).json();
-    assert.equal(missing.hasValue, false);
+    const missing = await post('/api/ref-preview', { kind: 'sel', id: 'doc_001', selection: { address: 'A1' } });
+    assert.equal(missing.status, 400); assert.match((await missing.json()).error, /明确工作表/);
     assert.equal((await post('/api/ref-preview', { kind: 'sel', id: 'doc_001', selection: { sheet: '销售数据', address: 'A0' } })).status, 400);
     const stream = await (await post('/api/chat', { message: '验证绑定 原型回归 [引用1:当前选区]', refs: [{ kind: 'sel', id: 'doc_001', label: '当前选区', marker: '引用1', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' } }] })).text();
     assert.match(stream, /event: thinking.delta/); assert.match(stream, /event: message.start/); assert.match(stream, /workspace.list_documents/);

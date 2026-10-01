@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { z } from "zod";
+import { boundedSelection } from "./selection.js";
 import { analyzeReadOnlyCode, formatReadOnlyViolations, MAX_CODE_LENGTH } from "./readonly-guard.js";
 import { DATA_DIR } from "./paths.js";
 import { logger } from "./logger.js";
@@ -27,6 +28,7 @@ type DocumentRecord = {
   activeSheet?: string;
   activeSlide?: number;
   selection?: unknown;
+  selectionVersion?: number;
 };
 type Transform = {
   transformId: string;
@@ -61,6 +63,7 @@ type AddinDocument = {
   activeSheet?: string;
   activeSlide?: number;
   selection?: unknown;
+  selectionVersion?: number;
 };
 type Connection = { id: string; socket: WebSocket; documents: Map<string, string>; hostType?: DocType };
 type Pending = { connectionId: string; resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
@@ -166,9 +169,10 @@ function registerDocument(connection: Connection, item: AddinDocument) {
     connectionId: connection.id,
     documentKey: item.documentKey,
     connected: true,
+    ...(item.selectionVersion === 2 ? { selectionVersion: 2 } : {}),
     ...(item.activeSheet ? { activeSheet: item.activeSheet } : {}),
     ...(item.activeSlide !== undefined ? { activeSlide: item.activeSlide } : {}),
-    ...(item.selection !== undefined ? { selection: item.selection } : {}),
+    ...(item.selection !== undefined ? { selection: boundedSelection(item.selection) } : {}),
   });
   if (!previous) logger.info("document.registered", { documentId, documentType: item.type, connectionId: connection.id });
   return documentId;
@@ -223,6 +227,21 @@ function documentResponse(doc: DocumentRecord) {
     ...(doc.activeSlide !== undefined ? { activeSlide: doc.activeSlide } : {}),
     ...(doc.selection !== undefined ? { selection: doc.selection } : {}),
   };
+}
+
+// Ask the routed Add-in for a fresh selection rather than trusting the heartbeat.
+// No document activation: an inactive document must not inherit another selection.
+export async function refreshDocument(documentId: string) {
+  const doc = documentById(documentId);
+  if (doc.selectionVersion !== 2) throw new Error("选区采集插件需要更新，请重新启动 WPS 后再引用选区");
+  const envelope = await sendRpc(doc, "inspect", {}) as { success?: boolean; result?: AddinDocument; error?: string };
+  if (!envelope.success || envelope.result?.documentKey !== doc.documentKey) {
+    throw new Error(envelope.error || "无法读取当前选区，请重新加载 WPS MCP 插件");
+  }
+  const connection = connections.get(doc.connectionId);
+  if (!connection || !doc.connected) throw new Error("引用文档已断开");
+  registerDocument(connection, envelope.result);
+  return documentResponse(documentById(documentId));
 }
 
 export const toolDefinitions: { name: string; config: any; invoke: (args: any) => Promise<any> }[] = [];

@@ -80,7 +80,7 @@ async function startBridge() {
     const requestId = randomUUID();
     // Never log query strings, arbitrary URL paths, headers or request bodies.
     const path = (req.url ?? "/").split("?")[0] ?? "/";
-    const route = /^\/(health|mcp|api\/(state|config(?:\/test)?|chat|ref-preview|actions))$/.test(path)
+    const route = /^\/(health|mcp|api\/(state|config(?:\/test)?|chat|ref-preview|ref-resolve|actions))$/.test(path)
       ? path : /^\/(addon|addins\/(et|wpp|wps))\//.test(path) ? "/addon/*" : "[unknown]";
     const started = Date.now();
     res.setHeader("x-request-id", requestId);

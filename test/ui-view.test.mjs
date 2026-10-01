@@ -148,3 +148,46 @@ test('legacy references recover stable IDs; running peer calls are not marked st
   assert.equal(active.blocks[0].status, 'running'); assert.equal(active.done, false);
   assert.equal(V.historyTurns(messages)[0].blocks[0].status, 'stopped');
 });
+
+test('tool inspector exposes required, optional, enum and nested schema details safely', () => {
+  const html = V.agentToolHTML({ description: '<script>bad</script>', parameters: { type: 'object', required: ['documentId'], properties: {
+    documentId: { type: 'string', description: '目标文档' },
+    mode: { enum: ['read', 'write'], default: 'read' },
+    value: { anyOf: [{ type: 'number' }, { type: 'array', items: { type: 'string' } }], minimum: 0 },
+  } } });
+  assert.match(html, /&lt;script&gt;bad&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
+  assert.match(html, /documentId<\/code><span class="agent-required">必填/);
+  assert.match(html, /mode<\/code><span class="agent-optional">可选/);
+  assert.match(html, /&quot;read&quot; \| &quot;write&quot;/);
+  assert.match(html, /number \| array&lt;string&gt;/);
+  assert.match(html, /完整参数定义/);
+  assert.match(V.agentToolHTML({}), /无需参数/, 'empty tool parameters are explicit');
+});
+
+test('skill inspector renders its body, source, manual invocation and diagnostics', () => {
+  const html = V.agentSkillHTML({ description: '<b>unsafe</b>', filePath: '/skills/test/SKILL.md', disableModelInvocation: true, content: '---\nname: test\n---\n# 技能正文\n正文与 `代码`。\n<script>bad</script>' }, '/skills', [{ message: '<unsafe>' }]);
+  assert.match(html, /仅手动调用/);
+  assert.match(html, /\/skills\/test\/SKILL.md/);
+  assert.match(html, /<h1>技能正文<\/h1>/);
+  assert.match(html, /<code>代码<\/code>/);
+  assert.doesNotMatch(html, /name: test|<script>|<b>unsafe/);
+  assert.match(html, /技能加载提示/);
+  assert.match(html, /&lt;unsafe&gt;/);
+});
+
+test('session information shows separate caches, weighted hit rate and unknown pricing', () => {
+  const stats = { sessionId: '<session>', sessionFile: '/sessions/test.jsonl', projectDirectory: '/workspace', activeDurationMs: 3661000, rounds: 2, modelCalls: 10, userMessages: 2, assistantMessages: 10, toolCalls: 8, toolResults: 8, totalMessages: 20, tokens: { input: 200, output: 200, cacheRead: 800, cacheWrite: 40, total: 1240 }, cacheHitRate: 800 / 1040 * 100, cost: 0, costComplete: false };
+  const html = V.agentInfoHTML(stats, { tokens: 1500, contextWindow: 32768, percent: 4.6 }, '模型');
+  for (const label of ['会话文件', '活跃时长', '用户', '助手', '工具结果', '轮次', '模型调用', '缓存读取', '缓存写入', '平均缓存命中率']) assert.ok(html.includes(label));
+  assert.match(html, /76\.9%/);
+  assert.match(html, /1h 1m 1s/);
+  assert.match(html, /1,240/);
+  assert.match(html, /1,500 \/ 32,768/);
+  assert.match(html, /未配置单价/);
+  assert.doesNotMatch(html, /\$0\.0000/);
+  assert.match(html, /&lt;session&gt;/);
+  assert.match(V.agentInfoHTML({ ...stats, cost: .1023, costComplete: true }), /\$0\.1023/);
+  assert.match(V.agentInfoHTML({ ...stats, cost: .1023 }), /已计价部分/);
+  assert.match(V.agentInfoHTML(), /平均缓存命中率[^]*?—/);
+});

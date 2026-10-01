@@ -35,7 +35,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
   try {
     if (path === "/api/state" && req.method === "GET") { json(res, 200, { ...getState(), pluginVersion }); return; }
     if (path === "/api/config" && req.method === "GET") { json(res, 200, { ...publicConfig(), builtinModels: await builtinModels() }); return; }
-    if (path === "/api/chat" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(chatHistory())))); return; }
+    if (path === "/api/chat" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(await chatHistory())))); return; }
     if (path === "/api/agent" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(await agentResources())))); return; }
     if (path === "/api/ref-preview" && req.method === "POST") {
       const ref = z.object({ kind: z.literal("sel"), id: z.string().min(1), activeSheet: z.string().optional(), selection: z.object({ sheet: z.string().optional(), address: z.string().max(300).optional() }).passthrough() }).parse(await readJson(req));

@@ -30,55 +30,63 @@
     return value;
   }
   function notice(message, error = false) { $('notice').textContent = message; $('notice').hidden = !message; $('notice').classList.toggle('error', error); }
-  let agentView = 'system', agentData, agentRequest = 0, agentReturnFocus;
+  let agentView = 'system', agentData, agentRequest = 0, agentReturnFocus, contextUsage, sessionStats;
+  const agentSelection = { tools: undefined, skills: undefined };
+  function renderAgentInfo() {
+    return V.agentInfoHTML(sessionStats, contextUsage, config?.model.name || config?.model.id);
+  }
   function renderAgentResources() {
-    const titles = { system: '系统提示词', skills: '已安装技能', tools: '当前会话工具' };
-    $('agentTitle').textContent = titles[agentView];
-    document.querySelectorAll('[data-agent-view]').forEach(button => button.setAttribute('aria-expanded', String(button.dataset.agentView === agentView && !$('agentOverlay').hidden)));
-    document.querySelectorAll('[data-agent-section]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.agentSection === agentView)));
-    if (!agentData) { $('agentContent').textContent = '正在读取当前会话资源…'; return; }
+    const open = !$('agentPanel').hidden;
+    $('agentPanel').dataset.view = agentView;
+    $('agentPanel').setAttribute('aria-label', { system: '系统提示词', skills: '已安装技能', tools: '当前会话工具', info: '会话信息' }[agentView]);
+    $('agentClose').hidden = !open;
+    document.querySelectorAll('[data-agent-view]').forEach(button => button.setAttribute('aria-expanded', String(button.dataset.agentView === agentView && open)));
+    if (agentView === 'info') { $('agentContent').innerHTML = renderAgentInfo(); return; }
+    if (!agentData) { $('agentContent').innerHTML = '<div class="agent-empty">正在读取当前会话资源…</div>'; return; }
     if (agentView === 'system') {
-      $('agentContent').innerHTML = '<p class="agent-description">当前会话实际使用的系统提示词，包含可按需读取的技能列表。</p><pre>' + esc(agentData.systemPrompt) + '</pre>';
-    } else if (agentView === 'skills') {
-      const skills = agentData.skills || [];
-      $('agentContent').innerHTML = '<p class="agent-description">已安装 ' + skills.length + ' 个技能。助手会按任务需要读取技能和参考资料。</p><div class="agent-path">' + esc(agentData.skillDirectory) + '</div>' +
-        (skills.length ? skills.map(skill => '<details><summary>' + esc(skill.name) + (skill.disableModelInvocation ? ' · 仅手动调用' : '') + '</summary><p class="agent-description">' + esc(skill.description) + '</p><div class="agent-path">' + esc(skill.filePath) + '</div><div class="body-text">' + V.markdown(skill.content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '')) + '</div></details>').join('') : '<p>暂无已安装技能。</p>') +
-        (agentData.diagnostics?.length ? '<details><summary>技能加载提示</summary><pre>' + esc(JSON.stringify(agentData.diagnostics, null, 2)) + '</pre></details>' : '');
-    } else {
-      const tools = agentData.tools || [];
-      $('agentContent').innerHTML = '<p class="agent-description">当前启用 ' + tools.length + ' 个工具。</p>' + tools.map(tool => '<details><summary>' + esc(tool.name) + '</summary><p class="agent-description">' + esc(tool.description) + '</p><div class="agent-description">参数定义</div><pre>' + esc(JSON.stringify(tool.parameters, null, 2)) + '</pre></details>').join('');
+      $('agentContent').innerHTML = '<pre class="agent-system">' + esc(agentData.systemPrompt) + '</pre>';
+      return;
     }
+    const items = agentData[agentView] || [];
+    if (!items.length) {
+      $('agentContent').innerHTML = '<div class="agent-empty">' + (agentView === 'skills' ? '暂无已安装技能。' : '暂无启用工具。') + (agentView === 'skills' && agentData.diagnostics?.length ? '<pre>' + esc(JSON.stringify(agentData.diagnostics, null, 2)) + '</pre>' : '') + '</div>'; return;
+    }
+    const selected = items.find(item => item.name === agentSelection[agentView]) || items[0];
+    agentSelection[agentView] = selected.name;
+    $('agentContent').innerHTML = '<div class="agent-browser"><nav class="agent-list" aria-label="' + (agentView === 'tools' ? '工具列表' : '技能列表') + '">' + items.map(item => '<button type="button" data-agent-item="' + esc(item.name) + '" aria-pressed="' + (item.name === selected.name) + '" aria-controls="agentDetail">' + esc(item.name) + '</button>').join('') + '</nav><div class="agent-detail" id="agentDetail" tabindex="0" role="region" aria-label="' + esc(selected.name) + ' 详情">' + (agentView === 'tools' ? V.agentToolHTML(selected) : V.agentSkillHTML(selected, agentData.skillDirectory, agentData.diagnostics)) + '</div></div>';
   }
   async function openAgentResources(view, trigger) {
-    if ($('agentOverlay').hidden) agentReturnFocus = trigger || document.activeElement;
-    agentView = view; agentData = undefined; $('agentOverlay').hidden = false; hideRefPop();
-    renderAgentResources(); $('agentClose').focus();
+    if (!$('agentPanel').hidden && agentView === view) { closeAgentResources(); return; }
+    agentReturnFocus = trigger || document.activeElement;
+    const opening = $('agentPanel').hidden;
+    agentView = view; $('agentPanel').hidden = false; hideRefPop();
+    if (opening) agentData = undefined;
+    renderAgentResources();
+    if (view === 'info' || agentData) return;
     const request = ++agentRequest;
     try {
       const value = await api('/api/agent');
-      if (request !== agentRequest || $('agentOverlay').hidden) return;
+      if (request !== agentRequest || $('agentPanel').hidden) return;
       agentData = value; renderAgentResources();
     } catch (error) {
-      if (request === agentRequest && !$('agentOverlay').hidden) $('agentContent').textContent = '读取会话资源失败：' + error.message;
+      if (request === agentRequest && !$('agentPanel').hidden && agentView !== 'info') $('agentContent').innerHTML = '<div class="agent-empty">读取会话资源失败：' + esc(error.message) + '</div>';
     }
   }
   function closeAgentResources() {
-    agentRequest++; $('agentOverlay').hidden = true; agentReturnFocus?.focus();
+    agentRequest++; $('agentPanel').hidden = true; $('agentClose').hidden = true; agentReturnFocus?.focus();
     document.querySelectorAll('[data-agent-view]').forEach(button => button.setAttribute('aria-expanded', 'false'));
   }
   document.querySelectorAll('[data-agent-view]').forEach(button => { button.onclick = () => openAgentResources(button.dataset.agentView, button); });
-  document.querySelectorAll('[data-agent-section]').forEach(button => { button.onclick = () => { agentView = button.dataset.agentSection; renderAgentResources(); }; });
+  $('agentContent').onclick = event => {
+    const button = event.target.closest('[data-agent-item]'); if (!button) return;
+    const listScroll = $('agentContent').querySelector('.agent-list').scrollTop;
+    agentSelection[agentView] = button.dataset.agentItem; renderAgentResources();
+    $('agentContent').querySelector('.agent-list').scrollTop = listScroll;
+    [...$('agentContent').querySelectorAll('[data-agent-item]')].find(item => item.dataset.agentItem === agentSelection[agentView])?.focus();
+  };
   $('agentClose').onclick = closeAgentResources;
-  $('agentOverlay').onclick = event => { if (event.target === $('agentOverlay')) closeAgentResources(); };
   document.addEventListener('keydown', event => {
-    if ($('agentOverlay').hidden) return;
-    if (event.key === 'Escape') { event.preventDefault(); closeAgentResources(); }
-    if (event.key === 'Tab') {
-      const controls = [...$('agentDialog').querySelectorAll('button, summary, a[href]')];
-      const first = controls[0], last = controls.at(-1);
-      if (event.shiftKey && (document.activeElement === first || !$('agentDialog').contains(document.activeElement))) { event.preventDefault(); last?.focus(); }
-      else if (!event.shiftKey && (document.activeElement === last || !$('agentDialog').contains(document.activeElement))) { event.preventDefault(); first?.focus(); }
-    }
+    if (!$('agentPanel').hidden && event.key === 'Escape' && $('panel-chat').contains(document.activeElement)) { event.preventDefault(); closeAgentResources(); }
   });
   function page(name) {
     if (!['chat', 'vars', 'settings'].includes(name)) name = 'chat';
@@ -472,6 +480,8 @@
   function scheduleRender() { if (renderScheduled) return; renderScheduled = true; requestAnimationFrame(() => { renderScheduled = false; renderTurns(); }); }
   $('chatScroll').onscroll = () => { followTail = $('chatScroll').scrollHeight - $('chatScroll').scrollTop - $('chatScroll').clientHeight < 55; };
   function showUsage(context, turn) {
+    contextUsage = context;
+    if (!$('agentPanel').hidden && agentView === 'info') renderAgentResources();
     const valid = Number.isFinite(context?.percent), percent = valid ? context.percent : 0;
     $('ctxFill').style.width = Math.min(100, percent) + '%'; $('ctxPercent').textContent = valid ? percent.toFixed(1) + '%' : '—';
     $('contextChip').title = valid ? '估算上下文 ' + Number(context.tokens).toLocaleString() + ' / ' + Number(context.contextWindow).toLocaleString() + ' tokens' : '模型尚未返回用量，不能计算上下文占用';
@@ -479,6 +489,7 @@
   }
   async function history() {
     const value = await api('/api/chat'); if (controller) return;
+    sessionStats = value.sessionStats;
     const changed = JSON.stringify(value) !== lastHistory; lastHistory = JSON.stringify(value);
     const previousBusy = peerBusy; peerBusy = value.busy; $('sendBtn').disabled = peerBusy;
     if (peerBusy && !previousBusy) notice('另一个面板正在运行会话；过程会自动同步，结束后可继续发送。');
@@ -516,7 +527,7 @@
           const name = part.match(/^event: (.+)$/m)?.[1], raw = part.match(/^data: (.+)$/m)?.[1]; if (!name || !raw) continue;
           const data = JSON.parse(raw); V.reduceEvent(turn, name, data);
           if (name === 'error') { hadError = true; notice(data.message, true); }
-          if (name === 'turn.end') { ended = true; showUsage(data.contextUsage, turn); }
+          if (name === 'turn.end') { ended = true; sessionStats = data.sessionStats; showUsage(data.contextUsage, turn); }
           scheduleRender();
         }
       };

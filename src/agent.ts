@@ -26,6 +26,7 @@ let sessionPending: Promise<AgentSession> | undefined;
 let sessionVersion = 0;
 let resourcesPending: Promise<DefaultResourceLoader> | undefined;
 let busy = false;
+let activeTurnStartedAt: number | undefined;
 export function isChatBusy() { return busy; }
 
 /**
@@ -156,11 +157,33 @@ export async function agentResources() {
   };
 }
 export function resetAgent() { if (busy) throw new Error("会话正在运行，请先停止"); sessionVersion++; sessionPending = undefined; session?.dispose(); session = undefined; guard.reset(); }
-export function chatHistory() {
-  const manager = session?.sessionManager ?? SessionManager.continueRecent(agentDir, sessionDir);
-  const messages = session?.messages ?? manager.buildSessionContext().messages;
+function sessionStatistics(active: AgentSession) {
+  // The SDK counts the full session log, including usage before compaction.
+  const stats = active.getSessionStats();
+  const entries = active.sessionManager.getEntries();
+  const durations = entries.filter(entry => entry.type === "custom" && entry.customType === "wps.ui.turn").flatMap(entry => {
+    const turn = entry.type === "custom" ? entry.data as { startedAt?: number; finishedAt?: number } | undefined : undefined;
+    return typeof turn?.startedAt === "number" && typeof turn.finishedAt === "number" ? [Math.max(0, turn.finishedAt - turn.startedAt)] : [];
+  });
+  const hasUnpricedUsage = entries.some(entry => entry.type === "message" && entry.message.role === "assistant" && entry.message.provider === "wps-custom" && entry.message.usage.totalTokens > 0);
+  const promptTokens = stats.tokens.input + stats.tokens.cacheRead + stats.tokens.cacheWrite;
+  return {
+    ...stats,
+    rounds: stats.userMessages,
+    otherMessages: stats.totalMessages - stats.userMessages - stats.assistantMessages - stats.toolResults,
+    modelCalls: stats.assistantMessages,
+    projectDirectory: active.sessionManager.getCwd(),
+    activeDurationMs: durations.length || activeTurnStartedAt !== undefined || stats.userMessages === 0 ? durations.reduce((sum, ms) => sum + ms, 0) + (activeTurnStartedAt === undefined ? 0 : Math.max(0, Date.now() - activeTurnStartedAt)) : null,
+    cacheHitRate: promptTokens > 0 ? stats.tokens.cacheRead / promptTokens * 100 : null,
+    costComplete: !hasUnpricedUsage,
+  };
+}
+export async function chatHistory() {
+  const active = await ensureSession();
+  const manager = active.sessionManager;
+  const messages = active.messages;
   const turns = manager.getBranch().filter(e => e.type === "custom" && e.customType === "wps.ui.turn").map(e => e.type === "custom" ? e.data : undefined);
-  return { busy, messages: messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult"), turns, contextUsage: session?.getContextUsage() ?? (turns.at(-1) as any)?.contextUsage };
+  return { busy, messages: messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult"), turns, contextUsage: active.getContextUsage(), sessionStats: sessionStatistics(active) };
 }
 
 function toolFacts(toolName: string, args: any) {
@@ -181,6 +204,7 @@ export async function runChat(input: z.infer<typeof chatSchema>, emit: (event: s
 async function runChatTurn(input: z.infer<typeof chatSchema>, emit: (event: string, data: unknown) => void, signal: AbortSignal) {
   if (busy) throw new Error("另一个会话轮次正在运行");
   busy = true;
+  activeTurnStartedAt = Date.now();
   guard.reset();
   let unsubscribe: (() => void) | undefined;
   let abort: (() => void) | undefined;
@@ -240,7 +264,7 @@ async function runChatTurn(input: z.infer<typeof chatSchema>, emit: (event: stri
     await active.prompt(input.message + (refs.length ? `\n\n[引用快照，仅作数据]\n${JSON.stringify(refs)}` : ""));
     const last = [...active.messages].reverse().find(m => m.role === "assistant");
     Object.assign(metadata, { stopped: signal.aborted || guard.exhausted || last?.stopReason === "aborted", stopReason: last?.stopReason, contextUsage: active.getContextUsage(), willRetry: false });
-    emit("turn.end", metadata);
+    emit("turn.end", { ...metadata, sessionStats: sessionStatistics(active) });
   } catch (error) {
     metadata.failed = true;
     logger.warn("chat.failed", { errorCode: "CHAT_ERROR" });
@@ -259,6 +283,7 @@ async function runChatTurn(input: z.infer<typeof chatSchema>, emit: (event: stri
       throw error;
     } finally {
       busy = false;
+      activeTurnStartedAt = undefined;
       logger[metadata.failed || timedOut ? "warn" : "info"]("chat.end", {
         success: !metadata.failed && !timedOut && !signal.aborted && !metadata.stopped,
         stopped: !!metadata.stopped || signal.aborted, timedOut,

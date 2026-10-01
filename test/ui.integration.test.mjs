@@ -8,6 +8,8 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
   const get = async path => (await fetch(h.base + path)).json();
   const post = async (path, data, headers = {}) => fetch(h.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(data) });
   try {
+    const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+    assert.equal((await get('/api/state')).pluginVersion, pkg.version);
     const resources = await get('/api/agent');
     assert.equal(h.requests.length, 0, 'resources can be inspected before configuring a model, without a model request');
     assert.match(resources.systemPrompt, /<available_skills>/);

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
@@ -8,7 +9,8 @@ import { analyzeReadOnlyCode, formatReadOnlyViolations, MAX_CODE_LENGTH } from "
 import { DATA_DIR } from "./paths.js";
 import { logger } from "./logger.js";
 
-const APP_DIR = resolve(fileURLToPath(new URL("../..", import.meta.url)));
+const sourceRoot = new URL("../", import.meta.url);
+const APP_DIR = resolve(fileURLToPath(existsSync(new URL("package.json", sourceRoot)) ? sourceRoot : new URL("../../", import.meta.url)));
 const PORT = Number(process.env.WPS_MCP_PORT ?? "18766");
 const STATE_FILE = join(DATA_DIR, "state.json");
 const RPC_TIMEOUT_MS = 45_000;

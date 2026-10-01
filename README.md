@@ -181,7 +181,7 @@ MCP 和内嵌 pi 会话使用相同的工具名，统一为 `wps_` 前缀的小�
 - `wps_get_document(documentId)`
 - `wps_run_readonly_code(documentId, code)`
 - `wps_create_variable(variableName, description?, sourceDocumentId, sourceRef?, code)`
-- `wps_update_transform(variableId, variableName?, description?, sourceDocumentId?, sourceRef?, code?)`
+- `wps_update_variable(variableId, variableName?, description?, sourceDocumentId?, sourceRef?, code?)`
 - `wps_create_render(variableId, targetDocumentId, targetRef?, description?, code)`
 - `wps_update_render(variableId, renderId, targetDocumentId?, targetRef?, description?, code?)`
 - `wps_get_variable(variableId)`
@@ -196,7 +196,7 @@ MCP 和内嵌 pi 会话使用相同的工具名，统一为 `wps_` 前缀的小�
 4. `wps_create_render` 保存目标文档修改代码；检查绑定后调用 `wps_run_render`。
 5. 可用 `wps_get_variable` 查看最近值、是否有值，以及所有规则的完整代码和执行时间。
 
-用户纠正规则时，先 `wps_get_variable` 读取原定义，再调用 `wps_update_transform` 或 `wps_update_render` 修改原规则；变量 ID、规则 ID 和已有 Render 绑定保持不变。至少提供一个更新字段；省略字段保持原值，`description`、`sourceRef` 和 `targetRef` 可传 `null` 清除。
+用户纠正规则时，先 `wps_get_variable` 读取原定义，再调用 `wps_update_variable` 或 `wps_update_render` 修改原规则；变量 ID、规则 ID 和已有 Render 绑定保持不变。至少提供一个更新字段；省略字段保持原值，`description`、`sourceRef` 和 `targetRef` 可传 `null` 清除。
 
 更新只保存规则，不执行 WPS 代码。Transform 代码、来源文档或源区域改变后会清除旧值和上次重算时间，必须先 `wps_run_transform` 重算成功，再 `wps_run_render` 写入；只改名称或描述保留当前值。Render 改变后清除该规则的上次执行时间，使用 `wps_run_render(variableId, renderId)` 单独执行更新后的规则。更新不会撤销已有文档写入，也不会自动清除旧目标位置。保留原文档绑定时，即使文档离线也可编辑规则；显式指定新的来源或目标文档时，该文档必须在线。
 

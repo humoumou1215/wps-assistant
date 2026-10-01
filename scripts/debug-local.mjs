@@ -186,7 +186,7 @@ try {
   const names = tools.tools.map((t) => t.name);
   check("10 tools exposed", names.length === 10, names);
   check("tool names match spec.md", JSON.stringify(names) === JSON.stringify([
-    "wps_list_documents", "wps_get_document", "wps_run_readonly_code", "wps_create_variable", "wps_update_transform",
+    "wps_list_documents", "wps_get_document", "wps_run_readonly_code", "wps_create_variable", "wps_update_variable",
     "wps_create_render", "wps_update_render", "wps_get_variable", "wps_run_transform", "wps_run_render",
   ]), names);
 

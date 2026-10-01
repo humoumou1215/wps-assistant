@@ -49,31 +49,31 @@ test('rule updates preserve identity and other bindings, invalidate stale values
     assert.ok(before.renders[0].code); assert.ok(before.renders[0].lastRun);
     let rpcCount = 0; h.socket.on('message', raw => { if (JSON.parse(raw).type === 'request') rpcCount++; });
 
-    await call(client, 'wps_update_transform', { variableId, variableName: '平均值', description: null });
+    await call(client, 'wps_update_variable', { variableId, variableName: '平均值', description: null });
     const metadata = await call(client, 'wps_get_variable', { variableId });
     assert.equal(metadata.name, '平均值'); assert.equal(Object.hasOwn(metadata, 'description'), false);
     assert.equal(metadata.value, before.value); assert.deepEqual(metadata.transform.lastRun, before.transform.lastRun);
-    const unchanged = await call(client, 'wps_update_transform', { variableId, code: before.transform.code });
+    const unchanged = await call(client, 'wps_update_variable', { variableId, code: before.transform.code });
     assert.equal(unchanged.valueInvalidated, false);
 
     for (const [name, args, code] of [
-      ['wps_update_transform', { variableId, code: 'Application.ActiveSheet.Name = "bad"; return true;' }, 'READ_ONLY_VIOLATION'],
-      ['wps_update_transform', { variableId, code: 'return (' }, 'INVALID_REQUEST'],
-      ['wps_update_transform', { variableId, sourceDocumentId: 'doc_missing' }, 'DOCUMENT_NOT_FOUND'],
+      ['wps_update_variable', { variableId, code: 'Application.ActiveSheet.Name = "bad"; return true;' }, 'READ_ONLY_VIOLATION'],
+      ['wps_update_variable', { variableId, code: 'return (' }, 'INVALID_REQUEST'],
+      ['wps_update_variable', { variableId, sourceDocumentId: 'doc_missing' }, 'DOCUMENT_NOT_FOUND'],
       ['wps_update_render', { variableId, renderId, targetDocumentId: 'doc_missing' }, 'DOCUMENT_NOT_FOUND'],
-      ['wps_update_transform', { variableId }, 'INVALID_REQUEST'],
+      ['wps_update_variable', { variableId }, 'INVALID_REQUEST'],
       ['wps_update_render', { variableId, renderId }, 'INVALID_REQUEST'],
-      ['wps_update_transform', { variableId: 'missing', code: 'return 1;' }, 'VARIABLE_NOT_FOUND'],
+      ['wps_update_variable', { variableId: 'missing', code: 'return 1;' }, 'VARIABLE_NOT_FOUND'],
       ['wps_update_render', { variableId, renderId: 'missing', code: 'return true;' }, 'RENDER_NOT_FOUND'],
       ['wps_update_render', { variableId: 'missing', renderId, code: 'return true;' }, 'VARIABLE_NOT_FOUND'],
-      ['wps_update_transform', { variableId, variableName: '' }, 'INVALID_REQUEST'],
+      ['wps_update_variable', { variableId, variableName: '' }, 'INVALID_REQUEST'],
       ['wps_update_render', { variableId, renderId, code: '' }, 'INVALID_REQUEST'],
     ]) {
       await failed(client, name, args, code);
       assert.deepEqual(await call(client, 'wps_get_variable', { variableId }), metadata);
     }
 
-    const update = await call(client, 'wps_update_transform', { variableId, sourceRef: null, code: 'return Application.ActiveSheet.Range("B3").Value2 / 3;' });
+    const update = await call(client, 'wps_update_variable', { variableId, sourceRef: null, code: 'return Application.ActiveSheet.Range("B3").Value2 / 3;' });
     assert.equal(update.valueInvalidated, true); assert.equal(update.hasValue, false); assert.equal(update.transformId, transformId);
     const invalidated = await call(client, 'wps_get_variable', { variableId });
     assert.equal(invalidated.hasValue, false); assert.equal(Object.hasOwn(invalidated, 'value'), false);
@@ -98,7 +98,7 @@ test('rule updates preserve identity and other bindings, invalidate stale values
     await call(client, 'wps_run_render', { variableId, renderId }); assert.equal(h.appState.written, 400);
     const disk = JSON.parse(await readFile(join(dir, 'state.json'), 'utf8'));
     assert.equal(disk.variables.length, 1); assert.equal(disk.variables[0].renders.length, 2);
-    const regionChange = await call(client, 'wps_update_transform', { variableId, sourceRef: '销售数据!B1:B3' });
+    const regionChange = await call(client, 'wps_update_variable', { variableId, sourceRef: '销售数据!B1:B3' });
     assert.equal(regionChange.valueInvalidated, true, 'a source-region change alone invalidates the value');
     const moved = await call(client, 'wps_get_variable', { variableId });
     assert.equal(moved.transform.code, final.transform.code); assert.equal(moved.hasValue, false);
@@ -113,7 +113,7 @@ test('source and target rebinding validate documents and existing bindings remai
     const registered = new Promise(resolve => { const listener = raw => { if (JSON.parse(raw).type === 'registered') { h.socket.off('message', listener); resolve(); } }; h.socket.on('message', listener); });
     h.socket.send(JSON.stringify({ type: 'register', documents: [{ documentKey: 'other', name: '新来源.xlsx', type: 'spreadsheet' }] }));
     await registered;
-    const changed = await call(client, 'wps_update_transform', { variableId, sourceDocumentId: 'doc_002' });
+    const changed = await call(client, 'wps_update_variable', { variableId, sourceDocumentId: 'doc_002' });
     assert.equal(changed.valueInvalidated, true);
     await call(client, 'wps_update_render', { variableId, renderId, targetDocumentId: 'doc_002', description: '新位置' });
     const rebound = await call(client, 'wps_get_variable', { variableId });
@@ -123,9 +123,9 @@ test('source and target rebinding validate documents and existing bindings remai
       if (!(await (await fetch(h.base + '/api/state')).json()).documents.some(d => d.connected)) break;
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    await call(client, 'wps_update_transform', { variableId, code: 'return 45;' });
+    await call(client, 'wps_update_variable', { variableId, code: 'return 45;' });
     await call(client, 'wps_update_render', { variableId, renderId, code: 'return variable.value;' });
-    await failed(client, 'wps_update_transform', { variableId, sourceDocumentId: 'doc_002' }, 'DOCUMENT_DISCONNECTED');
+    await failed(client, 'wps_update_variable', { variableId, sourceDocumentId: 'doc_002' }, 'DOCUMENT_DISCONNECTED');
     await failed(client, 'wps_update_render', { variableId, renderId, targetDocumentId: 'doc_002' }, 'DOCUMENT_DISCONNECTED');
     const offline = await call(client, 'wps_get_variable', { variableId });
     assert.equal(offline.transform.code, 'return 45;'); assert.equal(offline.renders[0].code, 'return variable.value;');
@@ -138,12 +138,12 @@ test('failed update commits retain original state and do not poison the mutation
     const { variableId, renderId } = await createRules(client);
     const before = await call(client, 'wps_get_variable', { variableId });
     await rm(file); await mkdir(file);
-    await failed(client, 'wps_update_transform', { variableId, code: 'return 45;' });
+    await failed(client, 'wps_update_variable', { variableId, code: 'return 45;' });
     assert.deepEqual(await call(client, 'wps_get_variable', { variableId }), before);
     await failed(client, 'wps_update_render', { variableId, renderId, code: 'return true;' });
     assert.deepEqual(await call(client, 'wps_get_variable', { variableId }), before);
     await rm(file, { recursive: true });
-    await call(client, 'wps_update_transform', { variableId, code: 'return 45;' });
+    await call(client, 'wps_update_variable', { variableId, code: 'return 45;' });
     await call(client, 'wps_update_render', { variableId, renderId, code: 'return true;' });
     const after = await call(client, 'wps_get_variable', { variableId });
     assert.equal(after.transform.code, 'return 45;'); assert.equal(after.renders[0].code, 'return true;');

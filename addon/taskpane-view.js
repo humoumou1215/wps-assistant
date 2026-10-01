@@ -5,7 +5,8 @@
   const legacyToolNames = Object.fromEntries([
     ['workspace.list_documents', 'wps_list_documents'], ['document.get', 'wps_get_document'],
     ['wps.exec', 'wps_run_readonly_code'], ['transform.create', 'wps_create_variable'],
-    ['transform.update', 'wps_update_transform'], ['render.create', 'wps_create_render'],
+    ['transform.update', 'wps_update_variable'], ['render.create', 'wps_create_render'],
+    ['wps_update_transform', 'wps_update_variable'],
     ['render.update', 'wps_update_render'], ['variable.get', 'wps_get_variable'],
     ['variable.transform', 'wps_run_transform'], ['variable.render', 'wps_run_render'],
   ].flatMap(([old, name]) => [[old, name], [old.replaceAll('.', '_'), name]]));

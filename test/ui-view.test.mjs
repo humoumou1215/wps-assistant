@@ -206,11 +206,11 @@ test('Render update facts and history report a saved rule without claiming a doc
   assert.equal(V.factStatus({ ...block, status: 'error' }, facts[0]), '规则更新失败');
   const history = V.historyTurns([
     { role: 'user', timestamp: 100, content: '修改规则' },
-    { role: 'assistant', content: [{ type: 'toolCall', id: 'u', name: 'wps_update_render', arguments: block.args }, { type: 'toolCall', id: 't', name: 'wps_update_transform', arguments: { variableId: 'v', code: 'return 1;' } }] },
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'u', name: 'wps_update_render', arguments: block.args }, { type: 'toolCall', id: 't', name: 'wps_update_variable', arguments: { variableId: 'v', code: 'return 1;' } }] },
     { role: 'toolResult', toolCallId: 'u', toolName: 'wps_update_render', details: block.result },
   ], [])[0];
   assert.equal(history.tools.u.toolName, 'wps_update_render');
-  assert.equal(history.tools.t.toolName, 'wps_update_transform');
+  assert.equal(history.tools.t.toolName, 'wps_update_variable');
 });
 
 test('close action uses the cached host pane ID, including zero, and its original ribbon entry', () => {
@@ -250,6 +250,17 @@ test('legacy dotted and underscore tool names retain write facts when restoring 
     const unfinished = V.historyTurns(messages.slice(0, 2), metadata, true)[0].tools.old;
     assert.equal(unfinished.toolName, 'wps_run_render', 'saved metadata also normalizes unfinished historical calls');
     assert.equal(messages[1].content[0].name, name, 'saved messages stay unchanged');
+  }
+  for (const name of ['transform.update', 'transform_update', 'wps_update_transform']) {
+    const messages = [
+      { role: 'user', timestamp: 100, content: '修改变量' },
+      { role: 'assistant', content: [{ type: 'toolCall', id: 'update', name, arguments: { variableId: 'v', variableName: '新名称' } }] },
+      { role: 'toolResult', toolCallId: 'update', toolName: name, details: { success: true, variableId: 'v' } },
+    ];
+    const metadata = [{ userTimestamp: 100, tools: { update: { toolName: name } } }];
+    assert.equal(V.historyTurns(messages, metadata)[0].tools.update.toolName, 'wps_update_variable');
+    assert.equal(V.historyTurns(messages.slice(0, 2), metadata, true)[0].tools.update.toolName, 'wps_update_variable');
+    assert.equal(messages[1].content[0].name, name, 'saved update calls stay unchanged');
   }
 });
 

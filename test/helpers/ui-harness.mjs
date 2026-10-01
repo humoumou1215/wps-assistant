@@ -33,7 +33,7 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps
     let step = toolSteps || user.includes('验证绑定') ? steps[results.length] : null;
     if (user.includes('修改规则')) step = [
       ['wps_get_variable', { variableId }],
-      ['wps_update_transform', { variableId, code: 'return Application.ActiveSheet.Range("B3").Value2 / 3;' }],
+      ['wps_update_variable', { variableId, code: 'return Application.ActiveSheet.Range("B3").Value2 / 3;' }],
       ['wps_run_transform', { variableId }],
       ['wps_update_render', { variableId, renderId: parsed.find(v => v.renders)?.renders[0]?.renderId, code: 'Application.ActiveSheet.Range("D3").Value2 = variable.value * 10; return Application.ActiveSheet.Range("D3").Value2;' }],
       ['wps_run_render', { variableId, renderId: parsed.find(v => v.renders)?.renders[0]?.renderId }],

@@ -110,7 +110,7 @@ test('a later chat turn updates the original rules, recalculates and writes with
     assert.equal(updated.value, 40); assert.equal(h.appState.written, 400);
     const history = await (await fetch(h.base + '/api/chat')).json();
     const last = history.turns.at(-1);
-    assert.deepEqual(Object.values(last.tools).map(t => t.toolName), ['wps_get_variable', 'wps_update_transform', 'wps_run_transform', 'wps_update_render', 'wps_run_render']);
+    assert.deepEqual(Object.values(last.tools).map(t => t.toolName), ['wps_get_variable', 'wps_update_variable', 'wps_run_transform', 'wps_update_render', 'wps_run_render']);
     const read = Object.values(last.tools)[0].result;
     assert.equal(read.transform.code, original.transform.code);
     assert.equal(read.renders[0].code, original.renders[0].code);
@@ -129,9 +129,10 @@ test('saved bindings and legacy pi tool calls survive restart and use canonical 
     const post = (path, body) => fetch(h.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     await post('/api/config', h.cfg);
     await (await post('/api/chat', { message: '验证绑定' })).text();
+    await (await post('/api/chat', { message: '修改规则' })).text();
     const beforeStats = (await (await fetch(h.base + '/api/chat')).json()).sessionStats;
     await h.close();
-    const oldNames = { wps_list_documents: 'workspace_list_documents', wps_get_document: 'document_get', wps_run_readonly_code: 'wps_exec', wps_create_variable: 'transform_create', wps_create_render: 'render_create', wps_get_variable: 'variable_get', wps_run_transform: 'variable_transform', wps_run_render: 'variable_render' };
+    const oldNames = { wps_list_documents: 'workspace_list_documents', wps_get_document: 'document_get', wps_run_readonly_code: 'wps_exec', wps_create_variable: 'transform_create', wps_update_variable: 'wps_update_transform', wps_create_render: 'render_create', wps_get_variable: 'variable_get', wps_run_transform: 'variable_transform', wps_run_render: 'variable_render' };
     const legacy = value => {
       if (Array.isArray(value)) return value.map(legacy);
       if (!value || typeof value !== 'object') return value;
@@ -150,26 +151,30 @@ test('saved bindings and legacy pi tool calls survive restart and use canonical 
     h = await startHarness({ dataDir: dir });
     const state = await (await fetch(h.base + '/api/state')).json();
     assert.equal(state.documents[0].documentId, state.variables[0].transform.sourceDocumentId);
-    assert.equal(state.variables[0].value, 120);
+    assert.equal(state.variables[0].value, 40);
     const history = await (await fetch(h.base + '/api/chat')).json();
     assert.ok(history.messages.some(m => m.role === 'assistant'));
     assert.deepEqual(history.sessionStats, beforeStats, 'complete statistics survive restarting without another model call');
     assert.equal((await post('/api/actions', { op: 'render', variableId: state.variables[0].variableId })).status, 200);
-    assert.equal(h.appState.written, 120);
+    assert.equal(h.appState.written, 400);
     await post('/api/config', h.cfg);
     const correction = await (await post('/api/chat', { message: '修改规则' })).text();
     assert.match(correction, /原规则已修改/); assert.equal(h.appState.written, 400);
     const request = h.requests.find(r => r.body.tools?.length).body;
     const calls = request.messages.flatMap(m => m.tool_calls || []).map(c => c.function.name);
     assert.ok(calls.includes('wps_create_variable'));
+    assert.ok(calls.includes('wps_update_variable'));
+    assert.ok(!calls.includes('wps_update_transform'), 'previous update calls use the new name in model context');
     assert.ok(calls.every(name => name.startsWith('wps_')), 'historical calls are normalized before reaching the model');
     const { normalizeToolMessages } = await import('../dist/src/tool-names.js');
     const normalized = normalizeToolMessages(history.messages);
     const results = normalized.filter(m => m.role === 'toolResult');
     assert.ok(results.length && results.every(m => m.toolName.startsWith('wps_')));
     assert.ok(history.messages.some(m => m.role === 'toolResult' && m.toolName === 'variable_get'), 'normalizing model context leaves saved tool results intact');
+    assert.ok(history.messages.some(m => m.role === 'toolResult' && m.toolName === 'wps_update_transform'));
     const saved = (await Promise.all(sessionFiles.map(name => readFile(dir + '/pi/sessions/' + name, 'utf8')))).join('');
     assert.match(saved, /"name":"transform_create"/, 'original persisted history is retained');
+    assert.match(saved, /"name":"wps_update_transform"/);
   } finally { if (h) await h.close(); await rm(dir, { recursive: true, force: true }); }
 });
 

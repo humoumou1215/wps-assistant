@@ -107,7 +107,7 @@ Use this skill only for WPS JS API operations. The MCP server provides document 
 1. Call `wps_list_documents`, then `wps_get_document` before writing any code.
 2. Read only the matching API guide: [表格](references/spreadsheet.md), [演示](references/presentation.md), or [文字](references/writer.md).
 3. Use `wps_run_readonly_code` only for inspection. Create an extraction rule with `wps_create_variable` then run `wps_run_transform`. Create edits using `wps_create_render` then run `wps_run_render`.
-   For corrections, read the full code and bindings with `wps_get_variable`, then use `wps_update_transform` or `wps_update_render` to edit the existing rule, preserving IDs and bindings. Omitted fields stay unchanged; null clears description/sourceRef/targetRef. Updates only save rules. Transform code/source changes invalidate the value: run `wps_run_transform` before rendering. Run an updated Render with its explicit `renderId`; previous document writes are not undone or cleared automatically.
+   For corrections, read the full code and bindings with `wps_get_variable`, then use `wps_update_variable` or `wps_update_render` to edit the existing rule, preserving IDs and bindings. Omitted fields stay unchanged; null clears description/sourceRef/targetRef. Updates only save rules. Transform code/source changes invalidate the value: run `wps_run_transform` before rendering. Run an updated Render with its explicit `renderId`; previous document writes are not undone or cleared automatically.
 4. Read [通用 API 与事件](references/common.md) only if needed. Open [完整 API 清单](references/api-catalog.md) only to look up a less common member.
 
 ## Hard boundaries

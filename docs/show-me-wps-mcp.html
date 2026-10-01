@@ -424,7 +424,7 @@
         <div class="toolrow"><div><code>wps_get_document</code></div><div>拿到某个文档的基本上下文。</div><span class="badge read">发现</span></div>
         <div class="toolrow"><div><code>wps_run_readonly_code</code></div><div>执行 Agent 生成的只读 WPS JS API 代码。</div><span class="badge read">只读</span></div>
         <div class="toolrow"><div><code>wps_create_variable</code></div><div>创建一个 Variable，并保存它的 Transform 代码（只读的 WPS JS API）。</div><span class="badge store">规则</span></div>
-        <div class="toolrow"><div><code>wps_update_transform</code></div><div>修改原 Transform，保留变量与绑定；代码或来源变化后重新计算值。</div><span class="badge store">规则</span></div>
+        <div class="toolrow"><div><code>wps_update_variable</code></div><div>修改变量名称、描述、来源或 Transform 代码，保留 ID 与绑定；代码或来源变化后重新计算值。</div><span class="badge store">规则</span></div>
         <div class="toolrow"><div><code>wps_create_render</code></div><div>给 Variable 保存一条 Render 代码（核心就是 WPS JS API 代码）。</div><span class="badge store">规则</span></div>
         <div class="toolrow"><div><code>wps_update_render</code></div><div>修改指定 Render 的代码、目标或位置描述；保存后可单独执行。</div><span class="badge store">规则</span></div>
         <div class="toolrow"><div><code>wps_get_variable</code></div><div>看 Variable 的最新值，以及它挂着的 Transform / Render。</div><span class="badge read">查询</span></div>

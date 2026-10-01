@@ -180,7 +180,7 @@ Document
 
 Definition
 ├── wps_create_variable
-├── wps_update_transform
+├── wps_update_variable
 ├── wps_create_render
 └── wps_update_render
 
@@ -194,7 +194,7 @@ Variable
 
 | 工具 | 必填参数 | 可更新字段 |
 | --- | --- | --- |
-| `wps_update_transform` | `variableId` | `variableName`、`description`（变量描述）、`sourceDocumentId`、`sourceRef`、`code` |
+| `wps_update_variable` | `variableId` | `variableName`、`description`（变量描述）、`sourceDocumentId`、`sourceRef`、`code` |
 | `wps_update_render` | `variableId`、`renderId` | `targetDocumentId`、`targetRef`（写入区域）、`description`、`code` |
 
 至少提供一个更新字段；省略字段保持原值，`description`、`sourceRef` 和 `targetRef` 可用 `null` 清除。更新保留变量 ID、规则 ID 和其他 Render 绑定，只保存定义，不执行 WPS 代码；同一变量的更新、执行与面板删除串行处理，保存失败保留原定义。
@@ -1284,7 +1284,7 @@ wps_create_render(
     code
 )
 
-wps_update_transform(
+wps_update_variable(
     variableId,
     variableName?,
     description?,

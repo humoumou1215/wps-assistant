@@ -311,7 +311,7 @@ function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema
         if (signal?.aborted) throw new ToolError("OPERATION_CANCELLED", "已停止，未执行此操作");
         return handler(parsed);
       };
-      result = ["wps_create_variable", "wps_update_transform", "wps_create_render", "wps_update_render", "wps_run_transform", "wps_run_render"].includes(name)
+      result = ["wps_create_variable", "wps_update_variable", "wps_create_render", "wps_update_render", "wps_run_transform", "wps_run_render"].includes(name)
         ? await mutateVariables(execute, signal) : await execute();
     }
     catch (error) { result = toolError(error, "INTERNAL_ERROR"); }
@@ -386,9 +386,9 @@ defineTool("wps_create_variable", {
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
 });
 
-defineTool("wps_update_transform", {
-  title: "Update Variable Transform",
-  description: "Update an existing Variable's read-only Transform without changing IDs or Render bindings. Omitted fields stay unchanged; null clears description/sourceRef. Code/source changes invalidate the value: run wps_run_transform before wps_run_render. Saves only, never executes WPS code.",
+defineTool("wps_update_variable", {
+  title: "Update Variable",
+  description: "Update an existing Variable's name, description, source, or read-only Transform code without changing IDs or Render bindings. Omitted fields stay unchanged; null clears description/sourceRef. Code/source changes invalidate the value: run wps_run_transform before wps_run_render. Saves only, never executes WPS code.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),

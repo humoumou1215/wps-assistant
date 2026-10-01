@@ -89,7 +89,7 @@ test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only cal
 
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map((tool) => tool.name), [
-      "wps_list_documents", "wps_get_document", "wps_run_readonly_code", "wps_create_variable", "wps_update_transform",
+      "wps_list_documents", "wps_get_document", "wps_run_readonly_code", "wps_create_variable", "wps_update_variable",
       "wps_create_render", "wps_update_render", "wps_get_variable", "wps_run_transform", "wps_run_render",
     ]);
 

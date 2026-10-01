@@ -44,6 +44,7 @@ try {
     await new Promise(resolve => setTimeout(resolve, 100));
   }
   assert.ok(ready, `Release server must start: ${logs}`);
+  assert.equal((await (await fetch(base + '/api/state')).json()).pluginVersion, pkg.version);
   for (const path of ['/addon/taskpane.html', '/addins/et/taskpane.js', '/addins/wpp/taskpane.css', '/addins/wps/']) {
     assert.equal((await fetch(base + path)).status, 200, `Packaged asset ${path}`);
   }

@@ -1,9 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { z } from "zod";
-import { callTool, getState, PORT } from "./tools.js";
+import { APP_DIR, callTool, getState, PORT } from "./tools.js";
 import { publicConfig, parseConfig, saveConfig, redact } from "./config.js";
 import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema, chatHistory, agentResources } from "./agent.js";
 import { logger } from "./logger.js";
+
+const pluginVersion: string = JSON.parse(await readFile(join(APP_DIR, "package.json"), "utf8")).version;
 
 export async function readJson(req: IncomingMessage): Promise<unknown> {
   let size = 0;
@@ -29,7 +33,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
   }
   if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json")) { json(res, 415, { error: "需要 application/json" }); return; }
   try {
-    if (path === "/api/state" && req.method === "GET") { json(res, 200, getState()); return; }
+    if (path === "/api/state" && req.method === "GET") { json(res, 200, { ...getState(), pluginVersion }); return; }
     if (path === "/api/config" && req.method === "GET") { json(res, 200, { ...publicConfig(), builtinModels: await builtinModels() }); return; }
     if (path === "/api/chat" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(chatHistory())))); return; }
     if (path === "/api/agent" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(await agentResources())))); return; }

@@ -45,3 +45,30 @@ test('skill read supports references and pagination but rejects traversal and li
   const controller = new AbortController(); controller.abort();
   await assert.rejects(read.execute('cancelled', { path: skills[0].filePath }, controller.signal), /已停止/);
 });
+
+test('upgrades remove retired bundled skills and references while preserving user files', async () => {
+  const source = join(dir, 'upgrade-source'), target = join(dir, 'upgrade-target');
+  for (const name of ['kept', 'retired']) {
+    await mkdir(join(source, name), { recursive: true });
+    await writeFile(join(source, name, 'SKILL.md'), `---\nname: ${name}\ndescription: Test skill\n---\nInstructions`);
+  }
+  await writeFile(join(source, 'kept/obsolete.md'), 'old reference');
+  await installBundledSkills(source, target);
+  await mkdir(join(target, 'custom'));
+  await writeFile(join(target, 'custom/SKILL.md'), '---\nname: custom\ndescription: User skill\n---\nUser instructions');
+  await writeFile(join(target, 'kept/user-notes.md'), 'personal notes');
+  await rm(join(source, 'retired'), { recursive: true });
+  await rm(join(source, 'kept/obsolete.md'));
+  await writeFile(join(source, 'kept/new.md'), 'new reference');
+  const upgraded = await installBundledSkills(source, target);
+  assert.deepEqual(upgraded.skills.map(skill => skill.name).sort(), ['custom', 'kept']);
+  await assert.rejects(readFile(join(target, 'retired/SKILL.md')), { code: 'ENOENT' });
+  await assert.rejects(readFile(join(target, 'kept/obsolete.md')), { code: 'ENOENT' });
+  assert.equal(await readFile(join(target, 'kept/user-notes.md'), 'utf8'), 'personal notes');
+  assert.equal(await readFile(join(target, 'kept/new.md'), 'utf8'), 'new reference');
+  await installBundledSkills(source, target);
+  assert.equal(await readFile(join(target, 'kept/user-notes.md'), 'utf8'), 'personal notes');
+  await writeFile(join(target, '.wps-bundled-files.json'), '["../config.json"]');
+  await assert.rejects(installBundledSkills(source, target), /安装清单无效/);
+  assert.equal(await readFile(join(dir, 'config.json'), 'utf8'), 'private config');
+});

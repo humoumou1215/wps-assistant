@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, realpath, stat } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,9 +15,45 @@ export const INSTALLED_SKILLS_DIR = join(AGENT_DIR, "skills");
 
 export async function installBundledSkills(source = BUNDLED_SKILLS_DIR, target = INSTALLED_SKILLS_DIR) {
   await mkdir(target, { recursive: true, mode: 0o700 });
-  // Copy whole skill directories, including references and supporting resources.
-  // Refresh shipped files on startup; retain separately installed skills.
+  const manifest = join(target, ".wps-bundled-files.json");
+  let previous: string[] = [];
+  try {
+    const value: unknown = JSON.parse(await readFile(manifest, "utf8"));
+    if (!Array.isArray(value) || value.some(path => typeof path !== "string" || !path || isAbsolute(path) || !isWithin(target, resolve(target, path)) || resolve(target, path) === resolve(target))) {
+      throw new Error("内置技能安装清单无效");
+    }
+    previous = value;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  async function listFiles(dir: string, prefix = ""): Promise<string[]> {
+    const files: string[] = [];
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const path = join(prefix, entry.name);
+      if (entry.isDirectory()) files.push(...await listFiles(join(dir, entry.name), path));
+      else if (entry.isFile()) files.push(path);
+      else throw new Error("内置技能不能包含符号链接或特殊文件");
+    }
+    return files;
+  }
+  const files = await listFiles(source);
+  // Only remove files recorded as bundled; preserve user-installed resources.
   await cp(source, target, { recursive: true, force: true });
+  const current = new Set(files);
+  const root = await realpath(target);
+  for (const path of previous.filter(path => !current.has(path))) {
+    const candidate = resolve(target, path);
+    try {
+      const resolved = await realpath(candidate);
+      if (!isWithin(root, resolved)) throw new Error("内置技能清理路径超出安装目录");
+      await rm(candidate, { force: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+  const temporary = manifest + ".tmp";
+  await writeFile(temporary, JSON.stringify(files.sort()) + "\n", { mode: 0o600 });
+  await rename(temporary, manifest);
   return loadSkillsFromDir({ dir: target, source: "wps-mcp" });
 }
 

@@ -130,7 +130,7 @@ test("every violation is reported in a single pass", () => {
     assert.ok(message.includes(kind), `message must list ${kind}`);
   }
   assert.match(message, /line 4/);
-  assert.match(message, /render\.create/);
+  assert.match(message, /wps_create_render/);
 });
 
 test("a denied method used as a call is reported once, not twice", () => {

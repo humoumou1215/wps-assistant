@@ -2,7 +2,7 @@
  * Read-only guard retry budget.
  *
  * The budget is charged at most **once per model round**, not once per tool call. A single
- * assistant message may fire several `wps.exec` calls in parallel; charging each of them
+ * assistant message may fire several `wps_run_readonly_code` calls in parallel; charging each of them
  * spends the whole budget on one mistake and aborts the turn before the model has had a
  * chance to fix anything. `startTurn()` is called on every `turn_start` event, so a round
  * in which three parallel calls all violate the guard still costs exactly one charge.

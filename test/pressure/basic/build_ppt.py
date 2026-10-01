@@ -97,8 +97,8 @@ lines = [
     (2, "Transform —— 只读脚本，从源文档算出该值（过只读守卫）"),
     (2, "Render —— 写入脚本，把值写进目标文档（不过守卫）"),
     (0, "两条通道的差别"),
-    (1, "查询：wps.exec / Transform，不可修改文档"),
-    (2, "写入：只有 variable.render，且它是唯一的破坏性动作"),
+    (1, "查询：wps_run_readonly_code / Transform，不可修改文档"),
+    (2, "写入：只有 wps_run_render，且它是唯一的破坏性动作"),
     (0, "边界提示"),
     (1, "没有删除 Variable / Render 的接口 —— 探测用的 Render 会永久留下"),
 ]

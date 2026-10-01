@@ -92,16 +92,16 @@ test('stream and restored history keep per-message thinking order, arguments, fa
   const turn = V.newTurn('请求 [引用1:选区]', [{ kind: 'sel', id: 'doc1', marker: '引用1', label: '选区' }], 100);
   const events = [
     ['message.start', { model: 'model' }], ['thinking.delta', { delta: '先检查' }], ['text.delta', { delta: '准备写入' }], ['message.end', {}],
-    ['tool.start', { id: 'c', toolName: 'variable_render', args: { variableId: 'v' }, facts: [{ renderId: 'r', targetDocumentName: '旧文档', description: 'A1' }] }],
-    ['tool.result', { id: 'c', toolName: 'variable_render', durationMs: 21, result: { renders: [{ renderId: 'r', success: true, lastRun: { at: '2026-09-30', durationMs: 19 } }] } }],
+    ['tool.start', { id: 'c', toolName: 'wps_run_render', args: { variableId: 'v' }, facts: [{ renderId: 'r', targetDocumentName: '旧文档', description: 'A1' }] }],
+    ['tool.result', { id: 'c', toolName: 'wps_run_render', durationMs: 21, result: { renders: [{ renderId: 'r', success: true, lastRun: { at: '2026-09-30', durationMs: 19 } }] } }],
     ['message.start', {}], ['thinking.delta', { delta: '核对结果' }], ['text.delta', { delta: '完成' }], ['message.end', {}], ['turn.end', { usage: { totalTokens: 12 }, calls: 2 }]
   ];
   events.forEach(([name, data]) => V.reduceEvent(turn, name, data));
   const savedTool = { ...turn.tools.c }; delete savedTool.kind; delete savedTool.status;
   const history = V.historyTurns([
     { role: 'user', timestamp: 100, content: turn.user },
-    { role: 'assistant', model: 'model', content: [{ type: 'text', text: '准备写入' }, { type: 'thinking', thinking: '先检查' }, { type: 'toolCall', id: 'c', name: 'variable_render', arguments: { variableId: 'v' } }] },
-    { role: 'toolResult', toolCallId: 'c', toolName: 'variable_render', details: savedTool.result },
+    { role: 'assistant', model: 'model', content: [{ type: 'text', text: '准备写入' }, { type: 'thinking', thinking: '先检查' }, { type: 'toolCall', id: 'c', name: 'wps_run_render', arguments: { variableId: 'v' } }] },
+    { role: 'toolResult', toolCallId: 'c', toolName: 'wps_run_render', details: savedTool.result },
     { role: 'assistant', model: 'model', content: [{ type: 'text', text: '完成' }, { type: 'thinking', thinking: '核对结果' }] }
   ], [{ userTimestamp: 100, refs: turn.refs, tools: { c: savedTool }, messageOrders: [[1, 0], [1, 0]], usage: turn.usage, calls: 2 }])[0];
   assert.deepEqual(JSON.parse(JSON.stringify(history.blocks)), JSON.parse(JSON.stringify(turn.blocks)));
@@ -111,15 +111,15 @@ test('stream and restored history keep per-message thinking order, arguments, fa
 
 test('write facts preserve partial success and use historical targets rather than latest run', () => {
   const state = { documents: [{ documentId: 'd', name: '新文档' }], variables: [{ variableId: 'v', renders: [{ renderId: 'r', lastRun: { durationMs: 999 } }] }] };
-  const block = { toolName: 'variable.render', status: 'error', args: { variableId: 'v' }, facts: [{ renderId: 'r', targetDocumentName: '旧文档', description: '旧位置' }], result: { renders: [{ renderId: 'r', success: true, lastRun: { durationMs: 10 } }, { renderId: 'r2', success: false, error: { message: '写保护' } }] } };
+  const block = { toolName: 'wps_run_render', status: 'error', args: { variableId: 'v' }, facts: [{ renderId: 'r', targetDocumentName: '旧文档', description: '旧位置' }], result: { renders: [{ renderId: 'r', success: true, lastRun: { durationMs: 10 } }, { renderId: 'r2', success: false, error: { message: '写保护' } }] } };
   const facts = V.renderFacts(block, state);
   assert.equal(facts.length, 2); assert.equal(facts[0].targetDocumentName, '旧文档'); assert.equal(facts[0].lastRun.durationMs, 10);
   assert.equal(facts[1].success, false); assert.equal(facts[1].error.message, '写保护');
   assert.equal(V.renderFacts({ ...block, facts: undefined, result: undefined, status: 'done' }, state).length, 0);
   assert.equal(V.factStatus(block, facts[0]), '已写入'); assert.equal(V.factStatus(block, facts[1]), '写入失败');
-  assert.equal(V.factStatus({ toolName: 'render.create', status: 'error', result: { error: { message: '断开' } } }, {}), '绑定失败');
-  assert.equal(V.factStatus({ toolName: 'render.create', status: 'running' }, {}), '待绑定');
-  assert.equal(V.factStatus({ toolName: 'variable.render', status: 'done' }, {}), '未确认完成');
+  assert.equal(V.factStatus({ toolName: 'wps_create_render', status: 'error', result: { error: { message: '断开' } } }, {}), '绑定失败');
+  assert.equal(V.factStatus({ toolName: 'wps_create_render', status: 'running' }, {}), '待绑定');
+  assert.equal(V.factStatus({ toolName: 'wps_run_render', status: 'done' }, {}), '未确认完成');
 });
 
 test('value previews show real dimensions and remain bounded', () => {
@@ -127,6 +127,24 @@ test('value previews show real dimensions and remain bounded', () => {
   assert.equal(V.typeOf({ hasValue: true, value }), '表格 8×2');
   const html = V.valueHTML(value); assert.match(html, /120,000/); assert.match(html, /共 8 行/); assert.ok(!html.includes('项目7'));
   assert.match(V.typeOf({ hasValue: true, value: 0.069 }), /0.069/);
+});
+
+test('Render update facts and history report a saved rule without claiming a document write', () => {
+  const state = { documents: [{ documentId: 'd', name: '目标.xlsx' }], variables: [] };
+  const block = { toolName: 'wps_update_render', status: 'done', args: { variableId: 'v', renderId: 'r', code: 'return true;' }, facts: [{ renderId: 'r', targetDocumentId: 'd', description: '旧位置' }], result: { success: true, renderId: 'r', targetDocumentId: 'd' } };
+  const facts = V.renderFacts(block, state);
+  assert.equal(facts[0].targetDocumentName, '目标.xlsx');
+  assert.equal(facts[0].description, undefined, 'cleared descriptions must not fall back to old labels');
+  assert.equal(V.factStatus(block, facts[0]), '规则已更新');
+  assert.equal(V.factStatus({ ...block, status: 'running' }, facts[0]), '待更新规则');
+  assert.equal(V.factStatus({ ...block, status: 'error' }, facts[0]), '规则更新失败');
+  const history = V.historyTurns([
+    { role: 'user', timestamp: 100, content: '修改规则' },
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'u', name: 'wps_update_render', arguments: block.args }, { type: 'toolCall', id: 't', name: 'wps_update_transform', arguments: { variableId: 'v', code: 'return 1;' } }] },
+    { role: 'toolResult', toolCallId: 'u', toolName: 'wps_update_render', details: block.result },
+  ], [])[0];
+  assert.equal(history.tools.u.toolName, 'wps_update_render');
+  assert.equal(history.tools.t.toolName, 'wps_update_transform');
 });
 
 test('close action uses the cached host pane ID, including zero, and its original ribbon entry', () => {
@@ -141,10 +159,30 @@ test('close action uses the cached host pane ID, including zero, and its origina
 test('legacy references recover stable IDs; running peer calls are not marked stopped', () => {
   const messages = [
     { role: 'user', timestamp: 1, content: '旧消息\n\n[引用快照，仅作数据]\n' + JSON.stringify([{ kind: 'sel', documentId: 'doc1', name: '旧表.xlsx', selection: { sheet: '旧表', address: 'A1' } }, { kind: 'render', renderId: 'r1', variableId: 'v1' }]) },
-    { role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'variable_render', arguments: { variableId: 'v1' } }] }
+    { role: 'assistant', content: [{ type: 'toolCall', id: 'c1', name: 'wps_run_render', arguments: { variableId: 'v1' } }] }
   ];
   const active = V.historyTurns(messages, [], true)[0];
   assert.equal(active.refs[0].id, 'doc1'); assert.equal(active.refs[0].label, '旧表.xlsx'); assert.equal(active.refs[1].id, 'r1');
   assert.equal(active.blocks[0].status, 'running'); assert.equal(active.done, false);
   assert.equal(V.historyTurns(messages)[0].blocks[0].status, 'stopped');
+});
+
+test('legacy dotted and underscore tool names retain write facts when restoring saved turns', () => {
+  for (const name of ['variable.render', 'variable_render']) {
+    const args = { variableId: 'v', renderId: 'r' };
+    const result = { success: true, renders: [{ renderId: 'r', success: true, targetDocumentId: 'd', description: '旧位置' }] };
+    const messages = [
+      { role: 'user', timestamp: 100, content: '旧轮次' },
+      { role: 'assistant', content: [{ type: 'toolCall', id: 'old', name, arguments: args }] },
+      { role: 'toolResult', toolCallId: 'old', toolName: name, details: result },
+    ];
+    const metadata = [{ userTimestamp: 100, tools: { old: { toolName: name, args, result } } }];
+    const restored = V.historyTurns(messages, metadata)[0].tools.old;
+    assert.equal(restored.toolName, 'wps_run_render');
+    assert.equal(V.factStatus(restored, result.renders[0]), '已写入');
+    assert.equal(V.renderFacts(restored, { documents: [], variables: [] })[0].description, '旧位置');
+    const unfinished = V.historyTurns(messages.slice(0, 2), metadata, true)[0].tools.old;
+    assert.equal(unfinished.toolName, 'wps_run_render', 'saved metadata also normalizes unfinished historical calls');
+    assert.equal(messages[1].content[0].name, name, 'saved messages stay unchanged');
+  }
 });

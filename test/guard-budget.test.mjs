@@ -4,7 +4,7 @@ import { createGuardBudget, GUARD_RETRY_LIMIT } from "../dist/src/guard-budget.j
 
 /**
  * The budget is charged per *model round*, because one assistant message can fire several
- * `wps.exec` calls in parallel. These tests pin that behaviour: a regression here is what
+ * `wps_run_readonly_code` calls in parallel. These tests pin that behaviour: a regression here is what
  * aborted a whole session after two mistakes instead of three.
  */
 

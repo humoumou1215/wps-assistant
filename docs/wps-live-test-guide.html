@@ -125,7 +125,7 @@
         <li><strong>启动测试 MCP 服务。</strong>服务只用临时数据目录，并同时提供 MCP HTTP 接口和 WPS Add-in WebSocket 接口。</li>
         <li><strong>生成临时测试文件。</strong><code>create-fixtures.py</code> 制作 `.xlsx`、`.pptx` 和 `.docx` 输入文件。这些是固定测试输入，不是伪造的 WPS API 返回值。</li>
         <li><strong>真的打开 WPS。</strong>ET/WPP 和 Writer 使用独立命令；脚本用 macOS 的 <code>open</code> 打开临时文件，并轮询 MCP 等待对应 Add-in 注册。</li>
-        <li><strong>做题和检查。</strong>使用 MCP 客户端调用 <code>workspace.list_documents</code>、<code>document.get</code>、<code>wps.exec</code>、Transform 和 Render。</li>
+        <li><strong>做题和检查。</strong>使用 MCP 客户端调用 <code>wps_list_documents</code>、<code>wps_get_document</code>、<code>wps_run_readonly_code</code>、Transform 和 Render。</li>
         <li><strong>清理。</strong>修改只写入临时文件副本；脚本保存副本、关闭 WPS、停止测试服务并删除临时目录。若 WPS 没有正常退出，脚本会保留临时目录，避免删掉 WPS 仍在使用的文件。</li>
       </ol>
       <p class="callout warning"><strong>端口小知识：</strong>WPS 现有注册的 Add-in 页面仍从 <code>18766</code> 取静态文件；这次真正的 MCP 和 WebSocket 测试流量走独立的 <code>18767</code>。不是把正式文档发给测试服务。</p>
@@ -204,13 +204,13 @@ return {
       <table>
         <thead><tr><th>工具</th><th>小孩版解释</th><th>这次怎么用</th></tr></thead>
         <tbody>
-          <tr><td><code>transform.create</code></td><td>写一张“读取说明卡”。</td><td>保存只读 JavaScript 代码。</td></tr>
-          <tr><td><code>variable.transform</code></td><td>照说明去 WPS 读取东西，装进小盒子。</td><td>取得测试 token，或读取工作簿的数据。</td></tr>
-          <tr><td><code>render.create</code></td><td>写一张“修改说明卡”。</td><td>保存有意要写入临时文档的代码。</td></tr>
-          <tr><td><code>variable.render</code></td><td>真正照修改卡去做，然后报告结果。</td><td>写公式、改格式、加文本框。</td></tr>
+          <tr><td><code>wps_create_variable</code></td><td>写一张“读取说明卡”。</td><td>保存只读 JavaScript 代码。</td></tr>
+          <tr><td><code>wps_run_transform</code></td><td>照说明去 WPS 读取东西，装进小盒子。</td><td>取得测试 token，或读取工作簿的数据。</td></tr>
+          <tr><td><code>wps_create_render</code></td><td>写一张“修改说明卡”。</td><td>保存有意要写入临时文档的代码。</td></tr>
+          <tr><td><code>wps_run_render</code></td><td>真正照修改卡去做，然后报告结果。</td><td>写公式、改格式、加文本框。</td></tr>
         </tbody>
       </table>
-      <p>项目规定：<code>wps.exec</code> 和 Transform 用来读；有意修改文档的操作放在 Render。测试也遵守这条规则。</p>
+      <p>项目规定：<code>wps_run_readonly_code</code> 和 Transform 用来读；有意修改文档的操作放在 Render。测试也遵守这条规则。</p>
     </section>
 
     <section>

@@ -89,25 +89,25 @@ test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only cal
 
     const tools = await client.listTools();
     assert.deepEqual(tools.tools.map((tool) => tool.name), [
-      "workspace.list_documents", "document.get", "wps.exec", "transform.create",
-      "render.create", "variable.get", "variable.transform", "variable.render",
+      "wps_list_documents", "wps_get_document", "wps_run_readonly_code", "wps_create_variable", "wps_update_transform",
+      "wps_create_render", "wps_update_render", "wps_get_variable", "wps_run_transform", "wps_run_render",
     ]);
 
-    const listed = callText(await client.callTool({ name: "workspace.list_documents", arguments: {} }));
+    const listed = callText(await client.callTool({ name: "wps_list_documents", arguments: {} }));
     assert.equal(listed.documents.length, 1);
     const documentId = listed.documents[0].documentId;
     assert.equal(listed.documents[0].name, workbook.Name);
 
-    const document = callText(await client.callTool({ name: "document.get", arguments: { documentId } }));
+    const document = callText(await client.callTool({ name: "wps_get_document", arguments: { documentId } }));
     assert.equal(document.activeSheet, "Sheet1");
     assert.equal(document.selection.address, "A1:B2");
 
-    const query = callText(await client.callTool({ name: "wps.exec", arguments: {
+    const query = callText(await client.callTool({ name: "wps_run_readonly_code", arguments: {
       documentId, code: "return { name: Application.ActiveWorkbook.Name, version: Application.Version };",
     } }));
     assert.deepEqual(query.result, { name: workbook.Name, version: "12.0" });
 
-    const blocked = await client.callTool({ name: "wps.exec", arguments: {
+    const blocked = await client.callTool({ name: "wps_run_readonly_code", arguments: {
       documentId, code: "Application.ActiveSheet.Range('A1').Value2 = 'not allowed'; return true;",
     } });
     assert.equal(blocked.isError, true);
@@ -115,7 +115,7 @@ test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only cal
 
     // A single call must surface every violation, not just the first one: the tool result is what
     // the agent corrects against, and a fail-fast guard forces one round trip per violation.
-    const blockedBatch = await client.callTool({ name: "wps.exec", arguments: {
+    const blockedBatch = await client.callTool({ name: "wps_run_readonly_code", arguments: {
       documentId, code: "let i = 0; i++;\nconst o = {}; o.a = 1;\nconst d = new Date();\nreturn { i: i, o: o, d: d };",
     } });
     assert.equal(blockedBatch.isError, true);
@@ -125,29 +125,29 @@ test("Streamable HTTP MCP tools route to a WPS Add-in and enforce query-only cal
     assert.match(batchError.message, /3 violations found/);
     assert.match(batchError.message, /line 3/);
 
-    const created = callText(await client.callTool({ name: "transform.create", arguments: {
+    const created = callText(await client.callTool({ name: "wps_create_variable", arguments: {
       variableName: "smoke data", sourceDocumentId: documentId,
       code: "return { rows: [[1, 2], [3, 4]], source: Application.ActiveWorkbook.Name };",
     } }));
     assert.equal(created.success, true);
     const variableId = created.variableId;
-    const before = callText(await client.callTool({ name: "variable.get", arguments: { variableId } }));
+    const before = callText(await client.callTool({ name: "wps_get_variable", arguments: { variableId } }));
     assert.equal(before.name, "smoke data");
     assert.equal(Object.hasOwn(before, "value"), false);
 
-    const transformed = callText(await client.callTool({ name: "variable.transform", arguments: { variableId } }));
+    const transformed = callText(await client.callTool({ name: "wps_run_transform", arguments: { variableId } }));
     assert.deepEqual(transformed.value, { rows: [[1, 2], [3, 4]], source: workbook.Name });
 
-    const render = callText(await client.callTool({ name: "render.create", arguments: {
+    const render = callText(await client.callTool({ name: "wps_create_render", arguments: {
       variableId, targetDocumentId: documentId,
       code: "Application.ActiveSheet.Range('A1').Value2 = variable.value.rows; return { updated: true };",
     } }));
     assert.equal(render.success, true);
-    const rendered = callText(await client.callTool({ name: "variable.render", arguments: { variableId, renderId: render.renderId } }));
+    const rendered = callText(await client.callTool({ name: "wps_run_render", arguments: { variableId, renderId: render.renderId } }));
     assert.equal(rendered.success, true);
     assert.deepEqual(appState.writtenValue, [[1, 2], [3, 4]]);
 
-    const after = callText(await client.callTool({ name: "variable.get", arguments: { variableId } }));
+    const after = callText(await client.callTool({ name: "wps_get_variable", arguments: { variableId } }));
     assert.deepEqual(after.value, transformed.value);
     assert.equal(after.renders.length, 1);
     assert.ok(serverLog.split(/\r?\n/).filter(Boolean).some(line => { try { const record = JSON.parse(line); return record.event === 'document.registered' && record.documentId === 'doc_001'; } catch { return false; } }));

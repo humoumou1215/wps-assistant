@@ -440,7 +440,7 @@
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeMention(); pinnedRef = undefined; hideRefPop(); } });
   function factsHTML(block) {
-    if (!['variable.render', 'render.create'].includes(block.toolName)) return '';
+    if (!['wps_run_render', 'wps_create_render', 'wps_update_render'].includes(block.toolName)) return '';
     const facts = V.renderFacts(block, state);
     return facts.length ? '<div class="tool-facts">' + facts.map(f => {
       const status = V.factStatus(block, f), error = f.error || (status.includes('失败') ? block.result?.error : undefined);
@@ -459,7 +459,7 @@
     $('chatInner').innerHTML = turns.length ? turns.map(t => {
       const lastText = t.blocks.map(b => b.kind).lastIndexOf('text'), processes = t.blocks.filter((_, i) => i !== lastText), tools = t.blocks.filter(b => b.kind === 'tool');
       const group = processes.length ? '<details class="process-group" data-detail="group-' + esc(t.key) + '" ' + (lastText < 0 ? 'open' : '') + '><summary>过程详情 · ' + processes.length + ' 条 · ' + tools.length + ' 次工具调用' + (tools.some(b => b.status === 'error') ? ' · 含失败' : '') + '</summary><div class="blocks">' + t.blocks.map((b, i) => i === lastText ? '' : blockHTML(b, t, i)).join('') + '</div></details>' : '';
-      const recap = tools.filter(b => b.toolName === 'variable.render').map(factsHTML).join('');
+      const recap = tools.filter(b => b.toolName === 'wps_run_render').map(factsHTML).join('');
       const legacyRefs = t.refs.length && !t.refs.some(r => r.marker) ? '<div class="refline">' + t.refs.map((r, n) => '<button class="ref" data-ref-marker="legacy-' + n + '">@ ' + esc(r.label || r.name || r.id || r.variableId || r.renderId) + '</button>').join('') + '</div>' : '';
       return '<section class="turn" data-turn="' + esc(t.key) + '"><div class="msg-user"><div class="bubble">' + V.userHTML(t.user, t.refs) + legacyRefs + '</div><div class="msg-meta"><span>' + clock(t.timestamp) + '</span><button data-copy-turn="' + esc(t.key) + '">复制</button><button data-quote-turn="' + esc(t.key) + '">引用以继续</button></div></div><div class="msg-assistant"><div class="model-line">' + esc(t.model || config?.model.id || 'WPS 助手') + (!t.done ? ' · 正在处理…' : '') + '</div>' +
         (t.done ? group + (recap ? '<div class="turn-writes" aria-label="本轮写入结果">' + recap + '</div>' : '') + (lastText >= 0 ? blockHTML(t.blocks[lastText], t, lastText) : '') : '<div class="blocks">' + t.blocks.map((b, i) => blockHTML(b, t, i)).join('') + '</div>') +

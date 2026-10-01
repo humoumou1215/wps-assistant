@@ -2,8 +2,14 @@
 (() => {
   'use strict';
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const toolNames = ['workspace.list_documents', 'document.get', 'wps.exec', 'transform.create', 'render.create', 'variable.get', 'variable.transform', 'variable.render'];
-  const toolName = name => toolNames.find(n => n.replaceAll('.', '_') === name) || name;
+  const legacyToolNames = Object.fromEntries([
+    ['workspace.list_documents', 'wps_list_documents'], ['document.get', 'wps_get_document'],
+    ['wps.exec', 'wps_run_readonly_code'], ['transform.create', 'wps_create_variable'],
+    ['transform.update', 'wps_update_transform'], ['render.create', 'wps_create_render'],
+    ['render.update', 'wps_update_render'], ['variable.get', 'wps_get_variable'],
+    ['variable.transform', 'wps_run_transform'], ['variable.render', 'wps_run_render'],
+  ].flatMap(([old, name]) => [[old, name], [old.replaceAll('.', '_'), name]]));
+  const toolName = name => Object.prototype.hasOwnProperty.call(legacyToolNames, name) ? legacyToolNames[name] : name;
   const jsonPreview = value => { const text = JSON.stringify(value, null, 2) ?? '尚未取值'; return text.length > 12000 ? text.slice(0, 12000) + '\n…预览已截断' : text; };
   function highlight(code) {
     const pattern = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`|\b(?:const|let|var|return|if|else|for|while|function|throw|new|try|catch|true|false|null|undefined|await)\b/g;
@@ -150,7 +156,7 @@
           if (block.type === 'thinking') turn.blocks.push({ kind: 'thinking', text: block.thinking });
           if (block.type === 'toolCall') {
             const saved = metas.get(turn.key)?.tools?.[block.id] || {};
-            const tool = { kind: 'tool', id: block.id, toolName: toolName(block.name), args: block.arguments, status: 'stopped', ...saved };
+            const tool = { kind: 'tool', id: block.id, args: block.arguments, status: 'stopped', ...saved, toolName: toolName(saved.toolName || block.name) };
             turn.blocks.push(tool); turn.tools[block.id] = tool;
           }
         }
@@ -165,12 +171,17 @@
     const value = resultValue(block.result), variable = state.variables.find(v => v.variableId === block.args?.variableId);
     // Historical success facts come from the result/saved call, never latest execution metadata.
     const saved = block.facts ?? (block.status === 'running' ? variable?.renders.filter(r => !block.args.renderId || r.renderId === block.args.renderId) : []) ?? [];
-    const results = value?.renders || (block.toolName === 'render.create' && value?.renderId ? [{ renderId: value.renderId, ...block.args }] : []);
+    const results = value?.renders || (block.toolName === 'wps_create_render' && value?.renderId ? [{ renderId: value.renderId, ...block.args }] : block.toolName === 'wps_update_render' && value?.renderId ? [{ ...value, description: value.description ?? undefined }] : []);
     const facts = results.length ? results.map(r => ({ ...saved.find(s => s.renderId === r.renderId), ...r })) : saved;
     return facts.map(f => ({ ...f, targetDocumentName: f.targetDocumentName || state.documents.find(d => d.documentId === f.targetDocumentId)?.name || f.targetDocumentId || '目标未标注' }));
   }
   function factStatus(block, fact) {
-    if (block.toolName === 'render.create') {
+    if (block.toolName === 'wps_update_render') {
+      if (block.status === 'running') return '待更新规则';
+      if (block.status === 'error') return '规则更新失败';
+      return block.status === 'done' && resultValue(block.result)?.success === true ? '规则已更新' : '未确认更新';
+    }
+    if (block.toolName === 'wps_create_render') {
       if (block.status === 'running') return '待绑定';
       if (block.status === 'error') return '绑定失败';
       return block.status === 'done' && resultValue(block.result)?.renderId ? '已绑定' : '未确认绑定';

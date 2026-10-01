@@ -90,17 +90,17 @@ Render 管理
 所有文档查询通过：
 
 ```text
-wps.exec
+wps_run_readonly_code
 ```
 
 执行。
 
-`wps.exec` 原则上只允许查询。
+`wps_run_readonly_code` 原则上只允许查询。
 
 所有修改文档的操作必须通过：
 
 ```text
-variable.render
+wps_run_render
 ```
 
 执行。
@@ -108,7 +108,7 @@ variable.render
 即：
 
 ```text
-wps.exec
+wps_run_readonly_code
     → 查询
 
 transform
@@ -168,29 +168,44 @@ MCP Server 必须维护当前可操作文档列表。
 
 # 4. MCP Tools
 
-第一版提供 8 个 Tool：
+当前提供 10 个 Tool（在第一版 8 个工具上增加规则更新）：
 
 ```text
 Workspace
-└── workspace.list_documents
+└── wps_list_documents
 
 Document
-├── document.get
-└── wps.exec
+├── wps_get_document
+└── wps_run_readonly_code
 
 Definition
-├── transform.create
-└── render.create
+├── wps_create_variable
+├── wps_update_transform
+├── wps_create_render
+└── wps_update_render
 
 Variable
-├── variable.get
-├── variable.transform
-└── variable.render
+├── wps_get_variable
+├── wps_run_transform
+└── wps_run_render
 ```
+
+## 已有规则的更新
+
+| 工具 | 必填参数 | 可更新字段 |
+| --- | --- | --- |
+| `wps_update_transform` | `variableId` | `variableName`、`description`（变量描述）、`sourceDocumentId`、`sourceRef`、`code` |
+| `wps_update_render` | `variableId`、`renderId` | `targetDocumentId`、`description`（写入位置）、`code` |
+
+至少提供一个更新字段；省略字段保持原值，`description` 和 `sourceRef` 可用 `null` 清除。更新保留变量 ID、规则 ID 和其他 Render 绑定，只保存定义，不执行 WPS 代码；同一变量的更新、执行与面板删除串行处理，保存失败保留原定义。
+
+Transform 的代码、来源文档或源区域变化会清除旧值（`hasValue=false`）及上次重算时间，必须先 `wps_run_transform` 重算才能重写。只修改名称或变量描述保留当前值。Render 的代码、目标或位置描述变化会清除该 Render 的上次执行时间，之后用明确 `renderId` 调用 `wps_run_render`；已有文档内容不会自动撤销或清除。
+
+纠正规则前通过 `wps_get_variable` 读取完整定义。其响应包含 `hasValue`、Transform/Render 的 `code` 和可选 `lastRun`；无有效值时省略 `value`。保留原文档绑定的更新可离线保存；显式指定来源或目标文档时验证其在线状态。
 
 ---
 
-# 5. workspace.list_documents
+# 5. wps_list_documents
 
 ## 5.1 用途
 
@@ -254,7 +269,7 @@ Agent 后续所有文档操作都应该使用 `documentId`，不能依赖文件�
 
 ---
 
-# 6. document.get
+# 6. wps_get_document
 
 ## 6.1 用途
 
@@ -317,7 +332,7 @@ Agent 后续所有文档操作都应该使用 `documentId`，不能依赖文件�
 
 ---
 
-# 7. wps.exec
+# 7. wps_run_readonly_code
 
 ## 7.1 用途
 
@@ -393,9 +408,9 @@ interface WpsExecRequest {
 
 ## 7.4 约束
 
-`wps.exec` 第一版只用于查询。
+`wps_run_readonly_code` 第一版只用于查询。
 
-不允许 Agent 通过 `wps.exec` 修改文档。
+不允许 Agent 通过 `wps_run_readonly_code` 修改文档。
 
 例如以下行为应该禁止：
 
@@ -412,7 +427,7 @@ slide.Shapes.Add...
 
 静态检查一次列出**全部**违规，而不是遇到第一处就抛出。报文给出总数，并逐条带 `kind`、行列号、源码行、成因与可行改写；同一份结构化数据同时挂在错误的 `details.violations` 上。
 
-这是刻意设计：`wps.exec` 的失败信息是 Agent 修正代码的**唯一依据**，一次只报一处会把一次修正拆成多轮往返（"改一处 → 报一处 → 再改一处"）。实现上由 `analyzeReadOnlyCode()` 收集全部违规、`assertReadOnlyCode()` 统一抛出。
+这是刻意设计：`wps_run_readonly_code` 的失败信息是 Agent 修正代码的**唯一依据**，一次只报一处会把一次修正拆成多轮往返（"改一处 → 报一处 → 再改一处"）。实现上由 `analyzeReadOnlyCode()` 收集全部违规、`assertReadOnlyCode()` 统一抛出。
 
 ### 7.4.2 判据的单一来源
 
@@ -426,7 +441,7 @@ slide.Shapes.Add...
 
 ---
 
-# 8. transform.create
+# 8. wps_create_variable
 
 ## 8.1 用途
 
@@ -483,7 +498,7 @@ interface TransformCreateRequest {
 
 ## 8.4 注意
 
-`transform.create`：
+`wps_create_variable`：
 
 ```text
 只创建规则
@@ -493,14 +508,14 @@ interface TransformCreateRequest {
 创建完成后 Agent 应调用：
 
 ```text
-variable.transform
+wps_run_transform
 ```
 
 验证 Transform 是否正确。
 
 ---
 
-# 9. render.create
+# 9. wps_create_render
 
 ## 9.1 用途
 
@@ -558,7 +573,7 @@ interface RenderCreateRequest {
 
 ## 9.4 注意
 
-`render.create`：
+`wps_create_render`：
 
 ```text
 只保存 Render
@@ -568,14 +583,14 @@ interface RenderCreateRequest {
 需要调用：
 
 ```text
-variable.render
+wps_run_render
 ```
 
 才真正执行。
 
 ---
 
-# 10. variable.get
+# 10. wps_get_variable
 
 ## 10.1 用途
 
@@ -626,7 +641,7 @@ variable.render
 
 ---
 
-# 11. variable.transform
+# 11. wps_run_transform
 
 ## 11.1 用途
 
@@ -635,7 +650,7 @@ variable.render
 流程：
 
 ```text
-variable.transform(var_001)
+wps_run_transform(var_001)
 
         ↓
 
@@ -709,7 +724,7 @@ variable.transform(var_001)
 
 ---
 
-# 12. variable.render
+# 12. wps_run_render
 
 ## 12.1 用途
 
@@ -945,7 +960,7 @@ WPS JS API
 例如：
 
 ```text
-wps.exec(
+wps_run_readonly_code(
     documentId = doc_excel_001
 )
 
@@ -975,7 +990,7 @@ Agent 应执行：
 查询当前文档：
 
 ```text
-workspace.list_documents()
+wps_list_documents()
 ```
 
 得到：
@@ -990,7 +1005,7 @@ doc_ppt_001   → 经营汇报.pptx
 查询 Excel：
 
 ```text
-wps.exec(
+wps_run_readonly_code(
     documentId = doc_excel_001
 )
 ```
@@ -1017,7 +1032,7 @@ UsedRange
 查询 PPT：
 
 ```text
-wps.exec(
+wps_run_readonly_code(
     documentId = doc_ppt_001
 )
 ```
@@ -1043,7 +1058,7 @@ Slide 3
 创建 Variable + Transform：
 
 ```text
-transform.create(...)
+wps_create_variable(...)
 ```
 
 得到：
@@ -1057,7 +1072,7 @@ variableId = var_001
 立即执行：
 
 ```text
-variable.transform(var_001)
+wps_run_transform(var_001)
 ```
 
 确认得到：
@@ -1088,7 +1103,7 @@ Agent 修改 Transform
 创建 Render：
 
 ```text
-render.create(...)
+wps_create_render(...)
 ```
 
 得到：
@@ -1102,7 +1117,7 @@ render_001
 执行：
 
 ```text
-variable.render(
+wps_run_render(
     var_001,
     render_001
 )
@@ -1147,7 +1162,7 @@ Agent 不需要自己猜“当前选区”属于哪个 WPS 实例。
 Agent 可以继续通过：
 
 ```text
-wps.exec(doc_excel_001, ...)
+wps_run_readonly_code(doc_excel_001, ...)
 ```
 
 调查该区域。
@@ -1244,40 +1259,57 @@ Render 能正确执行
 最终只需要：
 
 ```text
-workspace.list_documents()
+wps_list_documents()
 
-document.get(
+wps_get_document(
     documentId
 )
 
-wps.exec(
+wps_run_readonly_code(
     documentId,
     code
 )
 
-transform.create(
+wps_create_variable(
     variableName,
     description,
     sourceDocumentId,
     code
 )
 
-render.create(
+wps_create_render(
     variableId,
     targetDocumentId,
     description,
     code
 )
 
-variable.get(
+wps_update_transform(
+    variableId,
+    variableName?,
+    description?,
+    sourceDocumentId?,
+    sourceRef?,
+    code?
+)
+
+wps_update_render(
+    variableId,
+    renderId,
+    targetDocumentId?,
+    description?,
+    code?
+)
+
+wps_get_variable(
     variableId
 )
 
-variable.transform(
+wps_run_transform(
     variableId
 )
 
-variable.render(
+wps_run_render(
     variableId,
     renderId?
 )
@@ -1290,7 +1322,7 @@ variable.render(
 Agent 可以自由使用 WPS JS API，但必须遵守三个边界：
 
 ```text
-1. wps.exec
+1. wps_run_readonly_code
    只能调查文档。
 
 2. transform
@@ -1304,12 +1336,12 @@ Agent 可以自由使用 WPS JS API，但必须遵守三个边界：
 
 ```text
                 查询
-Agent ─────────────────→ wps.exec
+Agent ─────────────────→ wps_run_readonly_code
   │
   │ 创建规则
-  ├────────────────────→ transform.create
+  ├────────────────────→ wps_create_variable
   │
-  └────────────────────→ render.create
+  └────────────────────→ wps_create_render
 
 
                  运行阶段

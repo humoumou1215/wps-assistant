@@ -50,7 +50,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       if (c1 > 16384 || c2 > 16384 || r1 < 1 || r2 < r1 || r2 > 1048576 || c2 < c1) throw new Error("选区地址无效");
       const address = `${columnName(c1)}${r1}:${columnName(Math.min(c2, c1 + 5))}${Math.min(r2, r1 + 4)}`;
       // Read a bounded snapshot through the same guarded executor; never follow ActiveSheet/Selection.
-      const result = await callTool("wps.exec", { documentId: doc.documentId, code: `return Application.Workbooks.Item(${JSON.stringify(doc.name)}).Worksheets.Item(${JSON.stringify(sheet)}).Range(${JSON.stringify(address)}).Value2;` });
+      const result = await callTool("wps_run_readonly_code", { documentId: doc.documentId, code: `return Application.Workbooks.Item(${JSON.stringify(doc.name)}).Worksheets.Item(${JSON.stringify(sheet)}).Range(${JSON.stringify(address)}).Value2;` });
       const value = JSON.parse(result.content[0].text);
       if (result.isError) { json(res, 422, value); return; }
       json(res, 200, { hasValue: true, value: value.result, address, truncated: c2 - c1 >= 6 || r2 - r1 >= 5 }); return;
@@ -66,7 +66,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
     }
     if (path === "/api/actions" && req.method === "POST") {
       const { op, variableId, renderId } = z.object({ op: z.enum(["transform", "render"]), variableId: z.string().min(1), renderId: z.string().optional() }).parse(await readJson(req));
-      const result = await callTool(`variable.${op}`, { variableId, renderId });
+      const result = await callTool(op === "transform" ? "wps_run_transform" : "wps_run_render", { variableId, renderId });
       const value = JSON.parse(result.content[0].text);
       json(res, result.isError || value.success === false ? 422 : 200, value); return;
     }

@@ -45,30 +45,30 @@ def test_usage(host, name):
     if name == "Application.Selection": return "读取当前选区对象；表格可尝试 `Application.Selection.Address`。"
     if name == "Workbooks.Add": return "表格：仅在测试副本/用户明确授权的 Render 中用 `Application.Workbooks.Add()` 创建工作簿。"
     if name.startswith("Range.") and host == "wps":
-        return "文字：使用 `Application.ActiveDocument.Content` 或选区 Range 读取；写入只放在 `variable.render` 中。"
+        return "文字：使用 `Application.ActiveDocument.Content` 或选区 Range 读取；写入只放在 `wps_run_render` 中。"
     if name.startswith("Range."):
         prop = name.split(".", 1)[1].split()[0]
-        return f"表格：读取 `Application.ActiveSheet.Range('A1:B2').{prop}`；写入必须放在 `variable.render` 中。"
+        return f"表格：读取 `Application.ActiveSheet.Range('A1:B2').{prop}`；写入必须放在 `wps_run_render` 中。"
     if name == "Application.Presentations": return "演示：`return Application.Presentations.Count;`"
     if name == "Application.ActivePresentation": return "演示：`return Application.ActivePresentation.Name;`"
     if name == "Application.ActiveWindow": return "演示：`return Application.ActiveWindow.View.Slide.SlideIndex;`（属性因版本而异）。"
     if name == "Presentations.Add": return "演示：仅在临时/测试演示文稿或获授权的 Render 中调用 `Application.Presentations.Add()`。"
     if name.startswith("Shapes."):
-        return "演示：从 `Application.ActivePresentation.Slides.Item(n).Shapes` 取得集合；创建/修改仅允许在 `variable.render` 中。"
+        return "演示：从 `Application.ActivePresentation.Slides.Item(n).Shapes` 取得集合；创建/修改仅允许在 `wps_run_render` 中。"
     if name.startswith("TextFrame."):
-        return "演示：`shape.TextFrame.TextRange.Text` 读取文本；赋值只放在 `variable.render` 中。"
+        return "演示：`shape.TextFrame.TextRange.Text` 读取文本；赋值只放在 `wps_run_render` 中。"
     if name == "Application.Documents": return "文字：`return Application.Documents.Count;`"
     if name == "Application.ActiveDocument": return "文字：`return Application.ActiveDocument.Name;`"
     if name == "Documents.Add": return "文字：仅在临时/测试文档或获授权的 Render 中调用 `Application.Documents.Add()`。"
     if name.startswith("Tables.") or name.startswith("Table."):
-        return "文字：用 `Application.ActiveDocument.Tables` 遍历表格；单元格文本写入只能在 `variable.render` 中。"
+        return "文字：用 `Application.ActiveDocument.Tables` 遍历表格；单元格文本写入只能在 `wps_run_render` 中。"
     if name.startswith("Application.CreateTaskPane"):
         return "`Application.CreateTaskPane(url, title)` 创建任务窗格；报告仅验证成员存在，按需确认参数并避免信任不受信任 URL。"
     if name.startswith("Application.FileSystem"):
         return "FileSystem 是本机文件能力；只在明确授权的流程使用，文件写入不是文档查询。"
     if name.startswith("Application.ApiEvent") or name.startswith("ApiEvent."):
         return "API 事件注册/注销；报告中“listener registration succeeded”表示注册成功，不代表具体事件参数结构已验证。"
-    return "见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。"
+    return "见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。"
 
 
 with zipfile.ZipFile(ZIP) as archive:
@@ -104,14 +104,15 @@ Use this skill only for WPS JS API operations. The MCP server provides document 
 
 ## Fast path
 
-1. Call `workspace.list_documents`, then `document.get` before writing any code.
+1. Call `wps_list_documents`, then `wps_get_document` before writing any code.
 2. Read only the matching API guide: [表格](references/spreadsheet.md), [演示](references/presentation.md), or [文字](references/writer.md).
-3. Use `wps.exec` only for inspection. Create an extraction rule with `transform.create` then run `variable.transform`. Create edits using `render.create` then run `variable.render`.
+3. Use `wps_run_readonly_code` only for inspection. Create an extraction rule with `wps_create_variable` then run `wps_run_transform`. Create edits using `wps_create_render` then run `wps_run_render`.
+   For corrections, read the full code and bindings with `wps_get_variable`, then use `wps_update_transform` or `wps_update_render` to edit the existing rule, preserving IDs and bindings. Omitted fields stay unchanged; null clears description/sourceRef. Updates only save rules. Transform code/source changes invalidate the value: run `wps_run_transform` before rendering. Run an updated Render with its explicit `renderId`; previous document writes are not undone or cleared automatically.
 4. Read [通用 API 与事件](references/common.md) only if needed. Open [完整 API 清单](references/api-catalog.md) only to look up a less common member.
 
 ## Hard boundaries
 
-- `wps.exec` and Transform are read-only. Do not attempt property assignment, object construction, file I/O, or mutating methods.
+- `wps_run_readonly_code` and Transform are read-only. Do not attempt property assignment, object construction, file I/O, or mutating methods.
 - Only a Render may modify a WPS document. Confirm the target document, range/shape, and replacement content before execution.
 - API availability differs by host and WPS version. The diagnostic reports are WPS 12.0 / Build 26885 on UOS Linux ARM64, not this Mac. Treat report support as a platform-specific observation, not a cross-platform guarantee.
 - The complete member catalog records enumerable members and candidate-presence checks; member enumeration is not equivalent to invoking/testing the API. Explicit behavior probes and their reported statuses are in each host guide.
@@ -176,7 +177,7 @@ for key, (host, zh, full) in HOSTS.items():
             for item in items:
                 rows.append([obj, item.get("name", ""), STATUS.get(item.get("status"), item.get("status", "")), item.get("type", "")])
     lines.extend(md_table(rows, ["对象", "成员", "存在状态", "类型"]).splitlines())
-    lines += ["", "## 应用侧建议", "", "- 使用 `documentId` 定位文档，不要以文件名路由。", "- 先检查活动对象、集合 Count 与目标名称；集合通常用 1-based `Item(index)`。", "- 读 Range/表格/图表时控制输出规模，只返回标量、数组、普通 JSON 对象。", "- API 返回 COM/WPS 宿主代理对象时不要直接 `return object`；显式映射为 JSON 字段。", "- 本目录中带 `write` 的探测仅说明诊断工具在临时文档上完成操作；对 MCP 调用仍需严格遵循 `variable.render` 边界。", ""]
+    lines += ["", "## 应用侧建议", "", "- 使用 `documentId` 定位文档，不要以文件名路由。", "- 先检查活动对象、集合 Count 与目标名称；集合通常用 1-based `Item(index)`。", "- 读 Range/表格/图表时控制输出规模，只返回标量、数组、普通 JSON 对象。", "- API 返回 COM/WPS 宿主代理对象时不要直接 `return object`；显式映射为 JSON 字段。", "- 本目录中带 `write` 的探测仅说明诊断工具在临时文档上完成操作；对 MCP 调用仍需严格遵循 `wps_run_render` 边界。", ""]
     (REF / f"{host}.md").write_text("\n".join(lines), encoding="utf-8")
 
 # Common API/event test matrix
@@ -195,7 +196,7 @@ for name in common_names:
     rows.append(row)
 common = """# 通用 API 与事件
 
-此处汇总三个宿主对通用 `Application` 候选项的观测；WPS版本/平台差异会造成缺失。使用 API 前先在目标宿主通过 `wps.exec` 检查类型。对于函数，表中只列函数存在性，参数签名不由诊断快照证明。
+此处汇总三个宿主对通用 `Application` 候选项的观测；WPS版本/平台差异会造成缺失。使用 API 前先在目标宿主通过 `wps_run_readonly_code` 检查类型。对于函数，表中只列函数存在性，参数签名不由诊断快照证明。
 
 ## Application / ApiEvent 通用项
 

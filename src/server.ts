@@ -59,7 +59,7 @@ async function httpHandler(req: IncomingMessage, res: ServerResponse) {
   if (url.pathname === "/mcp") { await handleMcpHttp(req, res); return; }
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
-    // Count only usable documents so /health matches workspace.list_documents.
+    // Count only usable documents so /health matches wps_list_documents.
     res.end(JSON.stringify({ ok: true, connections: connections.size, documents: [...documents.values()].filter((doc) => doc.connected).length }));
     return;
   }

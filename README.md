@@ -12,7 +12,7 @@
 
 ## 一眼看懂
 
-用浏览器打开 [`docs/show-me-wps-mcp.html`](docs/show-me-wps-mcp.html)：一页了解两种使用入口、8 个工具、Transform / Variable / Render、读写边界和运行日志。GitHub 的 HTML 文件页显示源代码，克隆仓库后可直接打开本地 HTML 预览。
+用浏览器打开 [`docs/show-me-wps-mcp.html`](docs/show-me-wps-mcp.html)：一页了解两种使用入口、核心工具、Transform / Variable / Render、读写边界和运行日志。GitHub 的 HTML 文件页显示源代码，克隆仓库后可直接打开本地 HTML 预览。
 
 ## 环境要求
 
@@ -24,7 +24,7 @@
 
 ```text
 WPS 助手面板 → /api/chat → 内嵌 pi Agent ──┐
-                                        ├→ 共用 8 个工具 → WebSocket /ws → WPS Add-in → WPS JS API
+                                        ├→ 共用 10 个工具 → WebSocket /ws → WPS Add-in → WPS JS API
 外部 MCP 客户端 → /mcp 或 stdio ──────────┘
 ```
 
@@ -93,7 +93,7 @@ curl http://127.0.0.1:18766/health
 curl http://127.0.0.1:18766/addins/et/      # 返回 Add-in 任务面板 HTML
 ```
 
-本地调试不依赖真实 WPS 宿主时，可用内置的模拟 Add-in harness 跑通全部 8 个 Tool 与错误分支：
+本地调试不依赖真实 WPS 宿主时，可用内置的模拟 Add-in harness 跑通创建、读取、执行工具与错误分支：
 
 ```bash
 npm start              # 另开一个终端
@@ -120,7 +120,7 @@ harness 只验证 MCP/WebSocket/桥接层，**不代表** WPS JS API 的真实�
 - **变量**：默认「展示当前」，只展示源文档或任一 Render 目标文档在线的变量；「展示全部」可查看本机历史变量。统计和全部重算/重写使用当前模式的范围，搜索及源文档标签只筛选列表；批量操作跳过离线源/目标，重写还会跳过没有当前值的变量。卡片始终保留全部 Render，离线绑定标注「已断开」。变量和每条 Render 均可原位点击「删除」再点「确认」；点击外部取消，只删除本机定义和绑定，保留文档已写入内容。多条 Render 分别报告成功与失败；停止生成不回滚已完成的写入。
 - **设置**：DeepSeek 内置目录、自定义模型和协议、思考等级、兼容参数、额外 Headers。配置修订检查防止旧面板覆盖新配置；发生冲突时加载最新配置。更换端点不会自动沿用旧密钥与请求头；读取配置只返回凭据存在标记。
 
-同一桥接服务共用一份助手会话，同时只运行一个聊天轮次或配置操作。服务启动时自动将项目 `skills/`（包含参考资料）安装到应用数据目录的 `pi/skills/`，通过安装清单更新随项目提供的文件、清理已撤下的内置文件，并保留其他已安装技能及用户新增资料。清单建立前遗留的文件不会被推断为内置文件后删除。内嵌 Agent 加载该目录中的技能，挂载八个 WPS 工具和一个仅限技能目录的 `read` 工具，按需读取技能正文和参考资料；终端、通用文件写入和外部资源自动发现保持关闭，不读取 `~/.pi`。
+同一桥接服务共用一份助手会话，同时只运行一个聊天轮次或配置操作。服务启动时自动将项目 `skills/`（包含参考资料）安装到应用数据目录的 `pi/skills/`，通过安装清单更新随项目提供的文件、清理已撤下的内置文件，并保留其他已安装技能及用户新增资料。清单建立前遗留的文件不会被推断为内置文件后删除。内嵌 Agent 加载该目录中的技能，挂载十个 WPS 工具和一个仅限技能目录的 `read` 工具，按需读取技能正文和参考资料；终端、通用文件写入和外部资源自动发现保持关闭，不读取 `~/.pi`。
 
 会话顶部提供「系统」「技能」「工具」入口，可查看当前会话实际使用的完整系统提示词、已安装技能的描述和正文，以及启用工具的说明与参数定义。查看这些资源无需填写 API Key，也不会请求模型。
 
@@ -172,22 +172,30 @@ tail -n 30 -f "$HOME/Library/Application Support/wps-mcp/logs/wps-mcp.log"
 
 该服务向客户端提供以下 MCP 工具：
 
-- `workspace.list_documents`
-- `document.get(documentId)`
-- `wps.exec(documentId, code)`
-- `transform.create(variableName, description?, sourceDocumentId, sourceRef?, code)`
-- `render.create(variableId, targetDocumentId, description?, code)`
-- `variable.get(variableId)`
-- `variable.transform(variableId)`
-- `variable.render(variableId, renderId?)`
+MCP 和内嵌 pi 会话使用相同的工具名，统一为 `wps_` 前缀的小写 snake_case；`create` / `update` 保存定义，`run` 执行代码或规则。升级后请重启桥接服务，并让 MCP 客户端重新发现工具。已保存会话中的旧名称在恢复显示和发送模型上下文时兼容转换，原始历史记录保留。
+
+- `wps_list_documents`
+- `wps_get_document(documentId)`
+- `wps_run_readonly_code(documentId, code)`
+- `wps_create_variable(variableName, description?, sourceDocumentId, sourceRef?, code)`
+- `wps_update_transform(variableId, variableName?, description?, sourceDocumentId?, sourceRef?, code?)`
+- `wps_create_render(variableId, targetDocumentId, description?, code)`
+- `wps_update_render(variableId, renderId, targetDocumentId?, description?, code?)`
+- `wps_get_variable(variableId)`
+- `wps_run_transform(variableId)`
+- `wps_run_render(variableId, renderId?)`
 
 ## 标准流程
 
-1. `workspace.list_documents` → 选定唯一 `documentId`。
-2. `document.get`、`wps.exec` 调查工作表、选区、幻灯片、形状或文字结构。
-3. `transform.create` 保存只读提取代码；调用 `variable.transform`，检查 JSON 值。
-4. `render.create` 保存目标文档修改代码；检查绑定后调用 `variable.render`。
-5. 可用 `variable.get` 查看最近值和所有规则。
+1. `wps_list_documents` → 选定唯一 `documentId`。
+2. `wps_get_document`、`wps_run_readonly_code` 调查工作表、选区、幻灯片、形状或文字结构。
+3. `wps_create_variable` 保存只读提取代码；调用 `wps_run_transform`，检查 JSON 值。
+4. `wps_create_render` 保存目标文档修改代码；检查绑定后调用 `wps_run_render`。
+5. 可用 `wps_get_variable` 查看最近值、是否有值，以及所有规则的完整代码和执行时间。
+
+用户纠正规则时，先 `wps_get_variable` 读取原定义，再调用 `wps_update_transform` 或 `wps_update_render` 修改原规则；变量 ID、规则 ID 和已有 Render 绑定保持不变。至少提供一个更新字段；省略字段保持原值，`description` 和 `sourceRef` 可传 `null` 清除。
+
+更新只保存规则，不执行 WPS 代码。Transform 代码、来源文档或源区域改变后会清除旧值和上次重算时间，必须先 `wps_run_transform` 重算成功，再 `wps_run_render` 写入；只改名称或描述保留当前值。Render 改变后清除该规则的上次执行时间，使用 `wps_run_render(variableId, renderId)` 单独执行更新后的规则。更新不会撤销已有文档写入，也不会自动清除旧目标位置。保留原文档绑定时，即使文档离线也可编辑规则；显式指定新的来源或目标文档时，该文档必须在线。
 
 ## 自动化测试
 
@@ -219,7 +227,7 @@ npm run test:wps-writer-live
 
 ## 安全边界
 
-- `wps.exec` 和 Transform 会用 Acorn 做只读静态检查（`src/readonly-guard.ts`），拒绝成员赋值、`new`、`delete`、以及常见写入/修改 API 方法。检查是**纯语法**的：它按节点类型与属性名匹配，不区分文档对象与本地对象 —— `const o = {}; o.a = 1`、`let i = 0; i++`、`new Date()` 同样被拒；方法黑名单按属性名匹配，因此本地对象上叫 `copy`/`sort` 的属性也会被拒。这是 best-effort 检查，不是 JavaScript 沙箱，无法阻止被绕过的恶意代码。
+- `wps_run_readonly_code` 和 Transform 会用 Acorn 做只读静态检查（`src/readonly-guard.ts`），拒绝成员赋值、`new`、`delete`、以及常见写入/修改 API 方法。检查是**纯语法**的：它按节点类型与属性名匹配，不区分文档对象与本地对象 —— `const o = {}; o.a = 1`、`let i = 0; i++`、`new Date()` 同样被拒；方法黑名单按属性名匹配，因此本地对象上叫 `copy`/`sort` 的属性也会被拒。这是 best-effort 检查，不是 JavaScript 沙箱，无法阻止被绕过的恶意代码。
 - 违规会**一次报全**：错误信息列出每条的 `kind`、行列号与源码行，结构化数据在 `error.details.violations`。判据模块可被外部工具直接 import（不必抄一份带漂移风险的副本）。
 - 内嵌助手每个聊天轮次最多消耗 3 次只读守卫违规额度，按模型轮次计数；同一模型轮次中的多个违规调用只消耗一次，用尽后中断。每次聊天重新计数；外部 MCP 工具本身不施加这份 Agent 重试额度。
 - Render 是正式的文档修改入口。JSAPI 代码在 WPS 宿主内执行，拥有 WPS 文档权限；只运行可信代码。用户已请求的写入会在核实目标和位置后执行，不增加重复确认步骤；执行结果可能部分成功，也没有自动回滚。
@@ -239,7 +247,7 @@ npm run test:wps-writer-live
 | 路径 | 职责 |
 | --- | --- |
 | `src/server.ts` | MCP、HTTP、WebSocket 和进程生命周期 |
-| `src/tools.ts` | 八个工具、文档路由、WPS RPC、变量与规则持久化 |
+| `src/tools.ts` | 十个工具、文档路由、WPS RPC、变量与规则持久化 |
 | `src/api.ts` / `src/agent.ts` | 面板 API、内嵌 Agent、聊天与工具事件 |
 | `src/config.ts` / `src/paths.ts` | 模型配置、凭据和平台数据目录 |
 | `src/logger.ts` | 结构化日志、异步写入、轮转、脱敏和上下文关联 |

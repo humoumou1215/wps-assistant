@@ -50,7 +50,7 @@ async function waitForWriterDocument(client, expectedPath, serverLogs) {
   const deadline = Date.now() + 45_000;
   let lastHealth = {};
   while (Date.now() < deadline) {
-    const result = await invoke(client, "workspace.list_documents");
+    const result = await invoke(client, "wps_list_documents");
     const documents = result.documents ?? [];
     const match = documents.find((doc) => doc.type === "writer" && doc.path &&
       (normalizedPath(doc.path) === expectedRealPath || basename(doc.path) === basename(expectedRealPath)));
@@ -68,24 +68,24 @@ async function openInWps(file) {
 }
 
 async function makeVariable(client, documentId, name, token, fullName) {
-  const created = await invoke(client, "transform.create", {
+  const created = await invoke(client, "wps_create_variable", {
     variableName: name,
     sourceDocumentId: documentId,
     code: `return { token: ${JSON.stringify(token)}, fullName: ${JSON.stringify(fullName)} };`,
   });
-  const transformed = await invoke(client, "variable.transform", { variableId: created.variableId });
+  const transformed = await invoke(client, "wps_run_transform", { variableId: created.variableId });
   assert.equal(transformed.value.token, token);
   return created.variableId;
 }
 
 async function runRender(client, variableId, targetDocumentId, description, code) {
-  const created = await invoke(client, "render.create", {
+  const created = await invoke(client, "wps_create_render", {
     variableId,
     targetDocumentId,
     description,
     code,
   });
-  const rendered = await invoke(client, "variable.render", { variableId, renderId: created.renderId });
+  const rendered = await invoke(client, "wps_run_render", { variableId, renderId: created.renderId });
   assert.equal(rendered.success, true, JSON.stringify(rendered));
   assert.equal(rendered.renders?.[0]?.success, true, JSON.stringify(rendered));
   return rendered.renders[0].result;
@@ -149,10 +149,10 @@ test("real WPS Writer Add-in executes isolated MCP queries and Render operations
   await openInWps(writerFile);
   documentOpened = true;
   const document = await waitForWriterDocument(client, writerFile, () => serverLog);
-  const state = await invoke(client, "document.get", { documentId: document.documentId });
+  const state = await invoke(client, "wps_get_document", { documentId: document.documentId });
   assert.equal(state.connected, true);
 
-  const baseline = await invoke(client, "wps.exec", {
+  const baseline = await invoke(client, "wps_run_readonly_code", {
     documentId: document.documentId,
     code: `
       const doc = Application.ActiveDocument;
@@ -194,7 +194,7 @@ test("real WPS Writer Add-in executes isolated MCP queries and Render operations
     `);
   assert.equal(renderResult.inserted, true);
 
-  const readback = await invoke(client, "wps.exec", {
+  const readback = await invoke(client, "wps_run_readonly_code", {
     documentId: document.documentId,
     code: `
       const doc = Application.ActiveDocument;
@@ -236,7 +236,7 @@ test("real WPS Writer Add-in executes isolated MCP queries and Render operations
 
   const closeDeadline = Date.now() + 15_000;
   while (Date.now() < closeDeadline) {
-    const documents = (await invoke(client, "workspace.list_documents").catch(() => ({}))).documents ?? [];
+    const documents = (await invoke(client, "wps_list_documents").catch(() => ({}))).documents ?? [];
     if (!documents.some((doc) => doc.type === "writer" && doc.path &&
       (normalizedPath(doc.path) === expectedPath || basename(doc.path) === basename(expectedPath)))) {
       documentClosed = true;

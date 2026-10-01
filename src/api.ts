@@ -47,7 +47,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       if (!doc) throw new Error("引用文档已断开");
       const selection = ref.selection as Record<string, any>;
       if (doc.type !== "spreadsheet") {
-        json(res, 200, { ref, hasValue: typeof selection.text === "string", value: selection.text, message: selection.type === "shape" ? "已引用选中的对象；位置包含页码与对象名称。" : "已显示选区位置；当前 WPS 未提供选中文字。" }); return;
+        json(res, 200, { ref, hasValue: typeof selection.text === "string", value: selection.text, truncated: selection.textTruncated === true, message: selection.type === "shape" ? "已引用选中的对象；位置包含页码与对象名称。" : "已显示选区位置；当前 WPS 未提供选中文字。" }); return;
       }
       const sheet = selection.sheet || ref.activeSheet;
       const regions = Array.isArray(selection.areas) ? selection.areas.map((area: any) => area.address) : [selection.address];

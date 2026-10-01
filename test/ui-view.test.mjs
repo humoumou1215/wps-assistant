@@ -7,6 +7,21 @@ vm.runInContext(await readFile(new URL('../addon/taskpane-view.js', import.meta.
 vm.runInContext(await readFile(new URL('../addon/pinyin-pro.js', import.meta.url), 'utf8'), context);
 const V = context.WpsPaneView;
 
+test('selection requests omit stale current text and bound fixed previews without changing coordinates', () => {
+  const ref = { kind: 'sel', id: 'd', name: '大文档.docx', selectionMode: 'current', marker: '引用1', selection: { type: 'text', text: '中'.repeat(350000), start: 0, end: 350000, storyType: 1 } };
+  const current = V.selectionRequest(ref);
+  assert.equal(current.selection, undefined); assert.equal(current.marker, '引用1');
+  assert.ok(Buffer.byteLength(JSON.stringify(current)) < 1000);
+  const fixed = V.selectionRequest({ ...ref, selectionMode: 'fixed' });
+  assert.equal(fixed.selection.text.length, 2000); assert.equal(fixed.selection.textLength, 350000);
+  assert.equal(fixed.selection.end, 350000); assert.equal(fixed.selection.textTruncated, true);
+  const batch = Array.from({ length: 30 }, () => fixed);
+  assert.ok(Buffer.byteLength(JSON.stringify(batch)) < 200000);
+  assert.match(V.selectionDetailsHTML(fixed), /选中文字预览/);
+  assert.match(V.selectionDetailsHTML(fixed), /完整位置已保留/);
+  assert.equal(ref.selection.text.length, 350000, 'request serialization must not mutate saved metadata');
+});
+
 test('selection chips follow current sheet and text ranges while fixed and sent snapshots stay put', () => {
   const state = { documents: [{ documentId: 'd', connected: true, name: '经营.xlsx', activeSheet: 'Sales', selection: { sheet: 'Sales', address: '$A$1:$B$4' } }], variables: [] };
   const refs = V.referenceCatalog(state).filter(r => r.kind === 'sel');

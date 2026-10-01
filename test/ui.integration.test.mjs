@@ -32,7 +32,7 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
     assert.equal(h.requests.at(-1).headers['x-test'], 'header-secret');
     // NTFS carries no POSIX permission bits; Node reports 0o666 for any writable file on Windows.
     if (process.platform !== 'win32') assert.equal((await stat(h.dir + '/config.json')).mode & 0o777, 0o600);
-    const stream = await (await post('/api/chat', { message: '验证绑定', refs: [{ kind: 'sel', id: 'doc_001', selection: { address: 'A1:B3' } }] })).text();
+    const stream = await (await post('/api/chat', { message: '验证绑定', refs: [{ kind: 'sel', id: 'doc_001', selection: { sheet: '销售数据', address: 'A1:B3' } }] })).text();
     assert.match(stream, /event: tool.start/); assert.match(stream, /绑定已完成/); assert.match(stream, /event: turn.end/);
     assert.equal(h.appState.written, 120);
     const state = await get('/api/state'); assert.equal(state.variables.length, 1);

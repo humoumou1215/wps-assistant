@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { getState, refreshDocument } from "./tools.js";
+import { validateSelection } from "./selection.js";
 
 export const selectionRefSchema = z.object({
   kind: z.literal("sel"), id: z.string().min(1),
@@ -24,12 +25,15 @@ export async function resolveSelectionReference(input: unknown, freshDocument?: 
   const doc = ref.selectionMode === "current" ? freshDocument ?? await refreshDocument(ref.id)
     : getState().documents.find(d => d.documentId === ref.id && d.connected);
   if (!doc) throw new Error(`引用文档已断开：${ref.id}`);
-  const selection = ref.selectionMode === "current" ? doc.selection : ref.selection ?? doc.selection;
-  if (!selection || (selection as any).type === "none") throw new Error("该文档没有可用的当前选区，请在文档中选择内容后重试");
+  const snapshot = ref.selectionMode === "current" ? doc.selection : ref.selection ?? doc.selection;
+  if (!snapshot || (snapshot as any).type === "none") throw new Error("该文档没有可用的当前选区，请在文档中选择内容后重试");
+  const activeSheet = ref.selectionMode === "current" ? doc.activeSheet : ref.activeSheet ?? (ref.selection ? undefined : doc.activeSheet);
+  const activeSlide = ref.selectionMode === "current" ? doc.activeSlide : ref.activeSlide ?? (ref.selection ? undefined : doc.activeSlide);
+  const selection = validateSelection(doc.type, snapshot, activeSheet, activeSlide);
   const resolved = {
     ...doc, ...ref, selection,
-    activeSheet: ref.selectionMode === "current" ? doc.activeSheet : ref.activeSheet ?? (ref.selection ? undefined : doc.activeSheet),
-    activeSlide: ref.selectionMode === "current" ? doc.activeSlide : ref.activeSlide ?? (ref.selection ? undefined : doc.activeSlide),
+    activeSheet,
+    activeSlide,
     selectionResolved: true,
   };
   return { ...resolved, label: selectionLabel(resolved) };

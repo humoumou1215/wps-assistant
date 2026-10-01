@@ -89,7 +89,7 @@
         ...(getProp(slide, "SlideID") !== undefined ? { slideId: Number(getProp(slide, "SlideID")) } : {}),
         ...(shapeNames.length ? { shapeNames } : {}),
         ...(shapeIds.length ? { shapeIds } : {}),
-        ...(typeof text === "string" ? { text } : {}),
+        ...selectionText(text),
         ...(typeof start === "number" ? { start } : {}),
         ...(typeof length === "number" ? { length } : {}),
       };
@@ -102,9 +102,14 @@
       ...(getProp(selection, "Type") !== undefined ? { nativeType: getProp(selection, "Type") } : {}),
       ...(typeof start === "number" ? { start } : {}),
       ...(typeof end === "number" ? { end } : {}),
-      ...(typeof getProp(selection, "Text") === "string" ? { text: getProp(selection, "Text") } : {}),
+      ...selectionText(getProp(selection, "Text")),
       ...(typeof getProp(selection, "StoryType") === "number" ? { storyType: getProp(selection, "StoryType") } : {}),
     };
+  }
+  function selectionText(text) {
+    if (typeof text !== "string") return {};
+    // Match MAX_SELECTION_TEXT in src/selection.ts and taskpane-view.js.
+    return { text: text.slice(0, 2000), ...(text.length > 2000 ? { textTruncated: true, textLength: text.length } : {}) };
   }
   function describeDocument(doc, type, app) {
     if (!doc) return null;
@@ -241,7 +246,9 @@
     setState(true, `${docs.length} WPS document(s) available`, docs);
   }
   if (typeof setInterval !== "undefined") setInterval(publishDocuments, 750);
-  const events = getProp(getApplication(), "ApiEvent");
+  const root = typeof window !== "undefined" ? window : globalThis;
+  const events = [getProp(getProp(root, "wps"), "ApiEvent"), getProp(getApplication(), "ApiEvent")]
+    .find(api => typeof getProp(api, "AddApiEventListener") === "function");
   for (const name of ["WindowSelectionChange", "SheetSelectionChange"]) {
     safe(() => events?.AddApiEventListener(name, publishDocuments), null);
   }

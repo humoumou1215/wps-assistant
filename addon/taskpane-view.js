@@ -244,7 +244,7 @@
     const next = structuredClone(ref);
     if (ref.selectionMode === 'current' && !ref.selectionResolved) {
       const doc = state.documents.find(doc => doc.documentId === ref.id && doc.connected);
-      next.selection = doc?.selection ? structuredClone(doc.selection) : undefined;
+      next.selection = doc?.selection ? boundedSelection(doc.selection) : undefined;
       next.activeSheet = doc?.activeSheet; next.activeSlide = doc?.activeSlide;
       next.name = doc?.name || ref.name;
       next.unavailable = !online || !doc || !doc.selection || doc.selection.type === 'none';
@@ -252,12 +252,32 @@
     next.label = selectionLabel(next) + (next.unavailable ? '（不可用）' : '');
     return next;
   }
+  function boundedSelection(selection) {
+    const next = structuredClone(selection);
+    // Match MAX_SELECTION_TEXT in src/selection.ts and the native collector.
+    if (typeof next?.text === 'string' && next.text.length > 2000) {
+      next.textLength = Math.max(next.text.length, typeof next.textLength === 'number' ? next.textLength : 0);
+      next.text = next.text.slice(0, 2000); next.textTruncated = true;
+    }
+    return next;
+  }
+  function selectionRequest(ref) {
+    if (ref.kind !== 'sel') return ref;
+    const request = { kind: ref.kind, id: ref.id || ref.documentId, selectionMode: ref.selectionMode || 'fixed', label: ref.label, marker: ref.marker };
+    // The server obtains current selections from the routed Add-in. Uploading
+    // a stale preview serves no purpose and can exceed the request budget.
+    return request.selectionMode === 'current' ? request : {
+      ...request, activeSheet: ref.activeSheet, activeSlide: ref.activeSlide,
+      selection: boundedSelection(ref.selection),
+    };
+  }
   function selectionDetailsHTML(ref) {
     const s = ref.selection || {};
     const row = (key, value) => '<div class="rkv"><span class="k">' + key + '</span><span class="v">' + esc(value) + '</span></div>';
     return row('类型', ref.selectionMode === 'current' ? (ref.selectionResolved ? '当前选区 · 本次发送时的位置' : '当前选区 · 跟随文档中的选择') : '固定选区 · 保留引用时的位置') +
       row('位置', selectionPosition(ref)) +
-      (typeof s.text === 'string' ? row(s.type === 'caret' ? '插入点' : '选中文字', s.text || '（空）') : '');
+      (typeof s.text === 'string' ? row(s.type === 'caret' ? '插入点' : s.textTruncated ? '选中文字预览' : '选中文字', s.text || '（空）') : '') +
+      (s.textTruncated && typeof s.text === 'string' ? row('预览范围', '仅显示前 ' + s.text.length + ' 字符；完整位置已保留') : '');
   }
   function referenceCatalog(state, online = true) {
     if (!online) return [];
@@ -266,7 +286,7 @@
       ...state.documents.filter(doc => doc.connected).flatMap(doc => [
         { kind: 'doc', id: doc.documentId, label: doc.name, sub: doc.type },
         ...(doc.selection && doc.selection.type !== 'none' ? ['current', 'fixed'].map(selectionMode => {
-          const ref = { kind: 'sel', id: doc.documentId, name: doc.name, selectionMode, selection: structuredClone(doc.selection), activeSheet: doc.activeSheet, activeSlide: doc.activeSlide };
+          const ref = { kind: 'sel', id: doc.documentId, name: doc.name, selectionMode, selection: boundedSelection(doc.selection), activeSheet: doc.activeSheet, activeSlide: doc.activeSlide };
           return { ...ref, label: selectionLabel(ref), sub: selectionMode === 'current' ? '跟随文档中的选择 · 发送时读取最新位置' : '保留引用时的位置 · 后续移动选区不影响' };
         }) : []),
       ]),
@@ -276,5 +296,5 @@
       ]),
     ];
   }
-  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, referenceCatalog, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML };
+  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, referenceCatalog, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML, selectionRequest };
 })();

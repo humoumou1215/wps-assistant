@@ -9,7 +9,7 @@ import WebSocket from 'ws';
 export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
   if (!port) { const probe = createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r)); port = probe.address().port; await new Promise(r => probe.close(r)); }
   const dir = dataDir || await mkdtemp(join(tmpdir(), 'wps-ui-test-'));
-  const requests = [], appState = { value: 120, written: null, failRender: false, activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' }, inspected: 0, reads: [] };
+  const requests = [], appState = { value: 120, written: null, failRender: false, type: 'spreadsheet', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' }, inspected: 0, reads: [] };
   const model = createServer(async (req, res) => {
     let raw = ''; for await (const data of req) raw += data;
     const body = JSON.parse(raw || '{}'); requests.push({ body, headers: req.headers });
@@ -52,6 +52,26 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
   const app = { ActiveWorkbook: workbook, ActiveSheet: { Range(address) { appState.reads.push(address); return { get Value2() { return address === 'D3' ? appState.written : appState.value; }, set Value2(value) { if (appState.failRender) throw new Error('模拟文档写保护'); appState.written = value; } }; } } };
   workbook.Worksheets = { Item(name) { if (!['销售数据', 'Summary'].includes(name)) throw new Error('工作表不存在'); return app.ActiveSheet; } };
   app.Workbooks = { Item(name) { if (name !== workbook.Name) throw new Error('文档不存在'); return workbook; } };
+  function executeFixture(code, variable) {
+    // This is a closed fixture interpreter, not a JavaScript execution host.
+    // Unknown source is rejected instead of executing network-provided code.
+    if (code === 'return Application.ActiveWorkbook.Name;') return workbook.Name;
+    if (code === 'return Application.ActiveSheet.Range("B3").Value2;') return app.ActiveSheet.Range('B3').Value2;
+    if (code === 'Application.ActiveSheet.Range("D3").Value2 = variable.value; return Application.ActiveSheet.Range("D3").Value2;') {
+      app.ActiveSheet.Range('D3').Value2 = variable.value; return app.ActiveSheet.Range('D3').Value2;
+    }
+    if (code === 'throw new Error("目标不可写");') throw new Error('目标不可写');
+    const list = code.match(/^return \[(.*)\];$/s)?.[1];
+    if (list !== undefined) {
+      const jsonString = '"(?:[^"\\\\]|\\\\.)*"';
+      const range = new RegExp('Application\\.Workbooks\\.Item\\((' + jsonString + ')\\)\\.Worksheets\\.Item\\((' + jsonString + ')\\)\\.Range\\((' + jsonString + ')\\)\\.Value2', 'g');
+      const matches = [...list.matchAll(range)];
+      if (matches.length && matches.map(match => match[0]).join(',') === list) {
+        return matches.map(match => app.Workbooks.Item(JSON.parse(match[1])).Worksheets.Item(JSON.parse(match[2])).Range(JSON.parse(match[3])).Value2);
+      }
+    }
+    throw new Error('Unsupported fixture code');
+  }
   await new Promise((resolve, reject) => {
     socket.on('error', reject);
     socket.on('message', async raw => {
@@ -62,8 +82,8 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir } = {}) {
         try {
           if (message.method === 'inspect') appState.inspected++;
           const result = message.method === 'inspect'
-            ? { documentKey: 'ui-fixture', name: workbook.Name, type: 'spreadsheet', selectionVersion: 2, activeSheet: appState.activeSheet, ...(appState.selection ? { selection: appState.selection } : {}) }
-            : await new Function('Application', 'wps', 'variable', message.code)(app, app, message.variable);
+            ? { documentKey: 'ui-fixture', name: workbook.Name, type: appState.type, selectionVersion: 2, activeSheet: appState.activeSheet, ...(appState.selection ? { selection: appState.selection } : {}) }
+            : executeFixture(message.code, message.variable);
           socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: true, result } }));
         }
         catch (error) { socket.send(JSON.stringify({ type: 'response', id: message.id, payload: { success: false, error: error.message } })); }

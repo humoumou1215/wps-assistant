@@ -18,6 +18,7 @@
   const duration = ms => ms === undefined ? '历史耗时未记录' : ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(1) + 's';
   const clock = at => new Date(at).toLocaleTimeString('zh-CN', { hour12: false });
   async function api(path, body) {
+    if (body && (path === '/api/ref-resolve' || path === '/api/ref-preview')) body = V.selectionRequest(body);
     const response = await fetch(path, body === undefined ? { cache: 'no-store' } : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const value = await response.json();
     if (!response.ok) {
@@ -487,7 +488,7 @@
     $('sendBtn').disabled = true; $('stopBtn').hidden = false; $('editor').replaceChildren(); closeMention(); pinnedRef = undefined; hideRefPop(); notice(''); renderTurns();
     let ended = false, hadError = false;
     try {
-      const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: controller.signal });
+      const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...input, refs: input.refs.map(V.selectionRequest) }), signal: controller.signal });
       if (!response.ok) { const value = await response.json(); throw new Error(value.error || '发送失败'); }
       const reader = response.body.getReader(), decoder = new TextDecoder(); let buffer = '';
       const drain = () => {

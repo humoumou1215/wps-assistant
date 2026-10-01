@@ -47,7 +47,12 @@ try {
   for (const path of ['/addon/taskpane.html', '/addins/et/taskpane.js', '/addins/wpp/taskpane.css', '/addins/wps/']) {
     assert.equal((await fetch(base + path)).status, 200, `Packaged asset ${path}`);
   }
-  console.log('Release smoke passed: checksum, clean production install, HTTP server and Add-in assets');
+  const resources = await (await fetch(base + '/api/agent')).json();
+  assert.ok(resources.skills.some(skill => skill.name === 'wps-api' && skill.content.includes('WPS API skill')), 'Packaged skills must install and load without model credentials');
+  assert.ok(resources.systemPrompt.includes('<available_skills>'));
+  assert.equal(resources.tools.length, 9);
+  assert.ok((await readFile(join(temp, 'data/pi/skills/wps-api/references/spreadsheet.md'), 'utf8')).includes('Range'));
+  console.log('Release smoke passed: checksum, clean production install, HTTP server, Add-in assets and installed agent skills');
 } finally {
   if (child && child.exitCode === null) { child.kill(); await exited; }
   await rm(temp, { recursive: true, force: true });

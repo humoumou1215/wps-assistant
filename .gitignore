@@ -21,3 +21,9 @@ docs/*.ref/
 release/
 test-results.xml
 coverage/
+
+# Local Office locks, Python caches and legacy manual test outputs
+~$*
+__pycache__/
+*.py[cod]
+pressure-test/

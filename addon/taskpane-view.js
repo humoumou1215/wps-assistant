@@ -212,5 +212,31 @@
     }
     return false;
   }
-  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane };
+  function variablesInMode(state, mode, online = true) {
+    const connected = new Set(online ? state.documents.filter(doc => doc.connected).map(doc => doc.documentId) : []);
+    return mode === 'all' ? state.variables : state.variables.filter(variable => connected.has(variable.transform.sourceDocumentId) || variable.renders.some(render => connected.has(render.targetDocumentId)));
+  }
+  function variableActions(state, mode, op, online = true) {
+    const connected = new Set(online ? state.documents.filter(doc => doc.connected).map(doc => doc.documentId) : []);
+    return variablesInMode(state, mode, online).flatMap(variable => {
+      if (op === 'transform') return connected.has(variable.transform.sourceDocumentId) ? [{ op, variableId: variable.variableId }] : [];
+      if (!variable.hasValue) return [];
+      return variable.renders.filter(render => connected.has(render.targetDocumentId)).map(render => ({ op, variableId: variable.variableId, renderId: render.renderId }));
+    });
+  }
+  function referenceCatalog(state, mode, online = true) {
+    if (!online) return [];
+    const docName = id => state.documents.find(doc => doc.documentId === id)?.name || id + '（未注册）';
+    return [
+      ...state.documents.filter(doc => doc.connected).flatMap(doc => [
+        { kind: 'doc', id: doc.documentId, label: doc.name, sub: doc.type },
+        ...(doc.selection ? [{ kind: 'sel', id: doc.documentId, label: '当前选区 ' + (doc.selection.address || (doc.activeSlide ? '第 ' + doc.activeSlide + ' 页' : '')), sub: doc.name + ' › ' + (doc.activeSheet || ''), selection: structuredClone(doc.selection), activeSheet: doc.activeSheet, activeSlide: doc.activeSlide }] : []),
+      ]),
+      ...variablesInMode(state, mode, online).flatMap(variable => [
+        { kind: 'var', id: variable.variableId, label: variable.name, sub: typeOf(variable) + ' · ' + (variable.transform.sourceRef || '') },
+        ...variable.renders.map(render => ({ kind: 'render', id: render.renderId, label: render.renderId + ' · ' + variable.name, sub: docName(render.targetDocumentId) + ' › ' + (render.description || '未标注写入位置') })),
+      ]),
+    ];
+  }
+  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, variablesInMode, variableActions, referenceCatalog };
 })();

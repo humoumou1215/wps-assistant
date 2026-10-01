@@ -6,6 +6,7 @@ import { APP_DIR, callTool, getState, PORT, deleteVariableDefinition, navigateVa
 import { publicConfig, parseConfig, saveConfig, redact } from "./config.js";
 import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema, chatHistory, agentResources } from "./agent.js";
 import { logger } from "./logger.js";
+import { resolveSelectionReference } from "./references.js";
 
 const pluginVersion: string = JSON.parse(await readFile(join(APP_DIR, "package.json"), "utf8")).version;
 
@@ -37,23 +38,36 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
     if (path === "/api/config" && req.method === "GET") { json(res, 200, { ...publicConfig(), builtinModels: await builtinModels() }); return; }
     if (path === "/api/chat" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(chatHistory())))); return; }
     if (path === "/api/agent" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(await agentResources())))); return; }
+    if (path === "/api/ref-resolve" && req.method === "POST") {
+      json(res, 200, await resolveSelectionReference(await readJson(req))); return;
+    }
     if (path === "/api/ref-preview" && req.method === "POST") {
-      const ref = z.object({ kind: z.literal("sel"), id: z.string().min(1), activeSheet: z.string().optional(), selection: z.object({ sheet: z.string().optional(), address: z.string().max(300).optional() }).passthrough() }).parse(await readJson(req));
+      const ref = await resolveSelectionReference(await readJson(req));
       const doc = getState().documents.find(d => d.documentId === ref.id && d.connected);
       if (!doc) throw new Error("引用文档已断开");
-      const sheet = ref.selection.sheet || ref.activeSheet;
-      const match = ref.selection.address?.match(/^\$?([A-Z]{1,3})\$?(\d+)(?::\$?([A-Z]{1,3})\$?(\d+))?$/i);
-      if (doc.type !== "spreadsheet" || !sheet || !match) { json(res, 200, { hasValue: false, message: "已显示选区快照；该选区没有可读取的明确工作表与单元格地址。" }); return; }
+      const selection = ref.selection as Record<string, any>;
+      if (doc.type !== "spreadsheet") {
+        json(res, 200, { ref, hasValue: typeof selection.text === "string", value: selection.text, truncated: selection.textTruncated === true, message: selection.type === "shape" ? "已引用选中的对象；位置包含页码与对象名称。" : "已显示选区位置；当前 WPS 未提供选中文字。" }); return;
+      }
+      const sheet = selection.sheet || ref.activeSheet;
+      const regions = Array.isArray(selection.areas) ? selection.areas.map((area: any) => area.address) : [selection.address];
+      if (!sheet || !regions.length || regions.some((address: unknown) => typeof address !== "string" || !address.match(/^\$?([A-Z]{1,3})\$?(\d+)(?::\$?([A-Z]{1,3})\$?(\d+))?$/i))) {
+        json(res, 200, { ref, hasValue: false, message: "已显示选区位置；该选区没有可读取的明确工作表与单元格地址。" }); return;
+      }
       const column = (name: string) => [...name.toUpperCase()].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
       const columnName = (n: number): string => n > 0 ? columnName(Math.floor((n - 1) / 26)) + String.fromCharCode(65 + (n - 1) % 26) : "";
-      const c1 = column(match[1]!), c2 = column(match[3] || match[1]!), r1 = Number(match[2]), r2 = Number(match[4] || match[2]);
-      if (c1 > 16384 || c2 > 16384 || r1 < 1 || r2 < r1 || r2 > 1048576 || c2 < c1) throw new Error("选区地址无效");
-      const address = `${columnName(c1)}${r1}:${columnName(Math.min(c2, c1 + 5))}${Math.min(r2, r1 + 4)}`;
-      // Read a bounded snapshot through the same guarded executor; never follow ActiveSheet/Selection.
-      const result = await callTool("wps.exec", { documentId: doc.documentId, code: `return Application.Workbooks.Item(${JSON.stringify(doc.name)}).Worksheets.Item(${JSON.stringify(sheet)}).Range(${JSON.stringify(address)}).Value2;` });
+      const addresses = regions.slice(0, 6).map((region: string) => {
+        const match = region.match(/^\$?([A-Z]{1,3})\$?(\d+)(?::\$?([A-Z]{1,3})\$?(\d+))?$/i)!;
+        const c1 = column(match[1]!), c2 = column(match[3] || match[1]!), r1 = Number(match[2]), r2 = Number(match[4] || match[2]);
+        if (c1 > 16384 || c2 > 16384 || r1 < 1 || r2 < r1 || r2 > 1048576 || c2 < c1) throw new Error("选区地址无效");
+        const address = `${columnName(c1)}${r1}:${columnName(Math.min(c2, c1 + 5))}${Math.min(r2, r1 + 4)}`;
+        return { address, truncated: c2 - c1 >= 6 || r2 - r1 >= 5 };
+      });
+      // Bound every area independently; never read gaps between disjoint selections.
+      const result = await callTool("wps.exec", { documentId: doc.documentId, code: `return [${addresses.map(({ address }: { address: string }) => `Application.Workbooks.Item(${JSON.stringify(doc.name)}).Worksheets.Item(${JSON.stringify(sheet)}).Range(${JSON.stringify(address)}).Value2`).join(",")}];` });
       const value = JSON.parse(result.content[0].text);
       if (result.isError) { json(res, 422, value); return; }
-      json(res, 200, { hasValue: true, value: value.result, address, truncated: c2 - c1 >= 6 || r2 - r1 >= 5 }); return;
+      json(res, 200, { ref, hasValue: true, value: addresses.length === 1 ? value.result[0] : addresses.map((area: { address: string }, i: number) => ({ address: area.address, value: value.result[i] })), address: addresses.map((area: { address: string }) => area.address).join(","), truncated: regions.length > 6 || addresses.some((area: { truncated: boolean }) => area.truncated) }); return;
     }
     if (path === "/api/navigate" && req.method === "POST") {
       const { variableId, renderId } = z.object({ variableId: z.string().min(1), renderId: z.string().min(1).optional() }).strict().parse(await readJson(req));

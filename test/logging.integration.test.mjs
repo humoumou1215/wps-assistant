@@ -69,7 +69,8 @@ test('stdio stdout contains only MCP messages and shutdown flushes log files', {
   child.stdout.on('data', data => { stdout += data; }); child.stderr.on('data', data => { stderr += data; });
   try {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'log-test', version: '1' } } }) + '\n');
-    for (let i = 0; i < 100 && !stdout.includes('"id":1'); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    // Pipe chunks may split a JSON message after its id; wait for its line terminator.
+    for (let i = 0; i < 100 && !(stdout.includes('"id":1') && stdout.endsWith('\n')); i++) await new Promise(resolve => setTimeout(resolve, 20));
     const messages = stdout.trim().split('\n').map(JSON.parse);
     assert.ok(messages.some(m => m.id === 1 && m.result));
     assert.ok(messages.every(m => m.jsonrpc === '2.0' && !m.event));

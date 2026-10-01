@@ -57,6 +57,10 @@ test('a failed deletion commit retains memory and recovers without poisoning the
     h = await startHarness({ dataDir: dir });
     const get = async () => (await (await fetch(h.base + '/api/state')).json()).variables;
     const post = body => fetch(h.base + '/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    // Registration persists asynchronously. A completed Render drains earlier writes
+    // before the fixture replaces state.json, so a late registration cannot recreate it.
+    const rendered = await fetch(h.base + '/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'render', variableId: 'var_001', renderId: 'var_001_r0' }) });
+    assert.equal(rendered.status, 200); await rendered.json();
     const before = await get();
     // A directory at the final state path deterministically makes atomic rename fail, also on Windows.
     await rm(file); await mkdir(file);
@@ -88,4 +92,49 @@ test('deletion waits for an in-flight Render and cannot resurrect its variable a
     assert.equal((await (await fetch(h.base + '/api/state')).json()).variables.length, 0);
     assert.equal(JSON.parse(await readFile(file, 'utf8')).variables.length, 0);
   } finally { if (h) await h.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('Stop cancels an agent Render waiting behind a UI mutation without later writing or poisoning the queue', { timeout: 15000 }, async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wps-stop-queued-render-')); let h, release;
+  const controller = new AbortController();
+  try {
+    const blocker = makeVariable('var_001', 1), queued = makeVariable('var_002', 1);
+    blocker.value = 111; queued.value = 222;
+    blocker.renders[0].code = 'return Application.reviewGate.then(() => { Application.ActiveSheet.Range("D3").Value2 = variable.value; return true; });';
+    await writeFile(join(dir, 'state.json'), JSON.stringify({ variables: [blocker, queued], counters: {}, documentIds: {} }));
+    h = await startHarness({ dataDir: dir, toolSteps: [['variable_render', { variableId: queued.variableId }]] });
+    h.app.reviewGate = new Promise(resolve => { release = resolve; });
+    const post = (path, body, signal) => fetch(h.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+    await post('/api/config', h.cfg);
+    const rpcVariables = [];
+    const started = new Promise(resolve => h.socket.on('message', raw => {
+      const message = JSON.parse(raw);
+      if (message.type === 'request') { rpcVariables.push(message.variable?.id); resolve(); }
+    }));
+    const rendering = post('/api/actions', { op: 'render', variableId: blocker.variableId });
+    await started;
+    const response = await post('/api/chat', { message: '重写已保存的变量', refs: [] }, controller.signal);
+    const reader = response.body.getReader(), decoder = new TextDecoder(); let stream = '';
+    while (!stream.includes('event: tool.start')) {
+      const { value, done } = await reader.read(); assert.equal(done, false);
+      stream += decoder.decode(value, { stream: true });
+    }
+    // A round trip ensures the tool has entered the queue after its SSE event.
+    assert.equal((await (await fetch(h.base + '/api/chat')).json()).busy, true);
+    assert.deepEqual(rpcVariables, [blocker.variableId]);
+    controller.abort();
+    for (let i = 0; i < 100 && (await (await fetch(h.base + '/api/chat')).json()).busy; i++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal((await (await fetch(h.base + '/api/chat')).json()).busy, false, 'Stop settles while the unrelated mutation is still blocked');
+    assert.equal(h.appState.written, null);
+    release(true);
+    assert.equal((await rendering).status, 200);
+    // This operation drains the canceled queue entry and verifies queue recovery.
+    assert.equal((await post('/api/actions', { op: 'transform', variableId: blocker.variableId })).status, 200);
+    assert.equal(h.appState.written, 111, 'the canceled Render never overwrites the completed UI write');
+    assert.ok(!rpcVariables.includes(queued.variableId));
+    const state = await (await fetch(h.base + '/api/state')).json();
+    assert.equal(state.variables.find(variable => variable.variableId === queued.variableId).renders[0].lastRun, undefined);
+    assert.equal((await post('/api/actions', { op: 'render', variableId: queued.variableId })).status, 200);
+    assert.equal(h.appState.written, 222, 'a later explicitly requested Render still runs');
+  } finally { controller.abort(); release?.(true); if (h) await h.close(); await rm(dir, { recursive: true, force: true }); }
 });

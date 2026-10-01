@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { z } from "zod";
+import { boundedSelection } from "./selection.js";
 import { analyzeReadOnlyCode, formatReadOnlyViolations, MAX_CODE_LENGTH } from "./readonly-guard.js";
 import { DATA_DIR } from "./paths.js";
 import { logger } from "./logger.js";
@@ -28,6 +29,7 @@ type DocumentRecord = {
   activeSheet?: string;
   activeSlide?: number;
   selection?: unknown;
+  selectionVersion?: number;
 };
 type Transform = {
   transformId: string;
@@ -63,6 +65,7 @@ type AddinDocument = {
   activeSheet?: string;
   activeSlide?: number;
   selection?: unknown;
+  selectionVersion?: number;
 };
 type Connection = { id: string; socket: WebSocket; documents: Map<string, string>; hostType?: DocType };
 type Pending = { connectionId: string; resolve: (v: unknown) => void; reject: (e: Error) => void; timer: NodeJS.Timeout };
@@ -90,10 +93,21 @@ function persist(variables?: Variable[]) {
   return write;
 }
 let variableMutation = Promise.resolve();
-function mutateVariables<T>(operation: () => Promise<T>): Promise<T> {
-  const result = variableMutation.then(operation);
+function mutateVariables<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  let cancelWaiting: (() => void) | undefined;
+  const result = variableMutation.then(() => {
+    // Once execution starts, keep its result and queue slot until it completes.
+    if (cancelWaiting) signal!.removeEventListener("abort", cancelWaiting);
+    return operation();
+  });
   variableMutation = result.then(() => {}, () => {});
-  return result;
+  if (!signal) return result;
+  return new Promise<T>((resolve, reject) => {
+    cancelWaiting = () => reject(new ToolError("OPERATION_CANCELLED", "已停止，未执行此操作"));
+    if (signal.aborted) cancelWaiting();
+    else signal.addEventListener("abort", cancelWaiting, { once: true });
+    result.then(resolve, reject);
+  });
 }
 
 // UI-only deletion: never execute WPS code or clear already-written content.
@@ -191,9 +205,10 @@ function registerDocument(connection: Connection, item: AddinDocument) {
     connectionId: connection.id,
     documentKey: item.documentKey,
     connected: true,
+    ...(item.selectionVersion === 2 ? { selectionVersion: 2 } : {}),
     ...(item.activeSheet ? { activeSheet: item.activeSheet } : {}),
     ...(item.activeSlide !== undefined ? { activeSlide: item.activeSlide } : {}),
-    ...(item.selection !== undefined ? { selection: item.selection } : {}),
+    ...(item.selection !== undefined ? { selection: boundedSelection(item.selection) } : {}),
   });
   if (!previous) logger.info("document.registered", { documentId, documentType: item.type, connectionId: connection.id });
   return documentId;
@@ -264,9 +279,24 @@ function documentResponse(doc: DocumentRecord) {
   };
 }
 
-export const toolDefinitions: { name: string; config: any; invoke: (args: any) => Promise<any> }[] = [];
+// Ask the routed Add-in for a fresh selection rather than trusting the heartbeat.
+// No document activation: an inactive document must not inherit another selection.
+export async function refreshDocument(documentId: string) {
+  const doc = documentById(documentId);
+  if (doc.selectionVersion !== 2) throw new Error("选区采集插件需要更新，请重新启动 WPS 后再引用选区");
+  const envelope = await sendRpc(doc, "inspect", {}) as { success?: boolean; result?: AddinDocument; error?: string };
+  if (!envelope.success || envelope.result?.documentKey !== doc.documentKey) {
+    throw new Error(envelope.error || "无法读取当前选区，请重新加载 WPS MCP 插件");
+  }
+  const connection = connections.get(doc.connectionId);
+  if (!connection || !doc.connected) throw new Error("引用文档已断开");
+  registerDocument(connection, envelope.result);
+  return documentResponse(documentById(documentId));
+}
+
+export const toolDefinitions: { name: string; config: any; invoke: (args: any, signal?: AbortSignal) => Promise<any> }[] = [];
 function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema: S; title: string; description: string; annotations: Record<string, boolean> }, handler: (args: z.infer<z.ZodObject<S>>) => Promise<any>) {
-  toolDefinitions.push({ name, config, invoke: args => logger.withContext({ toolCallId: randomUUID() }, async () => {
+  toolDefinitions.push({ name, config, invoke: (args, signal) => logger.withContext({ toolCallId: randomUUID() }, async () => {
     const started = Date.now();
     let parsed: z.infer<z.ZodObject<S>>;
     try { parsed = z.object(config.inputSchema).parse(args); }
@@ -275,8 +305,14 @@ function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema
     logger.info("tool.start", { toolName: name, ...ids });
     let result;
     try {
+      // Check on dequeue, not just when the agent submits the call: Stop may
+      // happen while another document's mutation is still holding the queue.
+      const execute = () => {
+        if (signal?.aborted) throw new ToolError("OPERATION_CANCELLED", "已停止，未执行此操作");
+        return handler(parsed);
+      };
       result = ["transform.create", "render.create", "variable.transform", "variable.render"].includes(name)
-        ? await mutateVariables(() => handler(parsed)) : await handler(parsed);
+        ? await mutateVariables(execute, signal) : await execute();
     }
     catch (error) { result = toolError(error, "INTERNAL_ERROR"); }
     const value = result.structuredContent ?? JSON.parse(result.content[0].text);
@@ -437,10 +473,10 @@ defineTool("variable.render", {
   } catch (error) { return toolError(error, "RENDER_EXECUTION_ERROR"); }
 });
 
-export async function callTool(name: string, args: unknown) {
+export async function callTool(name: string, args: unknown, signal?: AbortSignal) {
   const tool = toolDefinitions.find(t => t.name === name);
   if (!tool) throw new ToolError("INVALID_REQUEST", "Unknown tool");
-  return tool.invoke(args);
+  return tool.invoke(args, signal);
 }
 export function getState() {
   return { documents: [...documents.values()].map(documentResponse), variables: state.variables.map(v => ({

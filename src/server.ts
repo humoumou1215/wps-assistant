@@ -9,11 +9,12 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { WebSocketServer } from "ws";
+import type { ZodRawShape } from "zod";
 import { APP_DIR, PORT, loadState, registerDocument, connections, documents, pending, toolDefinitions, type Connection, type AddinDocument } from "./tools.js";
 import { logger } from "./logger.js";
 function createMcpServer() {
   const mcp = new McpServer({ name: "wps-mcp", version: "0.1.0" });
-  for (const tool of toolDefinitions) mcp.registerTool(tool.name, tool.config, tool.invoke);
+  for (const tool of toolDefinitions) mcp.registerTool<ZodRawShape, ZodRawShape>(tool.name, tool.config, (args, extra) => tool.invoke(args, extra.signal));
   return mcp;
 }
 
@@ -80,7 +81,7 @@ async function startBridge() {
     const requestId = randomUUID();
     // Never log query strings, arbitrary URL paths, headers or request bodies.
     const path = (req.url ?? "/").split("?")[0] ?? "/";
-    const route = /^\/(health|mcp|api\/(state|config(?:\/test)?|chat|ref-preview|actions|navigate))$/.test(path)
+    const route = /^\/(health|mcp|api\/(state|config(?:\/test)?|chat|ref-preview|ref-resolve|actions|navigate))$/.test(path)
       ? path : /^\/(addon|addins\/(et|wpp|wps))\//.test(path) ? "/addon/*" : "[unknown]";
     const started = Date.now();
     res.setHeader("x-request-id", requestId);

@@ -7,6 +7,46 @@ vm.runInContext(await readFile(new URL('../addon/taskpane-view.js', import.meta.
 vm.runInContext(await readFile(new URL('../addon/pinyin-pro.js', import.meta.url), 'utf8'), context);
 const V = context.WpsPaneView;
 
+test('selection requests omit stale current text and bound fixed previews without changing coordinates', () => {
+  const ref = { kind: 'sel', id: 'd', name: '大文档.docx', selectionMode: 'current', marker: '引用1', selection: { type: 'text', text: '中'.repeat(350000), start: 0, end: 350000, storyType: 1 } };
+  const current = V.selectionRequest(ref);
+  assert.equal(current.selection, undefined); assert.equal(current.marker, '引用1');
+  assert.ok(Buffer.byteLength(JSON.stringify(current)) < 1000);
+  const fixed = V.selectionRequest({ ...ref, selectionMode: 'fixed' });
+  assert.equal(fixed.selection.text.length, 2000); assert.equal(fixed.selection.textLength, 350000);
+  assert.equal(fixed.selection.end, 350000); assert.equal(fixed.selection.textTruncated, true);
+  const batch = Array.from({ length: 30 }, () => fixed);
+  assert.ok(Buffer.byteLength(JSON.stringify(batch)) < 200000);
+  assert.match(V.selectionDetailsHTML(fixed), /选中文字预览/);
+  assert.match(V.selectionDetailsHTML(fixed), /完整位置已保留/);
+  assert.equal(ref.selection.text.length, 350000, 'request serialization must not mutate saved metadata');
+});
+
+test('selection chips follow current sheet and text ranges while fixed and sent snapshots stay put', () => {
+  const state = { documents: [{ documentId: 'd', connected: true, name: '经营.xlsx', activeSheet: 'Sales', selection: { sheet: 'Sales', address: '$A$1:$B$4' } }], variables: [] };
+  const refs = V.referenceCatalog(state).filter(r => r.kind === 'sel');
+  const current = refs.find(r => r.selectionMode === 'current'), fixed = refs.find(r => r.selectionMode === 'fixed');
+  assert.match(current.label, /当前选区.*经营.xlsx.*Sales!\$A\$1:\$B\$4/);
+  assert.match(fixed.label, /固定选区.*Sales!/);
+  state.documents[0].activeSheet = 'Summary'; state.documents[0].selection = { sheet: 'Summary', address: 'D1:D4' };
+  const moved = V.selectionReference(current, state);
+  assert.match(moved.label, /Summary!D1:D4/); assert.equal(moved.selection.address, 'D1:D4');
+  assert.equal(V.selectionReference(fixed, state).selection.address, '$A$1:$B$4');
+  const sent = { ...moved, selectionResolved: true };
+  state.documents[0].selection.address = 'Z9';
+  assert.equal(V.selectionReference(sent, state).selection.address, 'D1:D4');
+  const turn = V.newTurn('[引用1:旧标签]', [{ ...current, marker: '引用1' }]);
+  V.reduceEvent(turn, 'refs.resolved', { refs: [{ ...sent, marker: '引用1' }] });
+  assert.match(V.userHTML(turn.user, turn.refs), /Summary!D1:D4/);
+  state.documents[0].connected = false;
+  assert.equal(V.selectionReference(current, state).selection, undefined);
+  assert.match(V.selectionReference(current, state).label, /不可用/);
+  const text = { kind: 'sel', name: '汇报.pptx', selectionMode: 'fixed', activeSlide: 1, selection: { type: 'text', shapeNames: ['TextBox 1'], text: '经营<script>', start: 3, length: 2 } };
+  assert.match(V.selectionLabel(text), /汇报.pptx.*第 1 页.*TextBox 1.*经营/);
+  const details = V.selectionDetailsHTML(text);
+  assert.match(details, /起点 3 · 2 字符/); assert.match(details, /经营&lt;script&gt;/); assert.ok(!details.includes('<script>'));
+});
+
 test('composer variable and Render candidates follow the mode while document and selection candidates remain online', () => {
   const state = {
     documents: [{ documentId: 'live', name: '在线.xlsx', type: 'spreadsheet', connected: true, activeSheet: 'Sheet1', selection: { address: 'A1:B4' } }],
@@ -19,18 +59,44 @@ test('composer variable and Render candidates follow the mode while document and
   const current = V.referenceCatalog(state, 'current');
   assert.equal(Array.from(current.filter(ref => ref.kind === 'var'), ref => ref.id).join(','), 'source,target');
   assert.equal(Array.from(current.filter(ref => ref.kind === 'render'), ref => ref.id).join(','), 'r_live,r_offline');
-  assert.equal(Array.from(current.filter(ref => ['doc', 'sel'].includes(ref.kind)), ref => ref.kind).join(','), 'doc,sel');
+  assert.equal(Array.from(current.filter(ref => ['doc', 'sel'].includes(ref.kind)), ref => ref.kind).join(','), 'doc,sel,sel');
   const all = V.referenceCatalog(state, 'all');
   assert.equal(all.filter(ref => ref.kind === 'var').length, 3);
   assert.equal(all.filter(ref => ref.kind === 'render').length, 3);
   assert.equal(current.filter(ref => V.matches(ref, '历史变量')).length, 0);
   assert.equal(all.filter(ref => V.matches(ref, '历史变量')).length, 2);
   state.documents[0].selection.address = 'D9';
-  assert.equal(current.find(ref => ref.kind === 'sel').selection.address, 'A1:B4', 'selection candidates retain their original snapshot');
+  assert.equal(current.find(ref => ref.selectionMode === 'fixed').selection.address, 'A1:B4', 'fixed selection candidates retain their original snapshot');
+  const liveSelection = current.find(ref => ref.selectionMode === 'current');
+  assert.equal(V.selectionReference(liveSelection, state).selection.address, 'D9');
+  for (const mode of ['current', 'all']) {
+    assert.equal(Array.from(V.referenceCatalog(state, mode).filter(ref => ref.kind === 'sel'), ref => ref.selectionMode).join(','), 'current,fixed', 'variable display mode preserves both selection types');
+  }
   state.documents[0].connected = false;
   assert.equal(V.referenceCatalog(state, 'current').length, 0);
   assert.equal(V.referenceCatalog(state, 'all').length, 6);
   assert.equal(V.referenceCatalog(state, 'all', false).length, 0);
+});
+
+test('draft and restored variable references mark deleted definitions, retain labels and preserve unrelated bindings', () => {
+  const state = { documents: [], variables: [{ variableId: 'var_001', name: '销售合计', renders: [{ renderId: 'render_001' }, { renderId: 'render_002' }] }] };
+  const variable = { kind: 'var', id: 'var_001', label: '销售合计', marker: '引用1' };
+  const render = { kind: 'render', id: 'render_001', label: 'render_001 · 销售合计', marker: '引用2' };
+  const other = { kind: 'render', id: 'render_002', label: 'render_002 · 销售合计' };
+  assert.equal(V.variableReference(variable, state).unavailable, false, 'offline definitions remain valid');
+  const sent = structuredClone(render);
+  state.variables[0].renders.shift();
+  const deleted = V.variableReference(render, state);
+  assert.equal(deleted.unavailable, true); assert.equal(deleted.label, render.label); assert.equal(deleted.marker, render.marker);
+  assert.match(V.referenceChipLabel(deleted), /已删除/);
+  assert.equal(V.variableReference(variable, state).unavailable, false);
+  assert.equal(V.variableReference(other, state).unavailable, false);
+  assert.equal(sent.unavailable, undefined, 'history snapshots are not mutated by draft validation');
+  state.variables.length = 0;
+  assert.equal(V.variableReference(variable, state).unavailable, true);
+  assert.equal(V.variableReference(other, state).unavailable, true);
+  assert.equal(V.variableReference({ kind: 'render', renderId: 'render_002' }, state).unavailable, true, 'legacy restored references are also checked');
+  const doc = { kind: 'doc', id: 'doc_001' }; assert.equal(V.variableReference(doc, state), doc);
 });
 
 test('current variables match online source OR target by ID, preserve every binding and deduplicate', () => {

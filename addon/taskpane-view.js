@@ -229,12 +229,18 @@
   // Compact display only: the full label and captured selection remain in message metadata.
   function referenceChipLabel(ref) {
     const fallback = ref.label || ref.name || ref.id || ref.variableId || ref.renderId || '';
-    if (ref.kind !== 'sel') return fallback;
+    if (ref.kind !== 'sel') return fallback + (['var', 'render'].includes(ref.kind) && ref.unavailable ? '（已删除）' : '');
     if (!ref.selection) return fallback.replace(/^(?:当前选区|固定选区)\s*[·›]?\s*/, '').replace(/\s*›\s*/g, '›');
     return (ref.name || ref.id) + '›' + selectionPosition(ref, true) + (ref.unavailable ? '（不可用）' : '');
   }
   function selectionPinHTML(ref) {
     return '<span class="selection-pin' + (ref.selectionMode === 'current' ? '' : ' is-fixed') + '" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 24 24" focusable="false"><path class="pin-head" d="M8 3h8v6l3 3v2H5v-2l3-3Z"/><path class="pin-stem" d="M12 14v7"/></svg></span>';
+  }
+  function variableReference(ref, state) {
+    if (!['var', 'render'].includes(ref.kind)) return ref;
+    const id = ref.id || (ref.kind === 'var' ? ref.variableId : ref.renderId);
+    const exists = state.variables.some(variable => ref.kind === 'var' ? variable.variableId === id : variable.renders.some(render => render.renderId === id));
+    return { ...ref, unavailable: !exists };
   }
   function referenceContentHTML(ref) {
     return (ref.kind === 'sel' ? selectionPinHTML(ref) : '') + '<span data-ref-label>' + esc(referenceChipLabel(ref)) + '</span>';
@@ -288,5 +294,5 @@
       ]),
     ];
   }
-  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, variablesInMode, variableActions, referenceCatalog, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML };
+  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, variablesInMode, variableActions, referenceCatalog, variableReference, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML };
 })();

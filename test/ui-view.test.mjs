@@ -63,6 +63,27 @@ test('composer variable and Render candidates follow the mode while document and
   assert.equal(V.referenceCatalog(state, 'all', false).length, 0);
 });
 
+test('draft and restored variable references mark deleted definitions, retain labels and preserve unrelated bindings', () => {
+  const state = { documents: [], variables: [{ variableId: 'var_001', name: '销售合计', renders: [{ renderId: 'render_001' }, { renderId: 'render_002' }] }] };
+  const variable = { kind: 'var', id: 'var_001', label: '销售合计', marker: '引用1' };
+  const render = { kind: 'render', id: 'render_001', label: 'render_001 · 销售合计', marker: '引用2' };
+  const other = { kind: 'render', id: 'render_002', label: 'render_002 · 销售合计' };
+  assert.equal(V.variableReference(variable, state).unavailable, false, 'offline definitions remain valid');
+  const sent = structuredClone(render);
+  state.variables[0].renders.shift();
+  const deleted = V.variableReference(render, state);
+  assert.equal(deleted.unavailable, true); assert.equal(deleted.label, render.label); assert.equal(deleted.marker, render.marker);
+  assert.match(V.referenceChipLabel(deleted), /已删除/);
+  assert.equal(V.variableReference(variable, state).unavailable, false);
+  assert.equal(V.variableReference(other, state).unavailable, false);
+  assert.equal(sent.unavailable, undefined, 'history snapshots are not mutated by draft validation');
+  state.variables.length = 0;
+  assert.equal(V.variableReference(variable, state).unavailable, true);
+  assert.equal(V.variableReference(other, state).unavailable, true);
+  assert.equal(V.variableReference({ kind: 'render', renderId: 'render_002' }, state).unavailable, true, 'legacy restored references are also checked');
+  const doc = { kind: 'doc', id: 'doc_001' }; assert.equal(V.variableReference(doc, state), doc);
+});
+
 test('current variables match online source OR target by ID, preserve every binding and deduplicate', () => {
   const variable = (id, source, targets = []) => ({ variableId: id, transform: { sourceDocumentId: source }, renders: targets.map(targetDocumentId => ({ targetDocumentId })) });
   const state = { documents: [{ documentId: 'online', name: '同名', connected: true }, { documentId: 'offline', name: '同名', connected: false }], variables: [

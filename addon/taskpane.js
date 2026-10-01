@@ -11,7 +11,7 @@
   }
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let state = { documents: [], variables: [] }, online = false, config, models = [], kind = 'builtin', level = 'off';
-  let actionBusy = false, controller, filter = '', lastState = '', clearKey = false;
+  let actionBusy = false, controller, filter = '', lastState = '', clearKey = false, checkingRefs = false;
   let variableMode = 'current', pendingDelete, stateRequest = 0;
   const variableModeKey = 'wps-mcp.variable-mode';
   try { if (localStorage.getItem(variableModeKey) === 'all') variableMode = 'all'; } catch {}
@@ -213,6 +213,7 @@
       const variable = state.variables.find(v => v.variableId === item.variableId);
       if (item.renderId && variable) variable.renders = variable.renders.filter(r => r.renderId !== item.renderId);
       else state.variables = state.variables.filter(v => v.variableId !== item.variableId);
+      syncComposerRefs();
       actionErrors.delete(item.variableId);
       notice(item.renderId ? 'Render 绑定已删除，文档内容保留。' : '变量及关联 Render 已删除，文档内容保留。');
     } catch (error) { actionErrors.set(item.variableId, '删除失败：' + error.message); notice('删除失败：' + error.message, true); }
@@ -353,6 +354,7 @@
   function chipNode(ref) {
     ref = structuredClone(ref);
     if (ref.kind === 'sel') { delete ref.selectionResolved; ref = V.selectionReference(ref, state, online); }
+    else ref = V.variableReference(ref, state);
     const key = String(++refSerial); composerRefs.set(key, ref);
     const chip = document.createElement('span'); chip.className = 'ref'; chip.contentEditable = 'false'; chip.dataset.refkey = key; chip.tabIndex = 0; chip.setAttribute('role', 'button'); chip.setAttribute('aria-label', '预览引用 ' + ref.label);
     const label = document.createElement('span'); label.dataset.refLabel = ''; label.textContent = V.referenceChipLabel(ref);
@@ -363,6 +365,7 @@
     }
     chip.append(label, remove); chip.title = ref.label;
     if (ref.kind === 'sel') renderSelectionChip(chip, ref);
+    else if (['var', 'render'].includes(ref.kind)) renderVariableChip(chip, ref);
     return chip;
   }
   function renderSelectionChip(chip, ref) {
@@ -377,15 +380,23 @@
     toggle.setAttribute('aria-label', toggle.title);
     chip.classList.toggle('unavailable', !!ref.unavailable);
   }
-  function syncComposerRefs() {
+  function syncComposerRefs(snapshot = state) {
     $('editor').querySelectorAll('[data-refkey]').forEach(chip => {
-      const ref = composerRefs.get(chip.dataset.refkey); if (!ref || ref.kind !== 'sel') return;
-      const next = V.selectionReference(ref, state, online);
+      const ref = composerRefs.get(chip.dataset.refkey); if (!ref) return;
+      const next = ref.kind === 'sel' ? V.selectionReference(ref, snapshot, online) : V.variableReference(ref, snapshot);
       const changed = JSON.stringify(next) !== JSON.stringify(ref);
       Object.assign(ref, next);
-      renderSelectionChip(chip, ref);
+      if (ref.kind === 'sel') renderSelectionChip(chip, ref);
+      else if (['var', 'render'].includes(ref.kind)) renderVariableChip(chip, ref);
       if (changed && pinnedRef === ref) showRefPop(chip, ref, true);
     });
+  }
+  function renderVariableChip(chip, ref) {
+    const label = V.referenceChipLabel(ref);
+    chip.querySelector('[data-ref-label]').textContent = label;
+    chip.title = ref.unavailable ? label + '，请移除后再发送' : label;
+    chip.setAttribute('aria-label', '预览引用 ' + label);
+    chip.classList.toggle('unavailable', !!ref.unavailable);
   }
   let insertingRef = false;
   async function insertRef(ref) {
@@ -547,7 +558,7 @@
   async function history() {
     const value = await api('/api/chat'); if (controller) return;
     const changed = JSON.stringify(value) !== lastHistory; lastHistory = JSON.stringify(value);
-    const previousBusy = peerBusy; peerBusy = value.busy; $('sendBtn').disabled = peerBusy;
+    const previousBusy = peerBusy; peerBusy = value.busy; $('sendBtn').disabled = peerBusy || checkingRefs;
     if (peerBusy && !previousBusy) notice('另一个面板正在运行会话；过程会自动同步，结束后可继续发送。');
     if (!peerBusy && previousBusy) notice('会话已完成，最新历史已同步。');
     if (changed) { turns = V.historyTurns(value.messages, value.turns, peerBusy); renderTurns(); showUsage(value.contextUsage, turns.at(-1)); }
@@ -567,7 +578,22 @@
     }
   };
   async function send() {
-    const input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || $('editor').querySelector('[data-selection-mode]:disabled')) return;
+    let input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || checkingRefs || $('editor').querySelector('[data-selection-mode]:disabled')) return;
+    if (input.refs.some(ref => ['var', 'render'].includes(ref.kind))) {
+      checkingRefs = true; $('sendBtn').disabled = true;
+      try {
+        // A peer may delete a definition between polls. Check before clearing
+        // the draft or opening a chat stream, retaining the user's message.
+        const latest = await api('/api/state'); syncComposerRefs(latest);
+        input = readComposer();
+        if (!input.message) return;
+        const deleted = input.refs.filter(ref => ['var', 'render'].includes(ref.kind) && V.variableReference(ref, latest).unavailable);
+        if (deleted.length) { notice('引用已删除：' + deleted.map(ref => ref.label || ref.id).join('、') + '。请点击引用上的 × 移除后再发送。', true); return; }
+      } catch (error) {
+        notice('无法核对变量引用：' + error.message + '。请连接本机服务后再发送。', true); return;
+      } finally { checkingRefs = false; $('sendBtn').disabled = peerBusy || !!controller; }
+      if (controller || peerBusy) return;
+    }
     const turn = V.newTurn(input.message, input.refs); turns.push(turn); controller = new AbortController(); followTail = true;
     turn.model = config?.model.id; showUsage(undefined, turn);
     $('sendBtn').disabled = true; $('stopBtn').hidden = false; $('editor').replaceChildren(); closeMention(); pinnedRef = undefined; hideRefPop(); notice(''); renderTurns();

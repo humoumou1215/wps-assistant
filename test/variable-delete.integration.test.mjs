@@ -57,6 +57,10 @@ test('a failed deletion commit retains memory and recovers without poisoning the
     h = await startHarness({ dataDir: dir });
     const get = async () => (await (await fetch(h.base + '/api/state')).json()).variables;
     const post = body => fetch(h.base + '/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    // Registration persists asynchronously. A completed Render drains earlier writes
+    // before the fixture replaces state.json, so a late registration cannot recreate it.
+    const rendered = await fetch(h.base + '/api/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ op: 'render', variableId: 'var_001', renderId: 'var_001_r0' }) });
+    assert.equal(rendered.status, 200); await rendered.json();
     const before = await get();
     // A directory at the final state path deterministically makes atomic rename fail, also on Windows.
     await rm(file); await mkdir(file);

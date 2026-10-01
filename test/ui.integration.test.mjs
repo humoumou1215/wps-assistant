@@ -129,6 +129,7 @@ test('saved bindings and legacy pi tool calls survive restart and use canonical 
     const post = (path, body) => fetch(h.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     await post('/api/config', h.cfg);
     await (await post('/api/chat', { message: '验证绑定' })).text();
+    const beforeStats = (await (await fetch(h.base + '/api/chat')).json()).sessionStats;
     await h.close();
     const oldNames = { wps_list_documents: 'workspace_list_documents', wps_get_document: 'document_get', wps_run_readonly_code: 'wps_exec', wps_create_variable: 'transform_create', wps_create_render: 'render_create', wps_get_variable: 'variable_get', wps_run_transform: 'variable_transform', wps_run_render: 'variable_render' };
     const legacy = value => {
@@ -152,6 +153,7 @@ test('saved bindings and legacy pi tool calls survive restart and use canonical 
     assert.equal(state.variables[0].value, 120);
     const history = await (await fetch(h.base + '/api/chat')).json();
     assert.ok(history.messages.some(m => m.role === 'assistant'));
+    assert.deepEqual(history.sessionStats, beforeStats, 'complete statistics survive restarting without another model call');
     assert.equal((await post('/api/actions', { op: 'render', variableId: state.variables[0].variableId })).status, 200);
     assert.equal(h.appState.written, 120);
     await post('/api/config', h.cfg);
@@ -169,4 +171,42 @@ test('saved bindings and legacy pi tool calls survive restart and use canonical 
     const saved = (await Promise.all(sessionFiles.map(name => readFile(dir + '/pi/sessions/' + name, 'utf8')))).join('');
     assert.match(saved, /"name":"transform_create"/, 'original persisted history is retained');
   } finally { if (h) await h.close(); await rm(dir, { recursive: true, force: true }); }
+});
+
+test('session statistics separate cached input and count every model/tool message', { timeout: 30000 }, async () => {
+  const h = await startHarness({ usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120, prompt_tokens_details: { cached_tokens: 80 } } });
+  const get = async () => (await fetch(h.base + '/api/chat')).json();
+  const post = (path, body) => fetch(h.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  try {
+    const empty = (await get()).sessionStats;
+    assert.equal(empty.userMessages, 0);
+    assert.equal(empty.cacheHitRate, null, 'empty usage has no cache rate');
+    assert.equal(h.requests.length, 0, 'reading stats never calls the model');
+    await post('/api/config', h.cfg);
+    const stream = await (await post('/api/chat', { message: '验证绑定' })).text();
+    const end = JSON.parse(stream.match(/event: turn.end\ndata: ([^\n]+)/)[1]);
+    const stats = (await get()).sessionStats;
+    assert.deepEqual(stats.tokens, { input: 180, output: 180, cacheRead: 720, cacheWrite: 0, total: 1080 });
+    assert.equal(stats.cacheHitRate, 80);
+    assert.equal(stats.rounds, 1);
+    assert.equal(stats.modelCalls, 9);
+    assert.equal(stats.userMessages, 1);
+    assert.equal(stats.assistantMessages, 9);
+    assert.equal(stats.toolCalls, 8);
+    assert.equal(stats.toolResults, 8);
+    assert.equal(stats.otherMessages, 1, 'SDK also counts the system message');
+    assert.equal(stats.totalMessages, 19);
+    assert.equal(stats.costComplete, false, 'zero configured custom prices do not mean free usage');
+    assert.ok(stats.activeDurationMs > 0);
+    assert.ok(stats.sessionId);
+    assert.match(stats.sessionFile, /\.jsonl$/);
+    assert.equal(stats.projectDirectory, h.dir + '/pi');
+    assert.deepEqual(end.sessionStats.tokens, stats.tokens, 'streaming completion carries updated totals');
+    await (await post('/api/chat', { message: '第二轮' })).text();
+    const next = (await get()).sessionStats;
+    assert.equal(next.rounds, 2);
+    assert.equal(next.modelCalls, 10);
+    assert.equal(next.cacheHitRate, 80);
+    assert.deepEqual(next.tokens, { input: 200, output: 200, cacheRead: 800, cacheWrite: 0, total: 1200 });
+  } finally { await h.close(); }
 });

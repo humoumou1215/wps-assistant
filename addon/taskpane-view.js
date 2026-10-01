@@ -65,6 +65,40 @@
     }
     return html;
   }
+  function agentInfoHTML(stats, context, modelName) {
+    const number = value => Number.isFinite(value) ? value.toLocaleString('zh-CN') : '—';
+    const rows = values => '<dl>' + values.map(([label, value, title]) => '<dt' + (title ? ' title="' + esc(title) + '"' : '') + '>' + esc(label) + '</dt><dd>' + esc(value) + '</dd>').join('') + '</dl>';
+    const time = ms => {
+      if (!Number.isFinite(ms)) return '—';
+      const seconds = Math.floor(ms / 1000), hours = Math.floor(seconds / 3600), minutes = Math.floor(seconds % 3600 / 60);
+      return (hours ? hours + 'h ' : '') + minutes + 'm ' + seconds % 60 + 's';
+    };
+    const tokens = stats?.tokens;
+    const cost = Number.isFinite(stats?.cost) ? stats.costComplete === false && stats.cost === 0 ? '未配置单价' : '$' + stats.cost.toFixed(4) + (stats.costComplete === false ? '（已计价部分）' : '') : '—';
+    const usage = context || stats?.contextUsage;
+    return '<div class="agent-info"><section class="agent-session"><h3>会话信息</h3>' + rows([['会话文件', stats?.sessionFile || '—'], ['ID', stats?.sessionId || '—'], ['活跃时长', time(stats?.activeDurationMs), '已记录轮次的执行耗时之和，不含轮次之间的等待时间'], ['模型', modelName || '尚未配置']]) + '<h3 class="agent-project-title">项目信息</h3>' + rows([['项目目录', stats?.projectDirectory || '—']]) + '</section><section><h3>消息</h3>' + rows([['用户', number(stats?.userMessages)], ['助手', number(stats?.assistantMessages)], ['工具调用', number(stats?.toolCalls)], ['工具结果', number(stats?.toolResults)], ['其他消息', number(stats?.otherMessages), '系统提示词等会话日志中的其他消息'], ['总计', number(stats?.totalMessages)], ['轮次', number(stats?.rounds)], ['模型调用', number(stats?.modelCalls)]]) + '</section><section><h3>Token</h3>' + rows([['输入', number(tokens?.input)], ['输出', number(tokens?.output)], ['缓存读取', number(tokens?.cacheRead)], ['缓存写入', number(tokens?.cacheWrite)], ['总计', number(tokens?.total)], ['费用', cost], ['上下文', number(usage?.tokens) + ' / ' + number(usage?.contextWindow)], ['上下文占用', Number.isFinite(usage?.percent) ? usage.percent.toFixed(1) + '%' : '—'], ['平均缓存命中率', Number.isFinite(stats?.cacheHitRate) ? stats.cacheHitRate.toFixed(1) + '%' : '—', '累计缓存读取 ÷（累计输入 + 缓存读取 + 缓存写入），按 Token 加权']]) + '</section></div>';
+  }
+  function schemaType(schema = {}) {
+    if (schema.const !== undefined) return JSON.stringify(schema.const);
+    if (schema.enum) return schema.enum.map(value => JSON.stringify(value)).join(' | ');
+    const alternatives = schema.anyOf || schema.oneOf;
+    if (alternatives) return alternatives.map(schemaType).join(' | ');
+    if (schema.type === 'array') return 'array<' + schemaType(schema.items) + '>';
+    return Array.isArray(schema.type) ? schema.type.join(' | ') : schema.type || schema.$ref || '任意类型';
+  }
+  function agentToolHTML(tool) {
+    const schema = tool.parameters || {}, properties = Object.entries(schema.properties || {}), required = new Set(schema.required || []);
+    const rows = properties.map(([name, property]) => {
+      const constraints = ['default', 'minimum', 'maximum', 'minLength', 'maxLength', 'pattern', 'minItems', 'maxItems'].filter(key => property[key] !== undefined).map(key => key + ': ' + JSON.stringify(property[key]));
+      return '<tr><td><code>' + esc(name) + '</code><span class="agent-' + (required.has(name) ? 'required">必填' : 'optional">可选') + '</span></td><td><code>' + esc(schemaType(property)) + '</code><p class="agent-description">' + esc(property.description) + '</p>' + (constraints.length ? '<div class="agent-constraints">' + esc(constraints.join(' · ')) + '</div>' : '') + '</td></tr>';
+    }).join('');
+    const nested = properties.some(([, property]) => property.properties || property.items?.properties || property.anyOf || property.oneOf || property.$ref);
+    return '<section><h3>描述</h3><p class="agent-description">' + esc(tool.description) + '</p></section><section><div class="agent-section-head"><h3>参数</h3><span>' + properties.length + ' 个参数</span></div>' + (rows ? '<table class="agent-parameters" aria-label="工具参数"><tbody>' + rows + '</tbody></table>' : '<p class="agent-description">无需参数。</p>') + (nested || !schema.properties && Object.keys(schema).length ? '<details><summary>完整参数定义</summary><pre>' + esc(JSON.stringify(schema, null, 2)) + '</pre></details>' : '') + '</section>';
+  }
+  function agentSkillHTML(skill, directory, diagnostics = []) {
+    const content = String(skill.content || '').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
+    return '<section><h3>描述</h3><p class="agent-description">' + esc(skill.description) + '</p></section><section><h3>调用方式</h3><p class="agent-description">' + (skill.disableModelInvocation ? '仅手动调用' : '助手按任务需要读取') + '</p></section><section><h3>技能来源</h3><div class="agent-path">' + esc(skill.filePath) + '</div><div class="agent-path">技能目录：' + esc(directory) + '</div></section><section><h3>技能正文</h3><div class="body-text">' + markdown(content) + '</div></section>' + (diagnostics.length ? '<section><details><summary>技能加载提示</summary><pre>' + esc(JSON.stringify(diagnostics, null, 2)) + '</pre></details></section>' : '');
+  }
   function tableOf(value) {
     if (!Array.isArray(value) || !value.length) return null;
     if (Array.isArray(value[0])) return { cols: Array.from({ length: Math.max(...value.slice(0, 20).map(r => Array.isArray(r) ? r.length : 0)) }, (_, i) => '列 ' + (i + 1)), rows: value };
@@ -325,5 +359,5 @@
       ]),
     ];
   }
-  globalThis.WpsPaneView = { esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, variablesInMode, variableActions, referenceCatalog, variableReference, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML, selectionRequest };
+  globalThis.WpsPaneView = { agentInfoHTML, agentToolHTML, agentSkillHTML, esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, variablesInMode, variableActions, referenceCatalog, variableReference, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML, selectionRequest };
 })();

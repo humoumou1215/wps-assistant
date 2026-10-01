@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
-export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps } = {}) {
+export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps, usage = { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 } } = {}) {
   if (!port) { const probe = createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r)); port = probe.address().port; await new Promise(r => probe.close(r)); }
   const dir = dataDir || await mkdtemp(join(tmpdir(), 'wps-ui-test-'));
   const requests = [], appState = { value: 120, written: null, failRender: false, type: 'spreadsheet', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' }, inspected: 0, reads: [] };
@@ -46,7 +46,7 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps
     const chunk = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ id: 'completion-test', object: 'chat.completion.chunk', created: 1, model: body.model, choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
     if (user.includes('原型回归')) chunk({ role: 'assistant', reasoning_content: '先核对引用快照与明确文档，再检查工具结果。' });
     chunk({ role: 'assistant', ...(toolCalls ? { tool_calls: toolCalls } : { content }) });
-    res.write(`data: ${JSON.stringify({ id: 'completion-test', choices: [], usage: { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 } })}\n\n`);
+    res.write(`data: ${JSON.stringify({ id: 'completion-test', choices: [], usage })}\n\n`);
     chunk({}, step ? 'tool_calls' : 'stop'); res.end('data: [DONE]\n\n');
   });
   await new Promise(r => model.listen(modelPort, '127.0.0.1', r)); modelPort = model.address().port;

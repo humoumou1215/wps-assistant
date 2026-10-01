@@ -102,7 +102,7 @@ test('Stop cancels an agent Render waiting behind a UI mutation without later wr
     blocker.value = 111; queued.value = 222;
     blocker.renders[0].code = 'return Application.reviewGate.then(() => { Application.ActiveSheet.Range("D3").Value2 = variable.value; return true; });';
     await writeFile(join(dir, 'state.json'), JSON.stringify({ variables: [blocker, queued], counters: {}, documentIds: {} }));
-    h = await startHarness({ dataDir: dir, toolSteps: [['variable_render', { variableId: queued.variableId }]] });
+    h = await startHarness({ dataDir: dir, toolSteps: [['wps_run_render', { variableId: queued.variableId }]] });
     h.app.reviewGate = new Promise(resolve => { release = resolve; });
     const post = (path, body, signal) => fetch(h.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
     await post('/api/config', h.cfg);

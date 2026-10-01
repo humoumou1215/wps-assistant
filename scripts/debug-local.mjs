@@ -184,36 +184,36 @@ try {
   section("MCP handshake");
   const tools = await client.listTools();
   const names = tools.tools.map((t) => t.name);
-  check("8 tools exposed", names.length === 8, names);
+  check("10 tools exposed", names.length === 10, names);
   check("tool names match spec.md", JSON.stringify(names) === JSON.stringify([
-    "workspace.list_documents", "document.get", "wps.exec", "transform.create",
-    "render.create", "variable.get", "variable.transform", "variable.render",
+    "wps_list_documents", "wps_get_document", "wps_run_readonly_code", "wps_create_variable", "wps_update_transform",
+    "wps_create_render", "wps_update_render", "wps_get_variable", "wps_run_transform", "wps_run_render",
   ]), names);
 
-  section("1. workspace.list_documents");
-  const listed = parse(await client.callTool({ name: "workspace.list_documents", arguments: {} }));
+  section("1. wps_list_documents");
+  const listed = parse(await client.callTool({ name: "wps_list_documents", arguments: {} }));
   check("two documents visible", listed.documents?.length === 2, listed);
   const excel = listed.documents.find((d) => d.type === "spreadsheet");
   const ppt = listed.documents.find((d) => d.type === "presentation");
   check("spreadsheet routed to ET connection", excel?.name === "销售数据.xlsx", excel);
   check("presentation routed to WPP connection", ppt?.name === "经营汇报.pptx", ppt);
 
-  section("2. document.get");
-  const excelDoc = parse(await client.callTool({ name: "document.get", arguments: { documentId: excel.documentId } }));
+  section("2. wps_get_document");
+  const excelDoc = parse(await client.callTool({ name: "wps_get_document", arguments: { documentId: excel.documentId } }));
   check("activeSheet reported", excelDoc.activeSheet === "销售数据", excelDoc);
   check("selection reported", excelDoc.selection?.address === "A1:B4", excelDoc.selection);
-  const pptDoc = parse(await client.callTool({ name: "document.get", arguments: { documentId: ppt.documentId } }));
+  const pptDoc = parse(await client.callTool({ name: "wps_get_document", arguments: { documentId: ppt.documentId } }));
   check("activeSlide reported", pptDoc.activeSlide === 3, pptDoc);
   check("shape selection reported", pptDoc.selection?.shapeNames?.[0] === "销售图", pptDoc.selection);
 
-  section("3. wps.exec (read-only investigation)");
-  const queried = parse(await client.callTool({ name: "wps.exec", arguments: {
+  section("3. wps_run_readonly_code (read-only investigation)");
+  const queried = parse(await client.callTool({ name: "wps_run_readonly_code", arguments: {
     documentId: excel.documentId,
     code: "const sheet = Application.Worksheets.Item('销售数据'); return { sheet: sheet.Name, rows: sheet.Range('A1:B4').Value2 };",
   } }));
   check("read workbook through WPS JS API", queried.success === true && queried.result.rows.length === 4, queried);
 
-  section("4. Read-only guard (wps.exec must not modify documents)");
+  section("4. Read-only guard (wps_run_readonly_code must not modify documents)");
   for (const [label, code, pattern] of [
     ["assignment to Range", "Application.ActiveSheet.Range('A1').Value2 = 1; return true;", /READ_ONLY_VIOLATION/],
     ["method call add()", "return Application.ActiveWorkbook.Worksheets.Add();", /READ_ONLY_VIOLATION/],
@@ -223,12 +223,12 @@ try {
     ["dynamic member call", "const k = 'Item'; return Application.Worksheets[k](1);", /READ_ONLY_VIOLATION/],
     ["syntax error", "return {;", /INVALID_REQUEST/],
   ]) {
-    const blocked = await client.callTool({ name: "wps.exec", arguments: { documentId: excel.documentId, code } });
+    const blocked = await client.callTool({ name: "wps_run_readonly_code", arguments: { documentId: excel.documentId, code } });
     check(`blocked: ${label}`, blocked.isError === true && pattern.test(blocked.content[0].text), blocked.content[0].text);
   }
 
-  section("5. transform.create + variable.transform");
-  const created = parse(await client.callTool({ name: "transform.create", arguments: {
+  section("5. wps_create_variable + wps_run_transform");
+  const created = parse(await client.callTool({ name: "wps_create_variable", arguments: {
     variableName: "部门销售额",
     description: "读取销售数据工作表中的部门和销售额",
     sourceDocumentId: excel.documentId,
@@ -237,21 +237,21 @@ try {
   check("variable created", created.success === true && /^var_/.test(created.variableId), created);
   const variableId = created.variableId;
 
-  const before = parse(await client.callTool({ name: "variable.get", arguments: { variableId } }));
+  const before = parse(await client.callTool({ name: "wps_get_variable", arguments: { variableId } }));
   check("value absent before first transform", Object.hasOwn(before, "value") === false, before);
 
-  const transformed = parse(await client.callTool({ name: "variable.transform", arguments: { variableId } }));
+  const transformed = parse(await client.callTool({ name: "wps_run_transform", arguments: { variableId } }));
   check("transform returned 3 rows", transformed.value?.length === 3, transformed);
   check("transform mapped fields", transformed.value?.[0]?.department === "华东" && transformed.value?.[0]?.sales === 120000, transformed.value);
 
-  const rendEarly = parse(await client.callTool({ name: "render.create", arguments: {
+  const rendEarly = parse(await client.callTool({ name: "wps_create_render", arguments: {
     variableId, targetDocumentId: ppt.documentId, description: "渲染前占位",
     code: "return { ok: true };",
   } }));
-  check("render.create saves without executing", rendEarly.success === true, rendEarly);
+  check("wps_create_render saves without executing", rendEarly.success === true, rendEarly);
 
-  section("6. render.create + variable.render (document write path)");
-  const render = parse(await client.callTool({ name: "render.create", arguments: {
+  section("6. wps_create_render + wps_run_render (document write path)");
+  const render = parse(await client.callTool({ name: "wps_create_render", arguments: {
     variableId,
     targetDocumentId: ppt.documentId,
     description: "将部门销售额更新到第3页销售图",
@@ -260,26 +260,26 @@ try {
   check("render created", render.success === true && /^render_/.test(render.renderId), render);
   check("render not executed by create", chartState.writes.length === 0, chartState.writes);
 
-  const rendered = parse(await client.callTool({ name: "variable.render", arguments: { variableId, renderId: render.renderId } }));
+  const rendered = parse(await client.callTool({ name: "wps_run_render", arguments: { variableId, renderId: render.renderId } }));
   check("render succeeded", rendered.success === true && rendered.renders?.[0]?.result?.count === 3, rendered);
   check("variable payload reached render code", chartState.chart.length === 3, chartState.chart);
 
-  const after = parse(await client.callTool({ name: "variable.get", arguments: { variableId } }));
+  const after = parse(await client.callTool({ name: "wps_get_variable", arguments: { variableId } }));
   check("value persisted", after.value?.length === 3, after.value);
   check("render metadata listed", after.renders?.length === 2, after.renders);
 
   section("7. Error contract");
   for (const [label, tool, args, code] of [
-    ["unknown document", "document.get", { documentId: "doc_999" }, "DOCUMENT_NOT_FOUND"],
-    ["unknown document on exec", "wps.exec", { documentId: "doc_999", code: "return 1;" }, "DOCUMENT_NOT_FOUND"],
-    ["unknown variable", "variable.get", { variableId: "var_999" }, "VARIABLE_NOT_FOUND"],
-    ["unknown render", "variable.render", { variableId, renderId: "render_999" }, "RENDER_NOT_FOUND"],
+    ["unknown document", "wps_get_document", { documentId: "doc_999" }, "DOCUMENT_NOT_FOUND"],
+    ["unknown document on exec", "wps_run_readonly_code", { documentId: "doc_999", code: "return 1;" }, "DOCUMENT_NOT_FOUND"],
+    ["unknown variable", "wps_get_variable", { variableId: "var_999" }, "VARIABLE_NOT_FOUND"],
+    ["unknown render", "wps_run_render", { variableId, renderId: "render_999" }, "RENDER_NOT_FOUND"],
   ]) {
     const result = await client.callTool({ name: tool, arguments: args });
     check(`${label} -> ${code}`, result.isError === true && result.content[0].text.includes(code), result.content[0].text);
   }
 
-  const runtimeError = parse(await client.callTool({ name: "wps.exec", arguments: {
+  const runtimeError = parse(await client.callTool({ name: "wps_run_readonly_code", arguments: {
     documentId: excel.documentId, code: "return Application.Worksheets.Item('不存在').Name;",
   } }));
   check("runtime error surfaces WPS_EXEC_ERROR", runtimeError.success === false && runtimeError.error?.code === "WPS_EXEC_ERROR", runtimeError);
@@ -297,9 +297,9 @@ try {
   section("9. Disconnect handling");
   sockets[0].close();
   await new Promise((r) => setTimeout(r, 300));
-  const afterClose = parse(await client.callTool({ name: "wps.exec", arguments: { documentId: excel.documentId, code: "return 1;" } }));
+  const afterClose = parse(await client.callTool({ name: "wps_run_readonly_code", arguments: { documentId: excel.documentId, code: "return 1;" } }));
   check("disconnected doc rejected", afterClose.success === false && afterClose.error?.code === "DOCUMENT_DISCONNECTED", afterClose);
-  const stillThere = parse(await client.callTool({ name: "workspace.list_documents", arguments: {} }));
+  const stillThere = parse(await client.callTool({ name: "wps_list_documents", arguments: {} }));
   check("disconnected doc hidden from listing", stillThere.documents?.length === 1, stillThere);
 } catch (error) {
   console.error("\nHARNESS ERROR:", error);

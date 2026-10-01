@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { startHarness } from './helpers/ui-harness.mjs';
 
 test('task pane API, isolated pi session, full tool loop, errors, cancellation and config privacy', { timeout: 60000 }, async () => {
@@ -16,7 +16,8 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
     assert.match(resources.systemPrompt, /wps-api/);
     assert.equal(resources.skills.find(s => s.name === 'wps-api').content, await readFile(new URL('../skills/wps-api/SKILL.md', import.meta.url), 'utf8'));
     assert.match(await readFile(h.dir + '/pi/skills/wps-api/references/spreadsheet.md', 'utf8'), /Range/);
-    assert.equal(resources.tools.length, 9);
+    assert.equal(resources.tools.length, 11);
+    assert.ok(resources.tools.filter(t => t.name !== 'read').every(t => /^wps_[a-z]+(?:_[a-z]+)*$/.test(t.name)));
     assert.ok(resources.tools.some(t => t.name === 'read' && t.parameters.properties.path));
     assert.equal((await fetch(h.base + '/api/agent', { headers: { Origin: 'https://evil.example' } })).status, 403);
     for (const path of ['/addon/taskpane.html', '/addins/et/taskpane.js', '/addins/wpp/taskpane.css', '/addins/wps/taskpane.html']) assert.equal((await fetch(h.base + path)).status, 200);
@@ -39,7 +40,7 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
     assert.equal(state.variables[0].transform.sourceRef, '销售数据!A1:B3');
     assert.ok(state.variables[0].transform.lastRun); assert.ok(state.variables[0].renders[0].lastRun);
     const chatRequest = h.requests.find(r => r.body.tools?.length);
-    assert.equal(chatRequest.body.tools.length, 9);
+    assert.equal(chatRequest.body.tools.length, 11);
     assert.ok(chatRequest.body.tools.every(t => !['write', 'edit', 'bash', 'powershell'].includes(t.function.name)));
     assert.match(JSON.stringify(chatRequest.body.messages), /引用快照/);
     const currentResources = await get('/api/agent');
@@ -47,6 +48,14 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
     const sentSystemText = typeof sentSystem.content === 'string' ? sentSystem.content : sentSystem.content.map(c => c.text || '').join('');
     assert.equal(sentSystemText, currentResources.systemPrompt, 'inspector shows the exact system prompt sent to the model');
     assert.deepEqual(currentResources.tools.map(t => t.name).sort(), chatRequest.body.tools.map(t => t.function.name).sort());
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { StreamableHTTPClientTransport } = await import('@modelcontextprotocol/sdk/client/streamableHttp.js');
+    const mcp = new Client({ name: 'tool-names-test', version: '1.0.0' });
+    try {
+      await mcp.connect(new StreamableHTTPClientTransport(new URL(h.base + '/mcp')));
+      const exposed = await mcp.listTools();
+      assert.deepEqual(exposed.tools.map(t => t.name).sort(), currentResources.tools.filter(t => t.name !== 'read').map(t => t.name).sort(), 'MCP and pi expose the same WPS names');
+    } finally { await mcp.close(); }
     const skillsStream = await (await post('/api/chat', { message: '技能读取' })).text();
     assert.match(skillsStream, /技能资料已读取/);
     const skillsHistory = await get('/api/chat');
@@ -81,7 +90,35 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
   } finally { await h.close(); }
 });
 
-test('saved bindings and pi conversation survive bridge restart and document reconnect', { timeout: 30000 }, async () => {
+test('a later chat turn updates the original rules, recalculates and writes without duplicate bindings', { timeout: 30000 }, async () => {
+  const h = await startHarness();
+  const post = (path, body) => fetch(h.base + path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  const state = async () => (await (await fetch(h.base + '/api/state')).json()).variables;
+  try {
+    await post('/api/config', h.cfg);
+    await (await post('/api/chat', { message: '验证绑定' })).text();
+    const original = (await state())[0];
+    const stream = await (await post('/api/chat', { message: '修改规则：计算三条数据的平均值，写入时乘以十。', refs: [{ kind: 'var', id: original.variableId }] })).text();
+    assert.match(stream, /原规则已修改/);
+    const variables = await state();
+    assert.equal(variables.length, 1);
+    const updated = variables[0];
+    assert.equal(updated.variableId, original.variableId);
+    assert.equal(updated.transform.transformId, original.transform.transformId);
+    assert.equal(updated.renders.length, 1);
+    assert.equal(updated.renders[0].renderId, original.renders[0].renderId);
+    assert.equal(updated.value, 40); assert.equal(h.appState.written, 400);
+    const history = await (await fetch(h.base + '/api/chat')).json();
+    const last = history.turns.at(-1);
+    assert.deepEqual(Object.values(last.tools).map(t => t.toolName), ['wps_get_variable', 'wps_update_transform', 'wps_run_transform', 'wps_update_render', 'wps_run_render']);
+    const read = Object.values(last.tools)[0].result;
+    assert.equal(read.transform.code, original.transform.code);
+    assert.equal(read.renders[0].code, original.renders[0].code);
+    assert.equal(Object.values(last.tools).at(-1).args.renderId, original.renders[0].renderId);
+  } finally { await h.close(); }
+});
+
+test('saved bindings and legacy pi tool calls survive restart and use canonical names in later model requests', { timeout: 30000 }, async () => {
   const { mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
@@ -93,6 +130,22 @@ test('saved bindings and pi conversation survive bridge restart and document rec
     await post('/api/config', h.cfg);
     await (await post('/api/chat', { message: '验证绑定' })).text();
     await h.close();
+    const oldNames = { wps_list_documents: 'workspace_list_documents', wps_get_document: 'document_get', wps_run_readonly_code: 'wps_exec', wps_create_variable: 'transform_create', wps_create_render: 'render_create', wps_get_variable: 'variable_get', wps_run_transform: 'variable_transform', wps_run_render: 'variable_render' };
+    const legacy = value => {
+      if (Array.isArray(value)) return value.map(legacy);
+      if (!value || typeof value !== 'object') return value;
+      const result = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, legacy(item)]));
+      if (result.type === 'toolCall' && oldNames[result.name]) result.name = oldNames[result.name];
+      if (oldNames[result.toolName]) result.toolName = oldNames[result.toolName];
+      return result;
+    };
+    const sessionFiles = (await readdir(dir + '/pi/sessions')).filter(name => name.endsWith('.jsonl'));
+    assert.ok(sessionFiles.length);
+    for (const name of sessionFiles) {
+      const file = dir + '/pi/sessions/' + name;
+      const lines = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.stringify(legacy(JSON.parse(line))));
+      await writeFile(file, lines.join('\n') + '\n');
+    }
     h = await startHarness({ dataDir: dir });
     const state = await (await fetch(h.base + '/api/state')).json();
     assert.equal(state.documents[0].documentId, state.variables[0].transform.sourceDocumentId);
@@ -101,5 +154,19 @@ test('saved bindings and pi conversation survive bridge restart and document rec
     assert.ok(history.messages.some(m => m.role === 'assistant'));
     assert.equal((await post('/api/actions', { op: 'render', variableId: state.variables[0].variableId })).status, 200);
     assert.equal(h.appState.written, 120);
+    await post('/api/config', h.cfg);
+    const correction = await (await post('/api/chat', { message: '修改规则' })).text();
+    assert.match(correction, /原规则已修改/); assert.equal(h.appState.written, 400);
+    const request = h.requests.find(r => r.body.tools?.length).body;
+    const calls = request.messages.flatMap(m => m.tool_calls || []).map(c => c.function.name);
+    assert.ok(calls.includes('wps_create_variable'));
+    assert.ok(calls.every(name => name.startsWith('wps_')), 'historical calls are normalized before reaching the model');
+    const { normalizeToolMessages } = await import('../dist/src/tool-names.js');
+    const normalized = normalizeToolMessages(history.messages);
+    const results = normalized.filter(m => m.role === 'toolResult');
+    assert.ok(results.length && results.every(m => m.toolName.startsWith('wps_')));
+    assert.ok(history.messages.some(m => m.role === 'toolResult' && m.toolName === 'variable_get'), 'normalizing model context leaves saved tool results intact');
+    const saved = (await Promise.all(sessionFiles.map(name => readFile(dir + '/pi/sessions/' + name, 'utf8')))).join('');
+    assert.match(saved, /"name":"transform_create"/, 'original persisted history is retained');
   } finally { if (h) await h.close(); await rm(dir, { recursive: true, force: true }); }
 });

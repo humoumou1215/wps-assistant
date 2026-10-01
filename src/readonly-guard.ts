@@ -1,5 +1,5 @@
 /**
- * Read-only code guard for `wps.exec` / `variable.transform`.
+ * Read-only code guard for `wps_run_readonly_code` / `wps_run_transform`.
  *
  * This module is the single source of truth for what read-only code may contain.
  * It is a *name-based* AST check, not a sandbox: WPS JS API is intentionally powerful.
@@ -242,7 +242,7 @@ export function analyzeReadOnlyCode(code: string): GuardAnalysis {
 export function formatReadOnlyViolations(violations: ReadOnlyViolation[], limit = 30): string {
   const shown = violations.slice(0, Math.max(0, limit));
   const head = [
-    "wps.exec / variable.transform run read-only code: nothing may be mutated, and the check is purely syntactic — it rejects edits to plain local objects exactly like edits to document objects.",
+    "wps_run_readonly_code / wps_run_transform run read-only code: nothing may be mutated, and the check is purely syntactic — it rejects edits to plain local objects exactly like edits to document objects.",
     `${violations.length} violation${violations.length === 1 ? "" : "s"} found. All of them are listed below: fix every one and resubmit once (the guard reports the whole batch, so there is no need to retry one violation at a time).`,
     "",
   ];
@@ -257,7 +257,7 @@ export function formatReadOnlyViolations(violations: ReadOnlyViolation[], limit 
   }
   const tail = [
     "",
-    "Document writes are not restricted: create the edit with render.create and run it with variable.render.",
+    "Document writes are not restricted: create the edit with wps_create_render and run it with wps_run_render.",
   ];
   return [...head, ...body, ...tail].join("\n");
 }

@@ -18,7 +18,7 @@ test('the UI fixture rejects unknown render code instead of executing it in Node
     await post('/api/config', h.cfg);
     await (await post('/api/chat', { message: '验证绑定' })).text();
     await client.connect(new StreamableHTTPClientTransport(new URL(h.base + '/mcp')));
-    const render = await client.callTool({ name: 'render.create', arguments: {
+    const render = await client.callTool({ name: 'wps_create_render', arguments: {
       variableId: 'var_001', targetDocumentId: 'doc_001', description: '未知测试代码',
       code: 'globalThis.__wpsHarnessInjected = true; return true;',
     } });

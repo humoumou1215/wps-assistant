@@ -171,7 +171,7 @@ function serializeResult(value: unknown) {
 }
 
 /**
- * Read-only guard for `wps.exec` / Variable Transforms. The rule set and the AST walk live in
+ * Read-only guard for `wps_run_readonly_code` / Variable Transforms. The rule set and the AST walk live in
  * `readonly-guard.ts` so that tooling (including the agent-facing skill) can call the exact same
  * judgement offline instead of maintaining a hand-copied denylist.
  *
@@ -311,7 +311,7 @@ function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema
         if (signal?.aborted) throw new ToolError("OPERATION_CANCELLED", "已停止，未执行此操作");
         return handler(parsed);
       };
-      result = ["transform.create", "render.create", "variable.transform", "variable.render"].includes(name)
+      result = ["wps_create_variable", "wps_update_transform", "wps_create_render", "wps_update_render", "wps_run_transform", "wps_run_render"].includes(name)
         ? await mutateVariables(execute, signal) : await execute();
     }
     catch (error) { result = toolError(error, "INTERNAL_ERROR"); }
@@ -327,14 +327,14 @@ function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema
     return result;
   }) });
 }
-defineTool("workspace.list_documents", {
+defineTool("wps_list_documents", {
   title: "List WPS documents",
   description: "List WPS documents currently available through connected WPS Add-ins.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   inputSchema: {},
 }, async () => toolResult({ documents: [...documents.values()].filter((doc) => doc.connected).map(cleanDocument) }));
 
-defineTool("document.get", {
+defineTool("wps_get_document", {
   title: "Get WPS document state",
   description: "Get document metadata, active sheet/slide, and selection.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -344,9 +344,9 @@ defineTool("document.get", {
   catch (error) { return toolError(error); }
 });
 
-defineTool("wps.exec", {
+defineTool("wps_run_readonly_code", {
   title: "Run read-only WPS JavaScript",
-  description: "Execute WPS JS API JavaScript in the selected document. Read-only; document edits belong in variable.render.",
+  description: "Execute WPS JS API JavaScript in the selected document. Read-only; document edits belong in wps_run_render.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: { documentId: z.string().min(1), code: z.string().min(1).max(MAX_CODE_LENGTH) },
 }, async ({ documentId, code }) => {
@@ -356,9 +356,9 @@ defineTool("wps.exec", {
   } catch (error) { return toolError(error, "WPS_EXEC_ERROR"); }
 });
 
-defineTool("transform.create", {
+defineTool("wps_create_variable", {
   title: "Create Variable and Transform",
-  description: "Create a Variable and save read-only WPS JavaScript that populates its value when variable.transform is called. Optional sourceRef describes the source region as SheetName!A1:B13.",
+  description: "Create a Variable and save read-only WPS JavaScript that populates its value when wps_run_transform is called. Optional sourceRef describes the source region as SheetName!A1:B13.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: {
     variableName: z.string().min(1),
@@ -386,7 +386,52 @@ defineTool("transform.create", {
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
 });
 
-defineTool("render.create", {
+defineTool("wps_update_transform", {
+  title: "Update Variable Transform",
+  description: "Update an existing Variable's read-only Transform without changing IDs or Render bindings. Omitted fields stay unchanged; null clears description/sourceRef. Code/source changes invalidate the value: run wps_run_transform before wps_run_render. Saves only, never executes WPS code.",
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  inputSchema: {
+    variableId: z.string().min(1),
+    variableName: z.string().min(1).optional(),
+    description: z.string().nullable().optional(),
+    sourceDocumentId: z.string().min(1).optional(),
+    sourceRef: z.string().max(1000).nullable().optional(),
+    code: z.string().min(1).max(MAX_CODE_LENGTH).optional(),
+  },
+}, async ({ variableId, variableName, description, sourceDocumentId, sourceRef, code }) => {
+  try {
+    const variable = variableById(variableId);
+    if ([variableName, description, sourceDocumentId, sourceRef, code].every(value => value === undefined)) {
+      throw new ToolError("INVALID_REQUEST", "Provide at least one field to update");
+    }
+    if (code !== undefined) assertReadOnlyCode(code);
+    if (sourceDocumentId !== undefined) documentById(sourceDocumentId);
+    const updated: Variable = { ...variable, transform: { ...variable.transform } };
+    if (variableName !== undefined) updated.name = variableName;
+    if (description !== undefined) {
+      if (description === null) delete updated.description;
+      else updated.description = description;
+    }
+    if (sourceDocumentId !== undefined) updated.transform.sourceDocumentId = sourceDocumentId;
+    if (sourceRef !== undefined) {
+      if (sourceRef === null) delete updated.transform.sourceRef;
+      else updated.transform.sourceRef = sourceRef;
+    }
+    if (code !== undefined) updated.transform.code = code;
+    const valueInvalidated = updated.transform.code !== variable.transform.code
+      || updated.transform.sourceDocumentId !== variable.transform.sourceDocumentId
+      || updated.transform.sourceRef !== variable.transform.sourceRef;
+    if (valueInvalidated) {
+      delete updated.value;
+      updated.hasValue = false;
+      delete updated.transform.lastRun;
+    }
+    await persist(state.variables.map(item => item === variable ? updated : item));
+    return toolResult({ success: true, variableId, transformId: updated.transform.transformId, valueInvalidated, hasValue: !!updated.hasValue });
+  } catch (error) { return toolError(error, "INVALID_REQUEST"); }
+});
+
+defineTool("wps_create_render", {
   title: "Create Render rule",
   description: "Attach a document-writing WPS JavaScript rule to an existing Variable; the rule is saved but not executed. For spreadsheets, provide targetRef as SheetName!A1:B13 so the UI can navigate to the destination.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -409,9 +454,51 @@ defineTool("render.create", {
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
 });
 
-defineTool("variable.get", {
+defineTool("wps_update_render", {
+  title: "Update Render rule",
+  description: "Update one existing Render by variableId and renderId, preserving its ID and other bindings. Omitted fields stay unchanged; null clears description/targetRef. For spreadsheets, targetRef identifies the write region for UI navigation. Saves only: run wps_run_render with this renderId to apply it. Existing document content is not undone or moved.",
+  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  inputSchema: {
+    variableId: z.string().min(1),
+    renderId: z.string().min(1),
+    targetDocumentId: z.string().min(1).optional(),
+    targetRef: z.string().min(1).max(1000).nullable().optional(),
+    description: z.string().nullable().optional(),
+    code: z.string().min(1).max(MAX_CODE_LENGTH).optional(),
+  },
+}, async ({ variableId, renderId, targetDocumentId, targetRef, description, code }) => {
+  try {
+    const variable = variableById(variableId);
+    const render = variable.renders.find(item => item.renderId === renderId);
+    if (!render) throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
+    if ([targetDocumentId, targetRef, description, code].every(value => value === undefined)) {
+      throw new ToolError("INVALID_REQUEST", "Provide at least one field to update");
+    }
+    if (targetDocumentId !== undefined) documentById(targetDocumentId);
+    if (targetRef && !parseSpreadsheetRef(targetRef)) throw new ToolError("INVALID_REQUEST", "targetRef 必须是明确的工作表与 A1 区域，例如 Summary!A1:B4");
+    const updated: Render = { ...render };
+    if (targetDocumentId !== undefined) updated.targetDocumentId = targetDocumentId;
+    if (targetRef !== undefined) {
+      if (targetRef === null) delete updated.targetRef;
+      else updated.targetRef = targetRef;
+    }
+    if (description !== undefined) {
+      if (description === null) delete updated.description;
+      else updated.description = description;
+    }
+    if (code !== undefined) updated.code = code;
+    if (updated.code !== render.code || updated.targetDocumentId !== render.targetDocumentId || updated.targetRef !== render.targetRef || updated.description !== render.description) {
+      delete updated.lastRun;
+    }
+    const updatedVariable = { ...variable, renders: variable.renders.map(item => item === render ? updated : item) };
+    await persist(state.variables.map(item => item === variable ? updatedVariable : item));
+    return toolResult({ success: true, variableId, renderId, targetDocumentId: updated.targetDocumentId, ...(updated.description !== undefined ? { description: updated.description } : {}) });
+  } catch (error) { return toolError(error, "INVALID_REQUEST"); }
+});
+
+defineTool("wps_get_variable", {
   title: "Get Variable",
-  description: "Get the latest value and its Transform/Render metadata.",
+  description: "Get the latest value, hasValue, and complete Transform/Render definitions including code and lastRun. Read this before updating an existing rule.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   inputSchema: { variableId: z.string().min(1) },
 }, async ({ variableId }) => {
@@ -420,14 +507,14 @@ defineTool("variable.get", {
     const transform = v.transform;
     return toolResult({
       variableId: v.variableId, name: v.name, ...(v.description ? { description: v.description } : {}),
-      ...(v.hasValue ? { value: v.value } : {}),
-      transform: { transformId: transform.transformId, sourceDocumentId: transform.sourceDocumentId, ...(transform.sourceRef ? { sourceRef: transform.sourceRef } : {}), ...(transform.description ? { description: transform.description } : {}) },
-      renders: v.renders.map(({ renderId, targetDocumentId, targetRef, description }) => ({ renderId, targetDocumentId, ...(targetRef ? { targetRef } : {}), ...(description ? { description } : {}) })),
+      hasValue: !!v.hasValue, ...(v.hasValue ? { value: v.value } : {}),
+      transform: { ...transform },
+      renders: v.renders.map(render => ({ ...render })),
     });
   } catch (error) { return toolError(error); }
 });
 
-defineTool("variable.transform", {
+defineTool("wps_run_transform", {
   title: "Run Variable Transform",
   description: "Run a Variable's read-only Transform in its source document and save the JSON value.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
@@ -446,7 +533,7 @@ defineTool("variable.transform", {
   } catch (error) { return toolError(error, "TRANSFORM_EXECUTION_ERROR"); }
 });
 
-defineTool("variable.render", {
+defineTool("wps_run_render", {
   title: "Run Variable Render",
   description: "Run one Render or all Renders for a Variable, allowing the saved code to modify target WPS documents.",
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
@@ -454,7 +541,7 @@ defineTool("variable.render", {
 }, async ({ variableId, renderId }) => {
   try {
     const variable = variableById(variableId);
-    if (!variable.hasValue) throw new ToolError("INVALID_REQUEST", "Variable has no value; run variable.transform first");
+    if (!variable.hasValue) throw new ToolError("INVALID_REQUEST", "Variable has no value; run wps_run_transform first");
     const selected = renderId ? variable.renders.filter((r) => r.renderId === renderId) : variable.renders;
     if (renderId && selected.length === 0) throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
     const renders = [];

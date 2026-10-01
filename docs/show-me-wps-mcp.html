@@ -246,7 +246,7 @@
     </nav>
 
     <section id="assistant">
-      <div class="section-head"><h2>在 WPS 里聊，也能接 MCP</h2><p>两种入口共用八个工具、文档连接、变量和规则。</p></div>
+      <div class="section-head"><h2>在 WPS 里聊，也能接 MCP</h2><p>两种入口共用十个工具、文档连接、变量和规则。</p></div>
       <div class="rules">
         <article class="panel rule">
           <div class="caption">WPS 内置助手</div><h3>打开面板就能用</h3>
@@ -255,7 +255,7 @@
         </article>
         <article class="panel rule">
           <div class="caption">外部 MCP 客户端</div><h3>接入你自己的 Agent</h3>
-          <p>通过 Streamable HTTP 或 stdio 调用八个 WPS 工具。外部 Agent 可按需加载仓库提供的 WPS API Skill / Reference。</p>
+          <p>通过 Streamable HTTP 或 stdio 调用十个 WPS 工具。外部 Agent 可按需加载仓库提供的 WPS API Skill / Reference。</p>
           <div class="lockline">外部 Agent → /mcp 或 stdio → 共用工具</div>
         </article>
       </div>
@@ -264,7 +264,7 @@
         <article class="panel rule"><div class="caption">引用与变量</div><h3>位置说得清</h3><p><code>@</code> 引用文档、选区、变量或 Render；支持全拼与首字母搜索。表格选区预览最多 5 行 × 6 列，执行时沿用明确位置的快照。</p></article>
         <article class="panel rule"><div class="caption">恢复与配置</div><h3>下次接着做</h3><p>变量、规则和会话保存在本机；重连恢复文档身份映射。多面板配置冲突会提示加载最新配置，同一服务只运行一个助手轮次。</p></article>
       </div>
-      <div class="simple-note">内嵌 Agent 只挂载八个 WPS 工具，关闭内置文件与终端工具、外部资源自动发现；它不会自动读取仓库 Skill。模型请求发送到设置中的服务商，文档操作由本机 WPS Add-in 执行。</div>
+      <div class="simple-note">内嵌 Agent 只挂载十个 WPS 工具，关闭内置文件与终端工具、外部资源自动发现；它不会自动读取仓库 Skill。模型请求发送到设置中的服务商，文档操作由本机 WPS Add-in 执行。</div>
     </section>
 
     <section>
@@ -301,7 +301,7 @@
         <article class="panel concept v">
           <div class="n">2</div><span class="pill">VARIABLE</span>
           <h3>把结果装进盒子</h3>
-          <p>Variable 就像贴了名字的小盒子，里面可以放数字、文本、表格或 JSON。它由 <code>transform.create</code> 顺手建出来。</p>
+          <p>Variable 就像贴了名字的小盒子，里面可以放数字、文本、表格或 JSON。它由 <code>wps_create_variable</code> 顺手建出来。</p>
           <div class="toy variable"><div class="row"><svg class="icon" style="font-size:18px" aria-hidden="true" focusable="false"><use href="#i-box"></use></svg> <b>部门预算Top5</b></div><div style="color:#7b828b;margin-top:6px">这个盒子以后还能再次更新</div></div>
         </article>
         <article class="panel concept r">
@@ -356,7 +356,7 @@
     <section>
       <div class="section-head">
         <h2>Agent 怎么会写 WPS API？</h2>
-        <p>外部 Agent 可加载 Skill / Reference；内嵌助手使用系统提示和八个工具的描述约束代码生成。</p>
+        <p>外部 Agent 可加载 Skill / Reference；内嵌助手使用系统提示和十个工具的描述约束代码生成。</p>
       </div>
       <div class="panel skillbook">
         <div class="book">
@@ -368,7 +368,7 @@
         <div class="codepath" aria-label="Agent 从 Skill 学会 WPS API 后直接生成代码">
           <div class="line"><span class="n">1</span><span><span class="warn">先核实文档与 API</span><br><span class="muted">通过工具取得文档和位置；外部 Agent 可按需查阅 Skill / Reference。</span></span></div>
           <div class="line"><span class="n">2</span><span><span class="hot">Agent 自己生成 JavaScript</span><br><span class="api">return Application.Workbooks.Item("预算.xlsx").Name;</span></span></div>
-          <div class="line"><span class="n">3</span><span><span class="hot">代码交给 wps-mcp</span><br><span class="muted">查询代码 → wps.exec　　提取代码 → Transform　　写入代码 → Render</span></span></div>
+          <div class="line"><span class="n">3</span><span><span class="hot">代码交给 wps-mcp</span><br><span class="muted">查询代码 → wps_run_readonly_code　　提取代码 → Transform　　写入代码 → Render</span></span></div>
           <div class="line"><span class="n">4</span><span><span class="hot">Add-in 在 WPS 里执行</span><br><span class="muted">MCP 不把它翻译成另一套“自创 WPS API”。</span></span></div>
         </div>
       </div>
@@ -384,14 +384,14 @@
         <article class="panel rule">
           <div class="ok"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-eye"></use></svg></div>
           <h3>想看，可以直接看</h3>
-          <p>Agent 生成只读的 WPS JS API 代码，通过 <code>wps.exec</code> 查询表格、幻灯片、选区、图表或文字文档。先核实文档与具体位置，再执行查询。</p>
-          <div class="okline">workspace.list_documents → document.get → wps.exec</div>
+          <p>Agent 生成只读的 WPS JS API 代码，通过 <code>wps_run_readonly_code</code> 查询表格、幻灯片、选区、图表或文字文档。先核实文档与具体位置，再执行查询。</p>
+          <div class="okline">wps_list_documents → wps_get_document → wps_run_readonly_code</div>
         </article>
         <article class="panel rule">
           <div class="lock"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-lock"></use></svg></div>
           <h3>想改，必须走 Render</h3>
           <p>Agent 也直接写 WPS JS API，但所有会修改文档的代码必须成为 Render，再由正式执行入口运行。前置条件是 Variable 已经跑过一次 Transform、手里有值。这样写能力强，边界仍然简单。</p>
-          <div class="lockline">transform.create → variable.transform<br>render.create → variable.render → WPS</div>
+          <div class="lockline">wps_create_variable → wps_run_transform<br>wps_create_render → wps_run_render → WPS</div>
         </article>
       </div>
       <div class="panel work" style="margin-top:16px">
@@ -417,17 +417,19 @@
     <section>
       <div class="section-head">
         <h2>MCP 的小工具箱</h2>
-        <p>少而清楚。第一版一共 8 个，不给每个 WPS API 再造一个 MCP API。</p>
+        <p>10 个工具，MCP 与内嵌助手统一使用 wps_ 前缀的小写下划线名称。</p>
       </div>
       <div class="panel tools">
-        <div class="toolrow"><div><code>workspace.list_documents</code></div><div>现在有哪些 WPS 文档可以用？</div><span class="badge read">发现</span></div>
-        <div class="toolrow"><div><code>document.get</code></div><div>拿到某个文档的基本上下文。</div><span class="badge read">发现</span></div>
-        <div class="toolrow"><div><code>wps.exec</code></div><div>执行 Agent 生成的只读 WPS JS API 代码。</div><span class="badge read">只读</span></div>
-        <div class="toolrow"><div><code>transform.create</code></div><div>创建一个 Variable，并保存它的 Transform 代码（只读的 WPS JS API）。</div><span class="badge store">规则</span></div>
-        <div class="toolrow"><div><code>render.create</code></div><div>给 Variable 保存一条 Render 代码（核心就是 WPS JS API 代码）。</div><span class="badge store">规则</span></div>
-        <div class="toolrow"><div><code>variable.get</code></div><div>看 Variable 的最新值，以及它挂着的 Transform / Render。</div><span class="badge read">查询</span></div>
-        <div class="toolrow"><div><code>variable.transform</code></div><div>跑一次 Transform，得到最新 Variable。</div><span class="badge read">计算</span></div>
-        <div class="toolrow"><div><code>variable.render</code></div><div>把 Variable 真正写进目标文档；不传 <code>renderId</code> 就执行它的全部 Render。</div><span class="badge write">唯一写入口</span></div>
+        <div class="toolrow"><div><code>wps_list_documents</code></div><div>现在有哪些 WPS 文档可以用？</div><span class="badge read">发现</span></div>
+        <div class="toolrow"><div><code>wps_get_document</code></div><div>拿到某个文档的基本上下文。</div><span class="badge read">发现</span></div>
+        <div class="toolrow"><div><code>wps_run_readonly_code</code></div><div>执行 Agent 生成的只读 WPS JS API 代码。</div><span class="badge read">只读</span></div>
+        <div class="toolrow"><div><code>wps_create_variable</code></div><div>创建一个 Variable，并保存它的 Transform 代码（只读的 WPS JS API）。</div><span class="badge store">规则</span></div>
+        <div class="toolrow"><div><code>wps_update_transform</code></div><div>修改原 Transform，保留变量与绑定；代码或来源变化后重新计算值。</div><span class="badge store">规则</span></div>
+        <div class="toolrow"><div><code>wps_create_render</code></div><div>给 Variable 保存一条 Render 代码（核心就是 WPS JS API 代码）。</div><span class="badge store">规则</span></div>
+        <div class="toolrow"><div><code>wps_update_render</code></div><div>修改指定 Render 的代码、目标或位置描述；保存后可单独执行。</div><span class="badge store">规则</span></div>
+        <div class="toolrow"><div><code>wps_get_variable</code></div><div>看 Variable 的最新值，以及它挂着的 Transform / Render。</div><span class="badge read">查询</span></div>
+        <div class="toolrow"><div><code>wps_run_transform</code></div><div>跑一次 Transform，得到最新 Variable。</div><span class="badge read">计算</span></div>
+        <div class="toolrow"><div><code>wps_run_render</code></div><div>把 Variable 真正写进目标文档；不传 <code>renderId</code> 就执行它的全部 Render。</div><span class="badge write">唯一写入口</span></div>
       </div>
     </section>
 
@@ -500,7 +502,7 @@
         <pre class="tree" aria-label="wps-mcp 当前目录结构"><span class="dir">wps-mcp/</span>
 ├─ <span class="dir">src/</span>
 │  ├─ server.ts         <span class="dim"># MCP / HTTP / WebSocket / 退出</span>
-│  ├─ tools.ts          <span class="dim"># 八个工具、规则、变量、WPS RPC</span>
+│  ├─ tools.ts          <span class="dim"># 十个工具、规则、变量、WPS RPC</span>
 │  ├─ api.ts            <span class="dim"># 面板 API 与 SSE</span>
 │  ├─ agent.ts          <span class="dim"># 内嵌 pi Agent 与会话</span>
 │  ├─ config.ts         <span class="dim"># 模型配置与凭据</span>
@@ -542,12 +544,12 @@
         <div class="steps">
           <article class="step"><div class="num">1</div><h4>收到任务</h4><p>自然语言 + <code>@当前选区</code> / 文件引用交给 Agent。</p></article>
           <article class="step storestep"><div class="num">2</div><h4>核实约束</h4><p>内嵌助手按提示与工具约束执行；外部 Agent 可查阅 <code>SKILL.md</code> / Reference。</p></article>
-          <article class="step readstep"><div class="num">3</div><h4>找到文档</h4><p><code>workspace.list_documents</code><br><code>document.get</code></p></article>
-          <article class="step readstep"><div class="num">4</div><h4>写代码调查</h4><p>Agent 直接生成只读 WPS JS API 代码，交给 <code>wps.exec</code> 执行。</p></article>
-          <article class="step storestep"><div class="num">5</div><h4>写 Transform</h4><p>Agent 生成提取数据的 WPS JS API 代码，<code>transform.create</code> 保存它（同时建出 Variable）。</p></article>
-          <article class="step runstep"><div class="num">6</div><h4>得到 Variable</h4><p><code>variable.transform</code><br>运行 Transform，产生最新值。</p></article>
-          <article class="step storestep"><div class="num">7</div><h4>写 Render</h4><p>Agent 生成修改目标文档的 WPS JS API 代码，<code>render.create</code> 保存它。</p></article>
-          <article class="step writestep"><div class="num">8</div><h4>真正写入</h4><p><code>variable.render</code><br>Add-in 在目标 WPS 文档执行 Render 代码。</p></article>
+          <article class="step readstep"><div class="num">3</div><h4>找到文档</h4><p><code>wps_list_documents</code><br><code>wps_get_document</code></p></article>
+          <article class="step readstep"><div class="num">4</div><h4>写代码调查</h4><p>Agent 直接生成只读 WPS JS API 代码，交给 <code>wps_run_readonly_code</code> 执行。</p></article>
+          <article class="step storestep"><div class="num">5</div><h4>写 Transform</h4><p>Agent 生成提取数据的 WPS JS API 代码，<code>wps_create_variable</code> 保存它（同时建出 Variable）。</p></article>
+          <article class="step runstep"><div class="num">6</div><h4>得到 Variable</h4><p><code>wps_run_transform</code><br>运行 Transform，产生最新值。</p></article>
+          <article class="step storestep"><div class="num">7</div><h4>写 Render</h4><p>Agent 生成修改目标文档的 WPS JS API 代码，<code>wps_create_render</code> 保存它。</p></article>
+          <article class="step writestep"><div class="num">8</div><h4>真正写入</h4><p><code>wps_run_render</code><br>Add-in 在目标 WPS 文档执行 Render 代码。</p></article>
         </div>
         <div class="runtime-note"><strong>绑定建好以后：</strong>在变量面板显式点击重算、重写，程序直接跑 Transform → 更新 Variable → 跑 Render，无需再次请求模型。重算和重写是两个操作；当前没有文件变化监听或定时同步。</div>
       </div>
@@ -560,7 +562,7 @@
       </div>
       <div class="mistakes">
         <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>不要复制 WPS API</h3><p>不要为每个 WPS JS API 再包一层 MCP Tool。Skill / Reference 负责“教”，Agent 负责直接生成 WPS JS API 代码。</p></article>
-        <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>不要让查询偷偷写</h3><p><code>wps.exec</code> 和 Transform 都应该是只读。文档修改只有 Render 一个正式入口。</p></article>
+        <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>不要让查询偷偷写</h3><p><code>wps_run_readonly_code</code> 和 Transform 都应该是只读。文档修改只有 Render 一个正式入口。</p></article>
         <article class="panel mistake"><div class="x"><svg class="icon" aria-hidden="true" focusable="false"><use href="#i-x"></use></svg></div><h3>规则运行直接执行</h3><p>Agent 可以内嵌在服务中，但已保存规则的重算、重写直接由工具执行，保持行为可检查、可重复。</p></article>
       </div>
     </section>

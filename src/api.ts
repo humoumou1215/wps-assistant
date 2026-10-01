@@ -64,7 +64,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
         return { address, truncated: c2 - c1 >= 6 || r2 - r1 >= 5 };
       });
       // Bound every area independently; never read gaps between disjoint selections.
-      const result = await callTool("wps.exec", { documentId: doc.documentId, code: `return [${addresses.map(({ address }: { address: string }) => `Application.Workbooks.Item(${JSON.stringify(doc.name)}).Worksheets.Item(${JSON.stringify(sheet)}).Range(${JSON.stringify(address)}).Value2`).join(",")}];` });
+      const result = await callTool("wps_run_readonly_code", { documentId: doc.documentId, code: `return [${addresses.map(({ address }: { address: string }) => `Application.Workbooks.Item(${JSON.stringify(doc.name)}).Worksheets.Item(${JSON.stringify(sheet)}).Range(${JSON.stringify(address)}).Value2`).join(",")}];` });
       const value = JSON.parse(result.content[0].text);
       if (result.isError) { json(res, 422, value); return; }
       json(res, 200, { ref, hasValue: true, value: addresses.length === 1 ? value.result[0] : addresses.map((area: { address: string }, i: number) => ({ address: area.address, value: value.result[i] })), address: addresses.map((area: { address: string }) => area.address).join(","), truncated: regions.length > 6 || addresses.some((area: { truncated: boolean }) => area.truncated) }); return;
@@ -89,7 +89,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
     }
     if (path === "/api/actions" && req.method === "POST") {
       const { op, variableId, renderId } = z.object({ op: z.enum(["transform", "render"]), variableId: z.string().min(1), renderId: z.string().optional() }).parse(await readJson(req));
-      const result = await callTool(`variable.${op}`, { variableId, renderId });
+      const result = await callTool(op === "transform" ? "wps_run_transform" : "wps_run_render", { variableId, renderId });
       const value = JSON.parse(result.content[0].text);
       json(res, result.isError || value.success === false ? 422 : 200, value); return;
     }

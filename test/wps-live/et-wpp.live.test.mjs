@@ -50,7 +50,7 @@ async function waitForDocument(client, type, expectedPath, serviceLogs) {
   let lastDocuments = [];
   const deadline = Date.now() + 120_000;
   while (Date.now() < deadline) {
-    const result = await invoke(client, "workspace.list_documents");
+    const result = await invoke(client, "wps_list_documents");
     lastDocuments = result.documents ?? [];
     const match = lastDocuments.find((doc) => {
       if (doc.type !== type || !doc.path) return false;
@@ -69,24 +69,24 @@ async function openInWps(file) {
 }
 
 async function makeVariable(client, documentId, name, token) {
-  const created = await invoke(client, "transform.create", {
+  const created = await invoke(client, "wps_create_variable", {
     variableName: name,
     sourceDocumentId: documentId,
     code: `return { token: ${JSON.stringify(token)} };`,
   });
-  const transformed = await invoke(client, "variable.transform", { variableId: created.variableId });
+  const transformed = await invoke(client, "wps_run_transform", { variableId: created.variableId });
   assert.equal(transformed.value.token, token);
   return created.variableId;
 }
 
 async function runRender(client, variableId, targetDocumentId, description, code) {
-  const created = await invoke(client, "render.create", {
+  const created = await invoke(client, "wps_create_render", {
     variableId,
     targetDocumentId,
     description,
     code,
   });
-  const rendered = await invoke(client, "variable.render", {
+  const rendered = await invoke(client, "wps_run_render", {
     variableId,
     renderId: created.renderId,
   });
@@ -147,9 +147,9 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
   // ET: open a unique disposable workbook through Launch Services and wait for the live Add-in.
   await openInWps(etFile);
   const etDoc = await waitForDocument(client, "spreadsheet", etFile, () => serverLog);
-  const etState = await invoke(client, "document.get", { documentId: etDoc.documentId });
+  const etState = await invoke(client, "wps_get_document", { documentId: etDoc.documentId });
   assert.equal(etState.connected, true);
-  const etBaseline = await invoke(client, "wps.exec", {
+  const etBaseline = await invoke(client, "wps_run_readonly_code", {
     documentId: etDoc.documentId,
     code: `
       const book = Application.ActiveWorkbook;
@@ -216,7 +216,7 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
   assert.equal(Number(etRender.value2), 3);
   assert.equal(etRender.bold, true);
   assert.equal(etRender.numberFormat, "0.00");
-  const etReadback = await invoke(client, "wps.exec", {
+  const etReadback = await invoke(client, "wps_run_readonly_code", {
     documentId: etDoc.documentId,
     code: `const c = Application.ActiveSheet.Range("Z100"); return { formula: c.Formula, value2: c.Value2, bold: c.Font.Bold };`,
   });
@@ -230,9 +230,9 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
   // WPP: same flow through the actual presentation Add-in and JS API.
   await openInWps(wppFile);
   const wppDoc = await waitForDocument(client, "presentation", wppFile, () => serverLog);
-  const wppState = await invoke(client, "document.get", { documentId: wppDoc.documentId });
+  const wppState = await invoke(client, "wps_get_document", { documentId: wppDoc.documentId });
   assert.equal(wppState.connected, true);
-  const wppBaseline = await invoke(client, "wps.exec", {
+  const wppBaseline = await invoke(client, "wps_run_readonly_code", {
     documentId: wppDoc.documentId,
     code: `
       const presentation = Application.ActivePresentation;
@@ -279,7 +279,7 @@ test("real WPS ET and WPP Add-ins execute MCP queries and Render operations", { 
   assert.equal(Number(wppRender.top), 40);
   assert.equal(Number(wppRender.width), 210);
   assert.equal(Number(wppRender.height), 60);
-  const wppReadback = await invoke(client, "wps.exec", {
+  const wppReadback = await invoke(client, "wps_run_readonly_code", {
     documentId: wppDoc.documentId,
     code: `
       const slide = Application.ActivePresentation.Slides.Item(1);

@@ -51,7 +51,7 @@ try {
   const resources = await (await fetch(base + '/api/agent')).json();
   assert.ok(resources.skills.some(skill => skill.name === 'wps-api' && skill.content.includes('WPS API skill')), 'Packaged skills must install and load without model credentials');
   assert.ok(resources.systemPrompt.includes('<available_skills>'));
-  assert.equal(resources.tools.length, 9);
+  assert.equal(resources.tools.length, 11);
   assert.ok((await readFile(join(temp, 'data/pi/skills/wps-api/references/spreadsheet.md'), 'utf8')).includes('Range'));
   console.log('Release smoke passed: checksum, clean production install, HTTP server, Add-in assets and installed agent skills');
 } finally {

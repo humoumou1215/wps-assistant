@@ -14,7 +14,7 @@ test('RPC timeouts, send failures and disconnects log correlated failures and cl
   const socket = { readyState: 1, send() {} };
   connections.set('rpc-fixture', { id: 'rpc-fixture', socket, documents: new Map() });
   documents.set('doc_001', { documentId: 'doc_001', connectionId: 'rpc-fixture', documentKey: 'private-document-key', name: 'private-document-name', connected: true, type: 'spreadsheet' });
-  const execute = () => logger.withContext({ requestId: 'rpc-request' }, () => callTool('wps.exec', { documentId: 'doc_001', code: 'return 123;' }));
+  const execute = () => logger.withContext({ requestId: 'rpc-request' }, () => callTool('wps_run_readonly_code', { documentId: 'doc_001', code: 'return 123;' }));
 
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: Date.now() });
   const timeout = execute(); assert.equal(pending.size, 1);

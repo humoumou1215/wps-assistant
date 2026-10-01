@@ -24,72 +24,72 @@ return { name: pres.Name, count: pres.Slides.Count, shapes };
 | common | Application.Name | 支持 | string | `return Application.Name;` |
 | common | Application.Version | 支持 | string | `return Application.Version;` |
 | common | Application.Build | 支持 | string | `return Application.Build;` |
-| common | Application.Path | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.StartupPath | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.OperatingSystem | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.UserName | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Path | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.StartupPath | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.OperatingSystem | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.UserName | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.ActiveWindow | 支持 | object | 演示：`return Application.ActiveWindow.View.Slide.SlideIndex;`（属性因版本而异）。 |
-| common | Application.Windows | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Windows | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.Selection | 缺失 | undefined | 读取当前选区对象；表格可尝试 `Application.Selection.Address`。 |
 | common | Application.ApiEvent | 支持 | object | API 事件注册/注销；报告中“listener registration succeeded”表示注册成功，不代表具体事件参数结构已验证。 |
-| common | Application.CommandBars | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.COMAddIns | 支持 | null | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Visible | 支持 | number | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.DisplayAlerts | 支持 | number | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.ScreenUpdating | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.StatusBar | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Caption | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.LanguageSettings | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Options | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.RecentFiles | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.FileDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Undo | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Redo | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Run | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.OnTime | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.SendKeys | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Quit | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Activate | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Calculate | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.CalculateFull | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.CommandBars | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.COMAddIns | 支持 | null | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Visible | 支持 | number | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.DisplayAlerts | 支持 | number | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.ScreenUpdating | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.StatusBar | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Caption | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.LanguageSettings | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Options | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.RecentFiles | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.FileDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Undo | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Redo | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Run | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.OnTime | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.SendKeys | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Quit | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Activate | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Calculate | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.CalculateFull | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.Documents | 缺失 | undefined | 文字：`return Application.Documents.Count;` |
 | common | Application.ActiveDocument | 缺失 | undefined | 文字：`return Application.ActiveDocument.Name;` |
 | common | Application.Workbooks | 缺失 | undefined | 表格：`const books = Application.Workbooks; return books.Count;` |
 | common | Application.ActiveWorkbook | 缺失 | undefined | 表格：`return Application.ActiveWorkbook.Name;` |
 | common | Application.Presentations | 支持 | object | 演示：`return Application.Presentations.Count;` |
 | common | Application.ActivePresentation | 支持 | object | 演示：`return Application.ActivePresentation.Name;` |
-| common | Application.Slides | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Sheets | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.AddCustomFunction | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Slides | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Sheets | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.AddCustomFunction | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.CreateTaskPane | 支持 | function | `Application.CreateTaskPane(url, title)` 创建任务窗格；报告仅验证成员存在，按需确认参数并避免信任不受信任 URL。 |
-| common | Application.GetTaskPane | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.CreateWebDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.GetWebDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.ShowDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.UpdateRibbon | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.GetTaskPane | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.CreateWebDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.GetWebDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.ShowDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.UpdateRibbon | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.FileSystem | 支持 | object | FileSystem 是本机文件能力；只在明确授权的流程使用，文件写入不是文档查询。 |
-| common | Application.PluginStorage | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.WpsAddonMgr | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Execute | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.EtApplication | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.WppApplication | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.WpsApplication | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.GetApplication | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Application | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Enum | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.PluginStorage | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.WpsAddonMgr | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Execute | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.EtApplication | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.WppApplication | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.WpsApplication | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.GetApplication | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Application | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Enum | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.ApiEvent | 支持 | object | API 事件注册/注销；报告中“listener registration succeeded”表示注册成功，不代表具体事件参数结构已验证。 |
-| common | Application.GetInstalledFonts | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.GetSystemInfo | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.GetEnvironment | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Invoke | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.InvokeAsHttp | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.InvokeAsHttps | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.CreateXHR | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.WpsInvoke | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.WpsClient | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.GetCustomFunctions | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.RemoveCustomFunction | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.RemoveAllCustomFunctions | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.GetInstalledFonts | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.GetSystemInfo | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.GetEnvironment | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.Invoke | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.InvokeAsHttp | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.InvokeAsHttps | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.CreateXHR | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.WpsInvoke | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.WpsClient | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.GetCustomFunctions | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.RemoveCustomFunction | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| common | Application.RemoveAllCustomFunctions | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | ApiEvent.AddApiEventListener | 支持 | function | API 事件注册/注销；报告中“listener registration succeeded”表示注册成功，不代表具体事件参数结构已验证。 |
 | common | ApiEvent.RemoveApiEventListener | 支持 | function | API 事件注册/注销；报告中“listener registration succeeded”表示注册成功，不代表具体事件参数结构已验证。 |
 | events | PresentationOpen | 支持 | listener registration succeeded | 事件名 `PresentationOpen`：通过 API 事件接口注册监听；此诊断只检查注册结果，事件回调数据形状需在目标版本实测。 |
@@ -109,24 +109,24 @@ return { name: pres.Name, count: pres.Slides.Count, shapes };
 | wpp | Application.ActivePresentation | 支持 | object | 演示：`return Application.ActivePresentation.Name;` |
 | wpp | Application.ActiveWindow | 支持 | object | 演示：`return Application.ActiveWindow.View.Slide.SlideIndex;`（属性因版本而异）。 |
 | wpp | Presentations.Add | 支持 | function | 演示：仅在临时/测试演示文稿或获授权的 Render 中调用 `Application.Presentations.Add()`。 |
-| wpp | Create temporary presentation | 支持 | created | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| wpp | Shapes.AddTextbox | 支持 | — | 演示：从 `Application.ActivePresentation.Slides.Item(n).Shapes` 取得集合；创建/修改仅允许在 `variable.render` 中。 |
-| wpp | TextFrame.TextRange.Text write | 支持 | — | 演示：`shape.TextFrame.TextRange.Text` 读取文本；赋值只放在 `variable.render` 中。 |
-| wpp | Shape geometry write | 支持 | — | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| wpp | Shape.Fill access/write | 支持 | — | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| wpp | Shape.Duplicate | 支持 | — | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| wpp | Shapes.AddTable | 支持 | — | 演示：从 `Application.ActivePresentation.Slides.Item(n).Shapes` 取得集合；创建/修改仅允许在 `variable.render` 中。 |
-| wpp | Table.Cell text write | 支持 | — | 文字：用 `Application.ActiveDocument.Tables` 遍历表格；单元格文本写入只能在 `variable.render` 中。 |
-| wpp | Temporary presentation close without save | 支持 | — | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
+| wpp | Create temporary presentation | 支持 | created | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| wpp | Shapes.AddTextbox | 支持 | — | 演示：从 `Application.ActivePresentation.Slides.Item(n).Shapes` 取得集合；创建/修改仅允许在 `wps_run_render` 中。 |
+| wpp | TextFrame.TextRange.Text write | 支持 | — | 演示：`shape.TextFrame.TextRange.Text` 读取文本；赋值只放在 `wps_run_render` 中。 |
+| wpp | Shape geometry write | 支持 | — | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| wpp | Shape.Fill access/write | 支持 | — | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| wpp | Shape.Duplicate | 支持 | — | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| wpp | Shapes.AddTable | 支持 | — | 演示：从 `Application.ActivePresentation.Slides.Item(n).Shapes` 取得集合；创建/修改仅允许在 `wps_run_render` 中。 |
+| wpp | Table.Cell text write | 支持 | — | 文字：用 `Application.ActiveDocument.Tables` 遍历表格；单元格文本写入只能在 `wps_run_render` 中。 |
+| wpp | Temporary presentation close without save | 支持 | — | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | modern | Application.FileSystem | 支持 | object | FileSystem 是本机文件能力；只在明确授权的流程使用，文件写入不是文档查询。 |
 | modern | Application.CreateTaskPane | 支持 | function | `Application.CreateTaskPane(url, title)` 创建任务窗格；报告仅验证成员存在，按需确认参数并避免信任不受信任 URL。 |
-| modern | Application.GetTaskPane | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| modern | Application.CreateWebDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| modern | Application.GetWebDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| modern | Application.ShowDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| modern | Application.UpdateRibbon | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| modern | Application.AddCustomFunction | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
-| modern | Application.PluginStorage | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps.exec` 读取成员/返回类型，再在测试副本验证。 |
+| modern | Application.GetTaskPane | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| modern | Application.CreateWebDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| modern | Application.GetWebDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| modern | Application.ShowDialog | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| modern | Application.UpdateRibbon | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| modern | Application.AddCustomFunction | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
+| modern | Application.PluginStorage | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | modern | Application.ApiEvent | 支持 | object | API 事件注册/注销；报告中“listener registration succeeded”表示注册成功，不代表具体事件参数结构已验证。 |
 
 ## 成员目录
@@ -951,4 +951,4 @@ return { name: pres.Name, count: pres.Slides.Count, shapes };
 - 先检查活动对象、集合 Count 与目标名称；集合通常用 1-based `Item(index)`。
 - 读 Range/表格/图表时控制输出规模，只返回标量、数组、普通 JSON 对象。
 - API 返回 COM/WPS 宿主代理对象时不要直接 `return object`；显式映射为 JSON 字段。
-- 本目录中带 `write` 的探测仅说明诊断工具在临时文档上完成操作；对 MCP 调用仍需严格遵循 `variable.render` 边界。
+- 本目录中带 `write` 的探测仅说明诊断工具在临时文档上完成操作；对 MCP 调用仍需严格遵循 `wps_run_render` 边界。

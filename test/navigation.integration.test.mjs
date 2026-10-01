@@ -40,11 +40,11 @@ test('pane navigation routes by document identity through the actual Add-in hand
     const invoke = async (name, args) => {
       const result = await client.callTool({ name, arguments: args }); assert.ok(!result.isError, result.content[0].text); return JSON.parse(result.content[0].text);
     };
-    const variable = await invoke('transform.create', { variableName: 'click test', sourceDocumentId: sourceDoc.documentId, sourceRef: 'Sales!A1:D4', code: 'return Application.MustNotExecute.value;' });
-    const explicit = await invoke('render.create', { variableId: variable.variableId, targetDocumentId: targetDoc.documentId, targetRef: "'Team''s Sales'!$B$100:$D$104", description: '<unsafe>位置说明', code: 'throw new Error("Render must not execute");' });
-    const legacy = await invoke('render.create', { variableId: variable.variableId, targetDocumentId: sourceDoc.documentId, description: '将数据写入 same.xlsx 的 Summary!A1:B4。', code: 'throw new Error("Render must not execute");' });
-    const ambiguous = await invoke('render.create', { variableId: variable.variableId, targetDocumentId: sourceDoc.documentId, description: '从 Sales!A1 复制到 Summary!B2', code: 'return true;' });
-    const missingSheet = await invoke('render.create', { variableId: variable.variableId, targetDocumentId: targetDoc.documentId, targetRef: 'Deleted!A1', code: 'return true;' });
+    const variable = await invoke('wps_create_variable', { variableName: 'click test', sourceDocumentId: sourceDoc.documentId, sourceRef: 'Sales!A1:D4', code: 'return Application.MustNotExecute.value;' });
+    const explicit = await invoke('wps_create_render', { variableId: variable.variableId, targetDocumentId: targetDoc.documentId, targetRef: "'Team''s Sales'!$B$100:$D$104", description: '<unsafe>位置说明', code: 'throw new Error("Render must not execute");' });
+    const legacy = await invoke('wps_create_render', { variableId: variable.variableId, targetDocumentId: sourceDoc.documentId, description: '将数据写入 same.xlsx 的 Summary!A1:B4。', code: 'throw new Error("Render must not execute");' });
+    const ambiguous = await invoke('wps_create_render', { variableId: variable.variableId, targetDocumentId: sourceDoc.documentId, description: '从 Sales!A1 复制到 Summary!B2', code: 'return true;' });
+    const missingSheet = await invoke('wps_create_render', { variableId: variable.variableId, targetDocumentId: targetDoc.documentId, targetRef: 'Deleted!A1', code: 'return true;' });
     const request = { variableId: variable.variableId };
     let result = await post('/api/navigate', request); assert.equal(result.status, 200);
     assert.equal(app.ActiveWorkbook, first); assert.equal(app.ActiveSheet.Name, 'Sales'); assert.equal(app.Selection.Address, 'A1:D4');
@@ -63,10 +63,22 @@ test('pane navigation routes by document identity through the actual Add-in hand
     assert.equal(calls.length, callCount);
     assert.equal(JSON.stringify(await state()), before, 'navigation never changes variable values or execution metadata');
     const failed = await post('/api/navigate', { ...request, renderId: missingSheet.renderId }); assert.equal(failed.status, 422); assert.match(await failed.text(), /工作表不存在/);
-    const saved = await invoke('variable.get', request); assert.equal(saved.renders[0].targetRef, "'Team''s Sales'!$B$100:$D$104");
+    const saved = await invoke('wps_get_variable', request); assert.equal(saved.renders[0].targetRef, "'Team''s Sales'!$B$100:$D$104");
     const disk = JSON.parse(await readFile(h.dir + '/state.json', 'utf8')); assert.equal(disk.variables[0].renders[0].targetRef, saved.renders[0].targetRef);
     assert.equal(disk.variables[0].hasValue, undefined); assert.equal(disk.variables[0].transform.lastRun, undefined); assert.equal(disk.variables[0].renders[0].lastRun, undefined);
     assert.equal(h.appState.written, null);
+    const renderRequest = { ...request, renderId: explicit.renderId };
+    const invalidUpdate = await client.callTool({ name: 'wps_update_render', arguments: { ...renderRequest, targetRef: 'A1' } });
+    assert.equal(invalidUpdate.isError, true);
+    assert.equal((await invoke('wps_get_variable', request)).renders[0].targetRef, saved.renders[0].targetRef);
+    await invoke('wps_update_render', { ...renderRequest, targetRef: 'Summary!A5:B6' });
+    const updatedNavigation = await post('/api/navigate', renderRequest); assert.equal(updatedNavigation.status, 200);
+    assert.equal(app.ActiveSheet.Name, 'Summary'); assert.equal(app.Selection.Address, 'A5:B6');
+    assert.equal((await invoke('wps_get_variable', request)).renders.length, saved.renders.length);
+    await invoke('wps_update_render', { ...renderRequest, targetRef: null });
+    assert.equal((await invoke('wps_get_variable', request)).renders[0].targetRef, undefined);
+    const clearedNavigation = await post('/api/navigate', renderRequest); assert.equal(clearedNavigation.status, 422);
+    await invoke('wps_update_render', { ...renderRequest, targetRef: 'Summary!A5:B6' });
     sockets[0].close(); await new Promise(r => sockets[0].once('close', r));
     const disconnected = await post('/api/navigate', request); assert.equal(disconnected.status, 422); assert.match(await disconnected.text(), /DOCUMENT_DISCONNECTED/);
   } finally { for (const socket of sockets) socket.close(); if (client) await client.close(); await h.close(); }

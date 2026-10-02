@@ -65,7 +65,7 @@ test('query, Transform and Render bind native documents through real RPC indepen
 
       // The actual shipped guide example must work in the restricted query channel.
       const guide = await readFile(new URL(`../skills/wps-api/references/${{ et: 'spreadsheet', wps: 'writer', wpp: 'presentation' }[host]}.md`, import.meta.url), 'utf8');
-      const example = /```js\n([\s\S]*?)\n```/.exec(guide)?.[1]; assert.ok(example);
+      const example = /```js\r?\n([\s\S]*?)\r?\n```/.exec(guide)?.[1]; assert.ok(example);
       const inspected = await invoke('wps_run_readonly_code', { documentId: sourceDoc.documentId, code: example });
       if (host === 'et') assert.equal(inspected.result.values, first.value);
       if (host === 'wps') assert.equal(inspected.result.text, first.value);

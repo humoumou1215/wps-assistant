@@ -5,8 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 
-const mac = await readFile(new URL('../scripts/install-macos.sh', import.meta.url), 'utf8');
-const windows = await readFile(new URL('../scripts/install-windows.ps1', import.meta.url), 'utf8');
+const mac = (await readFile(new URL('../scripts/install-macos.sh', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+const windows = (await readFile(new URL('../scripts/install-windows.ps1', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
 const registrars = {
   darwin: mac.match(/<<'REGISTRY'\n([\s\S]*?)\nREGISTRY/)[1],
   win32: windows.match(/\$registryScript = @'\n([\s\S]*?)\n'@/)[1],

@@ -1499,7 +1499,7 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 
 # 25. 仓库与自动化维护
 
-公开仓库：[humoumou1215/wps-mcp](https://github.com/humoumou1215/wps-mcp)。项目采用 MIT；`package.json` 的 `private: true` 仅防止误发到 npm，不影响 GitHub 可见性。
+公开仓库：[humoumou1215/wps-assistant](https://github.com/humoumou1215/wps-assistant)。项目采用 MIT；`package.json` 的 `private: true` 仅防止误发到 npm，不影响 GitHub 可见性。
 
 ## 25.1 工作流
 

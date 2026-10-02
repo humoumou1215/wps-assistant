@@ -5,10 +5,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/humoumou1215/wps-mcp.git"
+    "url": "git+https://github.com/humoumou1215/wps-assistant.git"
   },
-  "bugs": "https://github.com/humoumou1215/wps-mcp/issues",
-  "homepage": "https://github.com/humoumou1215/wps-mcp#readme",
+  "bugs": "https://github.com/humoumou1215/wps-assistant/issues",
+  "homepage": "https://github.com/humoumou1215/wps-assistant#readme",
   "description": "MCP bridge for live WPS Office documents and WPS JavaScript API",
   "type": "module",
   "main": "dist/src/server.js",

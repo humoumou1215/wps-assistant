@@ -1,7 +1,7 @@
 # WPS MCP Server
 
-[![CI](https://github.com/humoumou1215/wps-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/humoumou1215/wps-mcp/actions/workflows/ci.yml)
-[![Security](https://github.com/humoumou1215/wps-mcp/actions/workflows/security.yml/badge.svg)](https://github.com/humoumou1215/wps-mcp/actions/workflows/security.yml)
+[![CI](https://github.com/humoumou1215/wps-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/humoumou1215/wps-assistant/actions/workflows/ci.yml)
+[![Security](https://github.com/humoumou1215/wps-assistant/actions/workflows/security.yml/badge.svg)](https://github.com/humoumou1215/wps-assistant/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 开发与贡献见 [CONTRIBUTING.md](CONTRIBUTING.md)，CI、依赖维护和版本发布见 [自动化维护指南](docs/spec.md#automation)。

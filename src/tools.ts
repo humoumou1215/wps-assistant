@@ -59,7 +59,13 @@ type Variable = {
   transform: Transform;
   renders: Render[];
 };
-type PersistedState = { variables: Variable[]; counters: Record<string, number>; documentIds: Record<string, string> };
+type DocumentMetadata = Pick<DocumentRecord, "type" | "name" | "path" | "documentKey">;
+type PersistedState = {
+  variables: Variable[];
+  counters: Record<string, number>;
+  documentIds: Record<string, string>;
+  documentMetadata: Record<string, DocumentMetadata>;
+};
 type AddinDocument = {
   documentKey: string;
   type: DocType;
@@ -76,7 +82,7 @@ type Pending = { connectionId: string; resolve: (v: unknown) => void; reject: (e
 const documents = new Map<string, DocumentRecord>();
 const connections = new Map<string, Connection>();
 const pending = new Map<string, Pending>();
-const state: PersistedState = { variables: [], counters: {}, documentIds: {} };
+const state: PersistedState = { variables: [], counters: {}, documentIds: {}, documentMetadata: {} };
 
 function nextId(kind: string) {
   state.counters[kind] = (state.counters[kind] ?? 0) + 1;
@@ -135,6 +141,29 @@ async function loadState() {
     state.variables = Array.isArray(stored.variables) ? stored.variables : [];
     state.counters = stored.counters ?? {};
     state.documentIds = stored.documentIds ?? {};
+    state.documentMetadata = stored.documentMetadata ?? {};
+    // Older versions retained file identities but not display names. Recover
+    // names from recognizable file paths or the Add-in's type:name keys.
+    for (const [identity, documentId] of Object.entries(state.documentIds)) {
+      if (state.documentMetadata[documentId]) continue;
+      try {
+        const [type, key] = JSON.parse(identity);
+        if (!["spreadsheet", "presentation", "writer"].includes(type) || typeof key !== "string") continue;
+        const typedName = key.startsWith(type + ":") ? key.slice(type.length + 1) : undefined;
+        const filename = key.split(/[\\/]/).at(-1);
+        const name = typedName || (filename && /\.(xlsx?|xlsm|xlsb|et|pptx?|pptm|dps|docx?|docm|wps)$/i.test(filename) ? filename : undefined);
+        if (!name) continue;
+        state.documentMetadata[documentId] = { type, name, documentKey: key,
+          ...(!typedName && /^(\/|[a-z]:[\\/]|\\\\)/i.test(key) ? { path: key } : {}) };
+      } catch { /* An opaque legacy key cannot supply a reliable name. */ }
+    }
+    for (const [documentId, metadata] of Object.entries(state.documentMetadata)) {
+      if (!metadata || typeof metadata.name !== "string" || !metadata.name || typeof metadata.documentKey !== "string" ||
+          !["spreadsheet", "presentation", "writer"].includes(metadata.type)) continue;
+      // Never restore a live connection or selection from disk.
+      documents.set(documentId, { documentId, type: metadata.type, name: metadata.name, documentKey: metadata.documentKey,
+        ...(typeof metadata.path === "string" ? { path: metadata.path } : {}), connectionId: "", connected: false });
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -195,9 +224,14 @@ function registerDocument(connection: Connection, item: AddinDocument) {
   let documentId = connection.documents.get(item.documentKey);
   if (!documentId) {
     documentId = state.documentIds[identity] ?? nextId("doc");
-    state.documentIds[identity] = documentId;
-    void persist().catch(error => logger.error("state.persist_failed", { error }));
     connection.documents.set(item.documentKey, documentId);
+  }
+  const metadata: DocumentMetadata = { type: item.type, name: item.name, documentKey: item.documentKey,
+    ...(item.path ? { path: item.path } : {}) };
+  if (state.documentIds[identity] !== documentId || JSON.stringify(state.documentMetadata[documentId]) !== JSON.stringify(metadata)) {
+    state.documentIds[identity] = documentId;
+    state.documentMetadata[documentId] = metadata;
+    void persist().catch(error => logger.error("state.persist_failed", { error }));
   }
   const previous = documents.get(documentId);
   documents.set(documentId, {
@@ -358,7 +392,7 @@ defineTool("wps_get_document", {
 
 defineTool("wps_run_readonly_code", {
   title: "Run read-only WPS JavaScript",
-  description: "Execute WPS JS API JavaScript in the selected document. Read-only; document edits belong in wps_run_render.",
+  description: "Execute read-only WPS JavaScript with wpsDocument resolved from documentId, without activating it. Use its Worksheets/Slides/Content instead of Application.Active*; document edits belong in wps_run_render.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: { documentId: z.string().min(1), code: z.string().min(1).max(MAX_CODE_LENGTH) },
 }, async ({ documentId, code }) => {
@@ -370,7 +404,7 @@ defineTool("wps_run_readonly_code", {
 
 defineTool("wps_create_variable", {
   title: "Create Variable and Transform",
-  description: "Create a Variable and save read-only WPS JavaScript that populates its value when wps_run_transform is called. Optional sourceRef locates the source: SheetName!A1:B13, SlideID:257!ShapeID:4, Paragraph:4, Table:1, Heading:标题 or Range:0:20.",
+  description: "Create a Variable and save read-only WPS JavaScript that populates its value when wps_run_transform is called. Code receives wpsDocument resolved from sourceDocumentId; use it instead of Application.Active*. Optional sourceRef locates the source: SheetName!A1:B13, SlideID:257!ShapeID:4, Paragraph:4, Table:1, Heading:标题 or Range:0:20.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: {
     variableName: z.string().min(1),
@@ -445,7 +479,7 @@ defineTool("wps_update_variable", {
 
 defineTool("wps_create_render", {
   title: "Create Render rule",
-  description: "Attach a document-writing WPS JavaScript rule to an existing Variable; the rule is saved but not executed. Provide targetRef for UI navigation: spreadsheets SheetName!A1:B13; presentations SlideID:257!ShapeID:4 (prefer stable IDs) or Slide:2!Shape:对象名; Writer Paragraph:4, Table:1, Heading:标题!Paragraph, Heading:标题!Table, Bookmark:名称 or Range:0:20. Join multiple Word/PPT destinations with +. Saves only, never navigates or executes.",
+  description: "Attach a document-writing WPS JavaScript rule to an existing Variable; the rule is saved but not executed. Code receives wpsDocument resolved from targetDocumentId and variable.value; use the bound object instead of Application.Active*. Provide targetRef for UI navigation: spreadsheets SheetName!A1:B13; presentations SlideID:257!ShapeID:4 (prefer stable IDs) or Slide:2!Shape:对象名; Writer Paragraph:4, Table:1, Heading:标题!Paragraph, Heading:标题!Table, Bookmark:名称 or Range:0:20. Join multiple Word/PPT destinations with +. Saves only, never navigates or executes.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),

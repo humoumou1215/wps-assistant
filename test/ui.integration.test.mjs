@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { startHarness } from './helpers/ui-harness.mjs';
 
 test('task pane API, isolated pi session, full tool loop, errors, cancellation and config privacy', { timeout: 60000 }, async () => {
@@ -213,7 +214,7 @@ test('session statistics separate cached input and count every model/tool messag
     assert.ok(stats.activeDurationMs > 0);
     assert.ok(stats.sessionId);
     assert.match(stats.sessionFile, /\.jsonl$/);
-    assert.equal(stats.projectDirectory, h.dir + '/pi');
+    assert.equal(stats.projectDirectory, join(h.dir, 'pi'));
     assert.deepEqual(end.sessionStats.tokens, stats.tokens, 'streaming completion carries updated totals');
     await (await post('/api/chat', { message: '第二轮' })).text();
     const next = (await get()).sessionStats;

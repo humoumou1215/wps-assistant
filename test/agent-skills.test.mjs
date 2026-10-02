@@ -2,11 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 const dir = await mkdtemp(join(tmpdir(), 'wps-skills-test-'));
 process.env.WPS_MCP_DATA_DIR = dir;
-const { BUNDLED_SKILLS_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, readSkillFile, createSkillReadTool } = await import('../dist/src/agent-skills.js');
+const { BUNDLED_SKILLS_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, readSkillContent, readSkillFile, createSkillReadTool } = await import('../dist/src/agent-skills.js');
 test.after(() => rm(dir, { recursive: true, force: true }));
 
 test('bundled skills and references install, refresh, and preserve additional installed skills', async () => {
@@ -44,6 +44,21 @@ test('skill read supports references and pagination but rejects traversal and li
   const read = createSkillReadTool(skills);
   const controller = new AbortController(); controller.abort();
   await assert.rejects(read.execute('cancelled', { path: skills[0].filePath }, controller.signal), /已停止/);
+});
+
+test('bundled WPS workflow is self-contained and its reference links are readable by the embedded Agent', async () => {
+  const { skills } = await installBundledSkills();
+  const skill = skills.find(s => s.name === 'wps-api');
+  const main = (await readSkillContent(skills, skill.filePath)).content;
+  assert.doesNotMatch(main, /wps-mcp-binding|check-readonly\.mjs/);
+  assert.match(main, /automatically apply the guard/);
+  assert.match(main, /wpsDocument/);
+  const links = [...main.matchAll(/\]\(([^)]+\.md)(?:#[^)]*)?\)/g)].map(m => m[1]);
+  assert.ok(links.length > 0);
+  for (const link of links) {
+    const reference = await readSkillContent(skills, resolve(dirname(skill.filePath), link));
+    assert.ok(reference.content.length > 0, link);
+  }
 });
 
 test('upgrades remove retired bundled skills and references while preserving user files', async () => {

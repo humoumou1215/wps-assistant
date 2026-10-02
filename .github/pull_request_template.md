@@ -6,7 +6,7 @@
 
 - [ ] `npm run check`
 - [ ] `npm test`
-- [ ] 修改安装或发布逻辑时，运行 `npm run package:release` 和 `npm run verify:release`
+- [ ] 修改部署脚本时，验证对应平台的安装、重复部署和服务健康检查
 - [ ] 涉及真实 WPS API 时，注明宿主、系统和实机测试结果
 
 ## 风险与兼容性

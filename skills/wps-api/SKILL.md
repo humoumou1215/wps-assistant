@@ -7,6 +7,14 @@ description: WPS Office JavaScript API reference derived from the supplied diagn
 
 Use this skill only for WPS JS API operations. The MCP server provides document routing and code execution; the WPS JS API remains the document API.
 
+## Execution context
+
+Every query, Transform and Render receives `wpsDocument`, the native WPS object resolved from the requested document's registered identity. For a query it matches `documentId`; for a Transform it is the source workbook/document; for a Render it is the target workbook/presentation/document. Use `wpsDocument.Worksheets`, `wpsDocument.Slides`, or `wpsDocument.Content`/`Range`/`Tables` as appropriate. Resolution does not activate the document or change the selection. `Application` and `wps` remain available for host APIs; `variable.value` is available in Render.
+
+Do not substitute `Application.ActiveWorkbook`, `ActivePresentation`, `ActiveDocument`, `ActiveSheet`, or `Selection` for an explicit binding or saved selection coordinates. The reference tables preserve historical API presence observations; their active-object members do not identify the bound document.
+
+The embedded Agent has the `wps_*` tools and a `read` tool limited to installed skill text. It has no terminal, shell or general local-file reader. This skill is self-contained: no other skill or offline script is required.
+
 ## Fast path
 
 1. Call `wps_list_documents`, then `wps_get_document` before writing any code.
@@ -18,8 +26,8 @@ Use this skill only for WPS JS API operations. The MCP server provides document 
 ## Hard boundaries
 
 - `wps_run_readonly_code` and Transform are read-only. Do not attempt property assignment, object construction, file I/O, or mutating methods.
-- The read-only guard is a **static AST check** (`assertReadOnlyCode` in `src/server.ts`; the rule set itself lives in `src/readonly-guard.ts`), not a sandbox. It matches on **syntax shape + property name only**, ignoring whether the value is a document object or a plain local one: `const o = {}; o.a = 1`, a bare `i++` on a local counter, and **any** `new` — including `new Date()` — are all rejected. The method denylist matches names case-insensitively, so a locally-created object with a `copy`/`sort` property is rejected as well. Write `i = i + 1` instead of `i++`; plain identifier assignment, `Array.push` and `for` loops pass — the guard blocks the operator and the shape, not the construct. Verified against WPS on Windows, 2026-09-29.
-- **All** violations are reported at once (each with `kind`, line/column, source line; structured form on `error.details.violations`) — fix them in one pass rather than iterating one error at a time. Before submitting code to `wps_run_readonly_code` / `wps_create_variable` / `wps_update_variable`, run the offline checker shipped with skill **`wps-mcp-binding`** (`scripts/check-readonly.mjs`, rules in §0 and §3 there). Render code is **not** guarded — that is where document writes belong.
+- The read-only guard is a **static AST check** (invoked by `src/tools.ts`, with the rule set in `src/readonly-guard.ts`), not a sandbox. It matches on **syntax shape + property name only**, ignoring whether the value is a document object or a plain local one: `const o = {}; o.a = 1`, a bare `i++` on a local counter, and **any** `new` — including `new Date()` — are all rejected. The method denylist matches names case-insensitively, so a locally-created object with a `copy`/`sort` property is rejected as well. Write `i = i + 1` instead of `i++`; plain identifier assignment, `Array.push` and `for` loops pass — the guard blocks the operator and the shape, not the construct. Verified against WPS on Windows, 2026-09-29.
+- `wps_run_readonly_code`, `wps_create_variable`, `wps_update_variable` and `wps_run_transform` automatically apply the guard before saving/executing read-only code. **All** violations are reported at once (each with `kind`, line/column, source line; structured form on `error.details.violations`) — fix them in one pass rather than iterating one error at a time. Do not bypass a rejected member using computed names. Render code is **not** guarded — that is where document writes belong.
 - Only a Render may modify a WPS document. Confirm the target document, range/shape, and replacement content before execution.
 - API availability differs by host and WPS version. The diagnostic reports are WPS 12.0 / Build 26885 on UOS Linux ARM64, not this Mac. Treat report support as a platform-specific observation, not a cross-platform guarantee.
 - The complete member catalog records enumerable members and candidate-presence checks; member enumeration is not equivalent to invoking/testing the API. Explicit behavior probes and their reported statuses are in each host guide.

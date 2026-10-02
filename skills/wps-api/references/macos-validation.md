@@ -1,6 +1,6 @@
 # macOS live validation (2026-09-28 to 2026-09-29)
 
-Environment: macOS, WPS Office 12.1.28496. Codex called the real local Add-ins through `wps-mcp`; the fixture/API notes in the other host guides remain from UOS Linux ARM64 / WPS Build 26885. Full run record: `docs/macos-live-api-validation.md` in the `wps-mcp` repository (not bundled with this skill, so no relative link).
+Environment: macOS, WPS Office 12.1.28496. Codex called the real local Add-ins through `wps-mcp`; the fixture/API notes in the other host guides remain from UOS Linux ARM64 / WPS Build 26885.
 
 ## Connected hosts
 
@@ -44,6 +44,6 @@ A/B isolation found that the `DataReportAssistantWPS` entry in `publish.xml` was
 
 `authaddin.json` previously had ET/WPP sections but no `wps` section. The installer now adds the WpsMcpWPS Writer authorization/load record while preserving existing records. It survived the user's relaunch, but the Add-in still did not appear: the latest server log shows only `/addins/wps/`, without child assets or a WebSocket. Confirm that a Writer document was opened and inspect `Developer Tools → WPS Add-ins` before another restart. `DataReportAssistantWPS` remains temporarily removed for isolation; its backup is `publish.xml.backup-before-writer-conflict-test`. Correction: its directory URL returns 404, but its explicit `index.html`, `ribbon.xml`, and `main.js` endpoints return HTTP 200.
 
-At the time of this install diagnosis, Writer API results had **not yet been tested on macOS**. A later real-WPS smoke run passed; see `docs/macos-live-writer-smoke-2026-09-29.md` in the `wps-mcp` repository (not bundled with this skill, so no relative link). It covered a disposable DOCX, document/table reads, `Content.InsertAfter` through Render and read-back, save, and close. The full Writer matrix remains untested. Codex Computer Use remains denied.
+At the time of this install diagnosis, Writer API results had **not yet been tested on macOS**. A later real-WPS smoke run passed. It covered a disposable DOCX, document/table reads, `Content.InsertAfter` through Render and read-back, save, and close. The full Writer matrix remains untested. Codex Computer Use remains denied.
 
 All 114 ET and 107 WPP explicit report rows were rerun on this Mac. The 105 Writer rows were not rerun as a matrix; the later smoke covers only representative API paths. The 2,598 enumerable member rows are an inventory, not a set of safe method invocations; they were not individually invoked.

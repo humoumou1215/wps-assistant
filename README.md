@@ -4,15 +4,11 @@
 [![Security](https://github.com/humoumou1215/wps-mcp/actions/workflows/security.yml/badge.svg)](https://github.com/humoumou1215/wps-mcp/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-开发与贡献见 [CONTRIBUTING.md](CONTRIBUTING.md)，CI、依赖维护和版本发布见 [自动化维护指南](docs/automation.md)。
+开发与贡献见 [CONTRIBUTING.md](CONTRIBUTING.md)，CI、依赖维护和版本发布见 [自动化维护指南](docs/spec.md#automation)。
 
 通过本机桥接服务，让 AI 读取和修改当前打开的 WPS 表格、演示与文字文档。可以在 WPS 的助手面板里直接对话，也可以让外部 MCP 客户端接入；文档访问由 WPS Add-in 在真实宿主中执行 WPS JS API。
 
 核心流程是 **Transform → Variable → Render**：保存只读提取规则，得到 JSON 值，再按已保存的规则写入目标文档。创建绑定可以由 Agent 完成；之后在变量面板执行重算或重写，直接运行规则，无需再次请求模型。设计约束见 [`docs/spec.md`](docs/spec.md)。
-
-## 一眼看懂
-
-用浏览器打开 [`docs/show-me-wps-mcp.html`](docs/show-me-wps-mcp.html)：一页了解两种使用入口、核心工具、Transform / Variable / Render、读写边界和运行日志。GitHub 的 HTML 文件页显示源代码，克隆仓库后可直接打开本地 HTML 预览。
 
 ## 环境要求
 
@@ -41,75 +37,23 @@ WPS 助手面板 → /api/chat → 内嵌 pi Agent ──┐
 
 实时连接与选区保存在内存中，重启后由 Add-in 重新上报。会话历史可能包含文档数据，与运行日志的脱敏、轮转设置分别管理。
 
-## macOS 部署
+## 开发部署
 
-安装前完全退出 WPS。项目根目录运行：
-
-```bash
-npm ci
-npm run build
-scripts/install-macos-service.sh
-scripts/install-macos-addin.sh
-```
-
-脚本会安装用户级 LaunchAgent `com.local.wps-mcp`，并向 WPS `publish.xml` 追加 ET/WPP/WPS 三个本地 JS Add-in；已有的加载项条目会保留，并先备份到 `publish.xml.backup-before-wps-mcp`。服务启动后可检查：
+安装 Node.js 22.19.0 或更高版本和 WPS Office，部署前完全退出 WPS（包括托盘进程）。在项目根目录执行对应命令，一次完成依赖安装、构建、Add-in 注册和桥接服务启动：
 
 ```bash
-curl http://127.0.0.1:18766/health
-curl http://127.0.0.1:18766/addins/et/
+# macOS
+npm run install:macos
 ```
-
-重新启动 WPS Office。macOS 安装脚本会更新 `publish.xml`；Writer 还会在 `authaddin.json` 中登记 `wps` 主机的启用状态。打开 Writer、表格或演示文稿，在「WPS MCP」选项卡选择「助手面板」或「变量管理」；「显示连接状态」打开状态窗格。
-
-## Windows 部署
-
-安装前完全退出 WPS（包括托盘）。Windows 可在 PowerShell 中前台启动 HTTP 模式：
 
 ```powershell
-npm ci
-npm run build
-node scripts/install-addin.mjs --dry-run   # 先预览将要写入的 publish.xml
-node scripts/install-addin.mjs             # 注册 ET/WPP/WPS 三个本地 Add-in
-$env:WPS_MCP_TRANSPORT = "http"
-npm start                                  # HTTP / MCP / WebSocket；保持此终端运行
+# Windows
+npm run install:windows
 ```
 
-`scripts/install-addin.mjs` 是跨平台的，对应 macOS 的 `install-macos-addin.sh`：只增删自己的 `WpsMcp*` 条目，其他加载项条目原样保留，首次修改前备份到 `publish.xml.backup-before-wps-mcp`；若 `publish.xml` 缺少 `</jsplugins>` 会拒绝写入。可用 `--uninstall` 移除，或用环境变量覆盖端口与状态：
+更新代码后再次执行同一命令即可重新部署。macOS 使用用户级 LaunchAgent；Windows 启动后台 Node 进程。脚本检查 `/health`、三个宿主的 Add-in 入口及助手页面资源；部署完成后重新打开 WPS，在「WPS MCP」选项卡验证助手面板、变量管理和连接状态。
 
-> 两者的差异：`install-macos-addin.sh` 还会写入 Writer 宿主所需的 `authaddin.json` 记录，并在检测到 WPS 正在运行时拒绝安装。`install-addin.mjs` 目前**只处理 `publish.xml`**、不做运行中检测 —— Windows 下 Writer 宿主是否能仅凭 `publish.xml` 加载尚未实测。
-
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `WPS_MCP_PORT` | `18766` | 服务端口，需与 `publish.xml` 中的 URL 一致 |
-| `WPS_MCP_TRANSPORT` | `stdio` | 设为 `http` 只启动 HTTP MCP；两种模式都有本机 HTTP 和 WebSocket |
-| `WPS_MCP_DATA_DIR` | 平台数据目录 | 覆盖配置、变量、会话及默认日志的存放目录 |
-| `WPS_MCP_ADDIN_ENABLE` | `enable_dev` | Add-in 的 `enable` 属性 |
-| `WPS_MCP_ADDINS_DIR` | `%APPDATA%\kingsoft\wps\jsaddons` | 加载项目录 |
-
-注册完成后**完全退出并重新启动 WPS Office**（托盘图标也要退出），再打开表格/演示/文字；`publish.xml` 中的地址指向运行中的服务，所以服务要先启动。验证：
-
-```bash
-curl http://127.0.0.1:18766/health
-curl http://127.0.0.1:18766/addins/et/      # 返回 Add-in 任务面板 HTML
-```
-
-本地调试不依赖真实 WPS 宿主时，可用内置的模拟 Add-in harness 跑通创建、读取、执行工具与错误分支：
-
-```bash
-npm start              # 另开一个终端
-npm run debug:local    # 连接两个模拟 Add-in（表格 + 演示），执行完整流程并打印 PASS/FAIL
-```
-
-harness 只验证 MCP/WebSocket/桥接层，**不代表** WPS JS API 的真实兼容性；真实宿主下的 API 行为仍需按下方“自动化测试”在做实机验证。
-
-更新代码后先运行 `npm run build`，再重启桥接服务；修改助手页面后重新加载面板。已在默认端口运行的 Windows 桥接可用 `scripts/restart-local-bridge.ps1` 检查和重启：
-
-```powershell
-.\scripts\restart-local-bridge.ps1 -CheckOnly
-.\scripts\restart-local-bridge.ps1
-```
-
-脚本核对端口所属进程、会话空闲状态及变量数据目录，保留已保存配置和规则。自定义目录或端口时传入 `-DataDirectory`、`-Port`；重启后 Add-in 会重新连接。
+部署参数、备份、重启边界和平台差异见 [SPEC 开发部署约定](docs/spec.md#development-deployment)。手动启动服务仍可使用 `npm run build` 后执行 `npm start`（HTTP 模式需设置 `WPS_MCP_TRANSPORT=http`）。
 
 ## 助手任务窗格
 
@@ -210,25 +154,7 @@ MCP 和内嵌 pi 会话使用相同的工具名，统一为 `wps_` 前缀的小�
 npm test
 ```
 
-2026-09-30 当前代码通过 37 项常规测试；模拟宿主通过不代表 WPS JS API 的真实兼容性。真实宿主需运行以下显式测试。
-
-macOS 上可显式运行真实 WPS ET/WPP 冒烟测试：
-
-```bash
-npm run test:wps-live
-# 可用 WPS_LIVE_PORT 指定独立端口，默认 18767；不能使用生产端口 18766
-WPS_LIVE_PORT=18767 npm run test:wps-live
-```
-
-该命令要求 WPS Office 已安装、**测试开始前完全退出 WPS**，且独立测试端口未被占用。它会启动测试端口上的隔离 MCP 服务和临时状态目录、生成可丢弃的 `.xlsx`/`.pptx` 测试文件，并临时让 Add-in 的 WebSocket/MCP 流量走测试端口。WPS 已注册的 Add-in 页面仍由其原有地址提供静态资源；测试结束会还原 `addon/main.js`。测试会经真实 MCP/Add-in 执行只读查询、ET 公式/格式写入与读回、WPP 文本框/文字/几何属性写入与读回，并把修改保存到临时副本。退出时清理临时数据。若 WPS 未正常退出，临时文件会保留并打印路径，避免删除仍被 WPS 使用的文件。
-
-Writer 使用独立命令；测试前需完全退出 WPS，且测试端口未占用、已注册 Add-in 的静态资源服务 `18766` 可用：
-
-```bash
-npm run test:wps-writer-live
-```
-
-该命令在隔离端口启动真实 Writer 测试，临时将 Add-in WebSocket 指向测试服务，并把 Add-in 文档枚举限制为本次临时 DOCX。它检查文档/表格读取、Render 插入文本并读回、保存和关闭临时副本；结束后关闭本次启动的 WPS、还原 Add-in 配置并清理临时数据。普通 `npm test` 不会启动 WPS。若 Add-in 未连接、测试文件未注册、运行时版本不匹配或 API 断言失败，真实测试应失败，不能按 mock 通过处理。
+模拟测试通过不代表真实 WPS JS API 兼容性。开发部署后使用可丢弃的 Office 样例进行实机验收，要求见 [SPEC 真实 WPS 验收](docs/spec.md#live-validation)。
 
 ## 安全边界
 
@@ -243,9 +169,7 @@ npm run test:wps-writer-live
 
 - 渐进式披露技能：`skills/wps-api/SKILL.md`（WorkBuddy 用户级安装位置为 `~/.workbuddy/skills/wps-api/`，需手工复制，仓库内没有安装脚本）
 - 每个报告 API 的成员清单、探测结果和使用说明：`skills/wps-api/references/`
-- 重新从诊断报告包生成 API 技能：`python3 scripts/generate-wps-api-skill.py <reports.zip>`；报告包需另行提供，当前检出的仓库不附带该文件。
-- 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。一次 macOS 联调记录见 [`docs/macos-codex-validation.md`](docs/macos-codex-validation.md)：其中 Codex 只是当时使用的测试客户端/工具，报告中的客户端限制不构成项目运行依赖。
-- 2026-09-29 的真实 WPS 冒烟记录：[ET/WPP](docs/macos-live-et-wpp-smoke-2026-09-29.md)、[Writer](docs/macos-live-writer-smoke-2026-09-29.md)。
+- 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。macOS 联调摘要见 [`skills/wps-api/references/macos-validation.md`](skills/wps-api/references/macos-validation.md)。Codex 只是当时使用的测试客户端/工具，客户端限制不构成项目运行依赖。
 
 ## 代码导航
 
@@ -259,8 +183,6 @@ npm run test:wps-writer-live
 | `src/readonly-guard.ts` / `src/guard-budget.ts` | 只读语法检查与按模型轮次计算的重试额度 |
 | `addon/` | WPS 宿主桥接、Ribbon、助手面板和视图渲染 |
 | `skills/wps-api/` | 自动安装到内嵌 Agent，同时可供外部 Agent 使用的 WPS API 技能与参考资料 |
-| `scripts/` / `test/` | 安装、重启、调试、常规与真实 WPS 测试 |
-
-浏览器验证记录见 [初期审计与验收报告](docs/ui-audit-and-validation.md)、[2026-09-30 规范对照检查](docs/ui-spec-audit-2026-09-30.md)和[修复复查记录](docs/ui-fix-validation-2026-09-30.md)。
+| `scripts/` / `test/` | 两个平台的开发部署、语法检查、常规与真实 WPS 测试 |
 
 办公验证素材见 [`test/sample/`](test/sample/)：包含四轮 Excel 项目交付台账、PPT 周会演示、Word 周报及 [《WPS-Assistant 能力测试操作手册》](test/sample/WPS-Assistant能力测试操作手册.md)。请按操作手册使用这些固定 Office 样例，验证数据更新、跨文件重写和连续多轮操作。

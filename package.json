@@ -18,15 +18,9 @@
     "dev": "tsx src/server.ts",
     "test": "npm run build && node --test test/*.test.mjs",
     "check": "tsc -p tsconfig.json --noEmit && node scripts/check-js.mjs",
-    "clean:deps": "node scripts/clean-local-deps.mjs",
     "test:ci": "npm run build && node --test --test-timeout=120000 --test-reporter=spec --test-reporter=junit --test-reporter-destination=stdout --test-reporter-destination=test-results.xml test/*.test.mjs",
-    "package:release": "npm run build && node scripts/package-release.mjs",
-    "verify:release": "node scripts/verify-release.mjs",
-    "test:wps-live": "bash scripts/run-macos-wps-live-tests.sh",
-    "test:wps-writer-live": "bash scripts/run-macos-wps-writer-live-test.sh",
-    "install:addin": "node scripts/install-addin.mjs",
-    "uninstall:addin": "node scripts/install-addin.mjs --uninstall",
-    "debug:local": "node scripts/debug-local.mjs"
+    "install:macos": "bash scripts/install-macos.sh",
+    "install:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows.ps1"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.87.1",

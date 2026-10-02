@@ -178,7 +178,7 @@
   const modeActions = op => V.variableActions(state, variableMode, op, online);
   function locationButton(label, variableId, documentId, location, renderId, locationIndex = 0) {
     const registered = !!doc(documentId), available = connected(documentId) && !!location;
-    const status = !registered ? '文档未注册，暂不支持跳转' : !connected(documentId) ? '文档已断开，请先在 WPS 中打开' : !location ? '未标注明确位置，暂不支持跳转' : '在 WPS 中定位并选中 ' + docName(documentId) + ' › ' + location.ref;
+    const status = !registered ? '文档未注册，暂不支持跳转' : !connected(documentId) ? '文档已断开，请先在 WPS 中打开「' + docName(documentId) + '」' : !location ? '未标注明确位置，暂不支持跳转' : '在 WPS 中定位并选中 ' + docName(documentId) + ' › ' + location.ref;
     const attributes = 'class="location-link ' + (available ? 'available' : 'unavailable') + '" title="' + esc(status) + '"';
     if (!available) return '<span ' + attributes + '>' + esc(label) + '</span>';
     return '<button type="button" ' + attributes + ' data-navigate data-var="' + esc(variableId) + '"' +

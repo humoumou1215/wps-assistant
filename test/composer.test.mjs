@@ -126,4 +126,12 @@ test('source and Render location cards share inline descriptions and distinguish
     assert.equal(document.querySelector('[data-navigate]'), null);
     assert.match(document.querySelector('.location-link.unavailable').title, reason);
   }
+  for (const html of [
+    context.sourceSummary({ ...variable, transform: { ...variable.transform, sourceDocumentId: 'offline' } }),
+    context.renderDestination(variable, { renderId: 'r', targetDocumentId: 'offline', targetLocations: [location] }),
+  ]) {
+    const card = parseHTML(html).document.querySelector('.location-link.unavailable');
+    assert.equal(card.textContent, '离线.xlsx › Sheet!A1:B2');
+    assert.match(card.title, /请先在 WPS 中打开「离线.xlsx」/);
+  }
 });

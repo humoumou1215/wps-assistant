@@ -59,7 +59,13 @@ type Variable = {
   transform: Transform;
   renders: Render[];
 };
-type PersistedState = { variables: Variable[]; counters: Record<string, number>; documentIds: Record<string, string> };
+type DocumentMetadata = Pick<DocumentRecord, "type" | "name" | "path" | "documentKey">;
+type PersistedState = {
+  variables: Variable[];
+  counters: Record<string, number>;
+  documentIds: Record<string, string>;
+  documentMetadata: Record<string, DocumentMetadata>;
+};
 type AddinDocument = {
   documentKey: string;
   type: DocType;
@@ -76,7 +82,7 @@ type Pending = { connectionId: string; resolve: (v: unknown) => void; reject: (e
 const documents = new Map<string, DocumentRecord>();
 const connections = new Map<string, Connection>();
 const pending = new Map<string, Pending>();
-const state: PersistedState = { variables: [], counters: {}, documentIds: {} };
+const state: PersistedState = { variables: [], counters: {}, documentIds: {}, documentMetadata: {} };
 
 function nextId(kind: string) {
   state.counters[kind] = (state.counters[kind] ?? 0) + 1;
@@ -135,6 +141,29 @@ async function loadState() {
     state.variables = Array.isArray(stored.variables) ? stored.variables : [];
     state.counters = stored.counters ?? {};
     state.documentIds = stored.documentIds ?? {};
+    state.documentMetadata = stored.documentMetadata ?? {};
+    // Older versions retained file identities but not display names. Recover
+    // names from recognizable file paths or the Add-in's type:name keys.
+    for (const [identity, documentId] of Object.entries(state.documentIds)) {
+      if (state.documentMetadata[documentId]) continue;
+      try {
+        const [type, key] = JSON.parse(identity);
+        if (!["spreadsheet", "presentation", "writer"].includes(type) || typeof key !== "string") continue;
+        const typedName = key.startsWith(type + ":") ? key.slice(type.length + 1) : undefined;
+        const filename = key.split(/[\\/]/).at(-1);
+        const name = typedName || (filename && /\.(xlsx?|xlsm|xlsb|et|pptx?|pptm|dps|docx?|docm|wps)$/i.test(filename) ? filename : undefined);
+        if (!name) continue;
+        state.documentMetadata[documentId] = { type, name, documentKey: key,
+          ...(!typedName && /^(\/|[a-z]:[\\/]|\\\\)/i.test(key) ? { path: key } : {}) };
+      } catch { /* An opaque legacy key cannot supply a reliable name. */ }
+    }
+    for (const [documentId, metadata] of Object.entries(state.documentMetadata)) {
+      if (!metadata || typeof metadata.name !== "string" || !metadata.name || typeof metadata.documentKey !== "string" ||
+          !["spreadsheet", "presentation", "writer"].includes(metadata.type)) continue;
+      // Never restore a live connection or selection from disk.
+      documents.set(documentId, { documentId, type: metadata.type, name: metadata.name, documentKey: metadata.documentKey,
+        ...(typeof metadata.path === "string" ? { path: metadata.path } : {}), connectionId: "", connected: false });
+    }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
@@ -195,9 +224,14 @@ function registerDocument(connection: Connection, item: AddinDocument) {
   let documentId = connection.documents.get(item.documentKey);
   if (!documentId) {
     documentId = state.documentIds[identity] ?? nextId("doc");
-    state.documentIds[identity] = documentId;
-    void persist().catch(error => logger.error("state.persist_failed", { error }));
     connection.documents.set(item.documentKey, documentId);
+  }
+  const metadata: DocumentMetadata = { type: item.type, name: item.name, documentKey: item.documentKey,
+    ...(item.path ? { path: item.path } : {}) };
+  if (state.documentIds[identity] !== documentId || JSON.stringify(state.documentMetadata[documentId]) !== JSON.stringify(metadata)) {
+    state.documentIds[identity] = documentId;
+    state.documentMetadata[documentId] = metadata;
+    void persist().catch(error => logger.error("state.persist_failed", { error }));
   }
   const previous = documents.get(documentId);
   documents.set(documentId, {

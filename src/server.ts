@@ -134,7 +134,8 @@ async function startBridge() {
         for (const key of currentKeys) {
           if (activeKeys.has(key)) continue;
           const docId = connection.documents.get(key);
-          if (docId) documents.delete(docId);
+          const doc = docId ? documents.get(docId) : undefined;
+          if (doc?.connectionId === id) doc.connected = false;
           connection.documents.delete(key);
         }
         return;

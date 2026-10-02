@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -96,8 +96,20 @@ function persist(variables?: Variable[]) {
     const snapshot = JSON.stringify({ ...state, variables: variables ?? state.variables }, null, 2);
     await mkdir(DATA_DIR, { recursive: true });
     const temp = `${STATE_FILE}.${randomUUID()}.tmp`;
-    await writeFile(temp, snapshot, { mode: 0o600 });
-    await rename(temp, STATE_FILE);
+    try {
+      await writeFile(temp, snapshot, { mode: 0o600 });
+      for (let attempt = 0; ; attempt++) {
+        try { await rename(temp, STATE_FILE); break; }
+        catch (error) {
+          // Windows readers and antivirus can briefly deny replacing an existing file.
+          if (process.platform !== "win32" || attempt >= 20 || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
+    } catch (error) {
+      await rm(temp, { force: true }).catch(() => {});
+      throw error;
+    }
     if (variables) state.variables = variables;
   });
   persistence = write.then(() => { pendingStateWrites--; }, () => { pendingStateWrites--; });

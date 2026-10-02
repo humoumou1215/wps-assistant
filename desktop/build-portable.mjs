@@ -46,11 +46,14 @@ async function files(directory, visit) {
   }
 }
 await npmRun(['run', 'build']);
-await run('cargo', ['build', '--release', '--locked', '--manifest-path', 'desktop/native/Cargo.toml'], { env: { ...process.env, ...(platform === 'darwin' ? { MACOSX_DEPLOYMENT_TARGET: '13.5' } : {}) } });
+const nativeTarget = platform === 'win32' ? `${arch === 'x64' ? 'x86_64' : 'aarch64'}-pc-windows-msvc` : undefined;
+const rustEnvironment = { ...process.env, ...(platform === 'darwin' ? { MACOSX_DEPLOYMENT_TARGET: '13.5' } : {}) };
+if (nativeTarget) rustEnvironment[`CARGO_TARGET_${nativeTarget.toUpperCase().replaceAll('-', '_')}_RUSTFLAGS`] = '-C target-feature=+crt-static';
+await run('cargo', ['build', '--release', '--locked', '--manifest-path', 'desktop/native/Cargo.toml', ...(nativeTarget ? ['--target', nativeTarget] : [])], { env: rustEnvironment });
 await rm(bundle, { recursive: true, force: true });
 await mkdir(app, { recursive: true }); await mkdir(nodeDir, { recursive: true }); await mkdir(dirname(binary), { recursive: true });
 for (const path of ['dist', 'addon', 'skills', 'LICENSE', 'package.json', 'package-lock.json']) await cp(join(root, path), join(app, path), { recursive: true });
-await cp(join(root, 'desktop/native/target/release', platform === 'win32' ? 'wps-assistant-tray.exe' : 'wps-assistant-tray'), binary);
+await cp(join(root, 'desktop/native/target', nativeTarget ?? '', 'release', platform === 'win32' ? 'wps-assistant-tray.exe' : 'wps-assistant-tray'), binary);
 await npmRun(['ci', '--omit=dev', '--no-audit', '--no-fund'], { cwd: app });
 // Some npm versions reapply the SDK's shrinkwrap over the root lock's patched leaf.
 // Restore the exact locked tarball, checking integrity before extraction.

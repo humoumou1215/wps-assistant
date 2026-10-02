@@ -38,6 +38,29 @@ const model = createServer(async (req, res) => {
 await new Promise(r => model.listen(0, '127.0.0.1', r));
 let started = false;
 try {
+  if (process.platform === 'win32') {
+    // A CI runner has VC redistributables installed, so execution alone cannot prove portability.
+    for (const executable of [binary, node]) {
+      const bytes = await readFile(executable), pe = bytes.readUInt32LE(0x3c), optional = pe + 24;
+      const directories = optional + (bytes.readUInt16LE(optional) === 0x20b ? 112 : 96);
+      const sectionCount = bytes.readUInt16LE(pe + 6), sections = optional + bytes.readUInt16LE(pe + 20);
+      function offset(rva) {
+        for (let i = 0; i < sectionCount; i++) {
+          const section = sections + i * 40, address = bytes.readUInt32LE(section + 12), size = Math.max(bytes.readUInt32LE(section + 8), bytes.readUInt32LE(section + 16));
+          if (rva >= address && rva < address + size) return bytes.readUInt32LE(section + 20) + rva - address;
+        }
+        throw new Error('Invalid PE import address');
+      }
+      for (const [directory, step, nameField] of [[1, 20, 12], [13, 32, 4]]) {
+        const rva = bytes.readUInt32LE(directories + directory * 8); if (!rva) continue;
+        for (let cursor = offset(rva); bytes.readUInt32LE(cursor + nameField); cursor += step) {
+          const start = offset(bytes.readUInt32LE(cursor + nameField));
+          const dll = bytes.subarray(start, bytes.indexOf(0, start)).toString();
+          assert.ok(!/^(?:vcruntime|msvcp|msvcr)\d+.*\.dll$/i.test(dll), `Portable executable requires external VC runtime: ${dll}`);
+        }
+      }
+    }
+  }
   await run(binary, ['--smoke']);
   assert.equal(JSON.parse(await readFile(join(app, 'node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json'), 'utf8')).version, '5.0.12', 'shipped SDK uses the security-patched dependency');
   assert.match(await run(node, ['--version']), /^v24\.21\.0/);

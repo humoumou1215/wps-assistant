@@ -8,7 +8,9 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { startHarness } from './helpers/ui-harness.mjs';
 
 async function until(read, ready) {
-  for (let i = 0; i < 100; i++) {
+  // Windows CI can delay filesystem persistence while other integration servers start.
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
     const value = await read();
     if (ready(value)) return value;
     await new Promise(resolve => setTimeout(resolve, 20));

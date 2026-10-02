@@ -181,6 +181,115 @@
     }
     return { sheet: sheetName, address };
   }
+  function navigationDocument(app, type, documentKey) {
+    const collection = getProp(app, type === "presentation" ? "Presentations" : "Documents");
+    const current = getProp(app, type === "presentation" ? "ActivePresentation" : "ActiveDocument");
+    const docs = enumerate(collection);
+    if (current && !docs.includes(current)) docs.push(current);
+    const doc = docs.find(item => (toStringValue(getProp(item, "FullName")) || `${type}:${toStringValue(getProp(item, "Name"))}`) === documentKey);
+    if (!doc) throw new Error("目标文档已关闭");
+    return doc;
+  }
+  const validIndex = value => Number.isSafeInteger(value) && value > 0 && value <= 2147483647;
+  function uniqueTarget(items, label) {
+    if (!items.length) throw new Error(label + "不存在");
+    if (items.length !== 1) throw new Error(label + "有多个匹配，请使用明确的编号或 ID");
+    return items[0];
+  }
+  function navigatePresentation(app, documentKey, location) {
+    if ((!validIndex(location.slideId) && !validIndex(location.slide)) || (location.slideId !== undefined && location.slide !== undefined)) throw new Error("幻灯片位置无效");
+    const pres = navigationDocument(app, "presentation", documentKey);
+    let slide;
+    if (location.slideId !== undefined) {
+      // SlideID survives slide reordering; never fall back to a page number.
+      const matches = [];
+      for (let i = 1; i <= getCount(pres.Slides); i++) { const item = itemAt(pres.Slides, i); if (getProp(item, "SlideID") === location.slideId) matches.push(item); }
+      slide = uniqueTarget(matches, "幻灯片 ID " + location.slideId);
+    } else {
+      if (location.slide > getCount(pres.Slides)) throw new Error("目标幻灯片不存在");
+      slide = itemAt(pres.Slides, location.slide);
+      if (!slide) throw new Error("目标幻灯片不存在");
+    }
+    let shape;
+    if (location.shapeId !== undefined || location.shapeName !== undefined || location.table || location.textTitle !== undefined) {
+      if (location.shapeId !== undefined && !validIndex(location.shapeId)) throw new Error("形状 ID 无效");
+      const shapes = [];
+      for (let i = 1; i <= getCount(slide.Shapes); i++) { const item = itemAt(slide.Shapes, i); if (item) shapes.push(item); }
+      const matches = shapes.filter(item => {
+        if (location.shapeId !== undefined) return getProp(item, "Id") === location.shapeId;
+        if (location.shapeName !== undefined) return getProp(item, "Name") === location.shapeName;
+        if (location.table) return Boolean(getProp(item, "HasTable"));
+        const text = safe(() => item.TextFrame.TextRange.Text, "");
+        return getProp(item, "Name") === location.textTitle || (typeof text === "string" && text.split(/[\r\n]/)[0].trim() === location.textTitle);
+      });
+      shape = uniqueTarget(matches, location.table ? "目标表格" : "目标形状");
+      if (typeof shape.Select !== "function") throw new Error("当前 WPS 不支持形状选择");
+    }
+    const targetWindow = itemAt(getProp(pres, "Windows"), 1);
+    if (!targetWindow || typeof targetWindow.Activate !== "function") throw new Error("当前 WPS 不支持切换演示窗口");
+    targetWindow.Activate();
+    const win = getProp(app, "ActiveWindow"), view = getProp(win, "View");
+    if (typeof view?.GotoSlide === "function") view.GotoSlide(Number(slide.SlideIndex));
+    else if (typeof slide.Select === "function") slide.Select();
+    else throw new Error("当前 WPS 不支持幻灯片定位");
+    if (shape) shape.Select();
+    return { slide: Number(slide.SlideIndex), slideId: Number(slide.SlideID), ...(shape ? { shapeId: Number(shape.Id), shapeName: toStringValue(shape.Name) } : {}), ref: location.ref };
+  }
+  function navigateWriter(app, documentKey, location) {
+    const doc = navigationDocument(app, "writer", documentKey);
+    let range;
+    if (location.rangeStart !== undefined) {
+      if (![location.rangeStart, location.rangeEnd].every(n => Number.isSafeInteger(n) && n >= 0) || location.rangeEnd < location.rangeStart || location.rangeEnd > Number(doc.Content.End)) throw new Error("文字区域超出文档范围");
+      range = doc.Range(location.rangeStart, location.rangeEnd);
+    } else if (location.bookmark !== undefined) {
+      if (!safe(() => doc.Bookmarks.Exists(location.bookmark), false)) throw new Error("目标书签不存在");
+      range = doc.Bookmarks.Item(location.bookmark).Range;
+    } else if (location.paragraph !== undefined || location.table !== undefined) {
+      const index = location.paragraph !== undefined ? location.paragraph : location.table;
+      const collection = location.paragraph !== undefined ? doc.Paragraphs : doc.Tables;
+      if (!validIndex(index) || index > getCount(collection)) throw new Error("目标段落或表格不存在");
+      range = itemAt(collection, index)?.Range;
+    } else if (typeof location.heading === "string" && location.heading) {
+      const matches = [];
+      for (let i = 1; i <= getCount(doc.Paragraphs); i++) {
+        const para = itemAt(doc.Paragraphs, i);
+        if (toStringValue(getProp(para?.Range, "Text")).trim() === location.heading) matches.push({ para, index: i });
+      }
+      const heading = uniqueTarget(matches, "标题「" + location.heading + "」");
+      range = heading.para.Range;
+      if (location.afterHeading) {
+        // Only the immediately following nonempty paragraph/table is a target.
+        // A removed table must never silently redirect to the next section.
+        let next;
+        for (let i = heading.index + 1; i <= getCount(doc.Paragraphs); i++) {
+          const para = itemAt(doc.Paragraphs, i);
+          if (toStringValue(getProp(para?.Range, "Text")).trim()) { next = para.Range; break; }
+        }
+        if (!next) throw new Error("标题后没有目标段落或表格");
+        const tables = [];
+        for (let i = 1; i <= getCount(doc.Tables); i++) { const item = itemAt(doc.Tables, i); if (item?.Range && item.Range.Start === next.Start) tables.push(item); }
+        if (location.afterHeading === "table") range = uniqueTarget(tables, "标题后的表格").Range;
+        else {
+          if (tables.length) throw new Error("标题后是表格，请使用表格目的地址");
+          range = next;
+        }
+      }
+    } else throw new Error("文字目的位置无效");
+    if (!range || typeof range.Select !== "function") throw new Error("当前 WPS 不支持文字区域选择");
+    doc.Activate();
+    range.Select();
+    // Selection normally scrolls automatically. Some hosts expose an explicit
+    // scroll method; unsupported scrolling must not undo a successful selection.
+    safe(() => app.ActiveWindow.ScrollIntoView(range, true), undefined);
+    return { start: Number(range.Start), end: Number(range.End), ref: location.ref };
+  }
+  function navigateDocument(app, documentKey, location) {
+    const type = appType(app);
+    if (type === "spreadsheet" && !location?.kind) return navigateToRange(app, documentKey, location);
+    if (type === "presentation" && location?.kind === type) return navigatePresentation(app, documentKey, location);
+    if (type === "writer" && location?.kind === type) return navigateWriter(app, documentKey, location);
+    throw new Error("目的位置与文档类型不匹配");
+  }
   function setState(connected, message, docs = []) {
     if ($dot) $dot.classList.toggle("ok", connected);
     if ($status) $status.textContent = message;
@@ -216,7 +325,7 @@
         }
         const app = getApplication();
         if (message.method === "navigate") {
-          const result = navigateToRange(app, message.documentKey, message.location);
+          const result = navigateDocument(app, message.documentKey, message.location);
           send({ type: "response", id: message.id, payload: { success: true, result } });
           send({ type: "documents", documents: currentDocuments() });
           return;

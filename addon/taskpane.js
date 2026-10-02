@@ -176,18 +176,19 @@
   const typeOf = V.typeOf, preview = V.jsonPreview;
   const modeVariables = () => V.variablesInMode(state, variableMode, online);
   const modeActions = op => V.variableActions(state, variableMode, op, online);
-  function locationButton(label, variableId, documentId, location, renderId) {
-    if (!location) return '<span title="未标注明确区域；目前支持表格区域定位">' + esc(label) + '</span>';
+  function locationButton(label, variableId, documentId, location, renderId, locationIndex = 0) {
+    if (!location) return '<span title="未标注明确位置；支持表格区域、演示幻灯片/形状、文字段落/表格定位">' + esc(label) + '</span>';
     return '<button type="button" class="location-link" data-navigate data-var="' + esc(variableId) + '"' +
-      (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' title="' +
+      (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' data-location-index="' + locationIndex + '" title="' +
       esc(connected(documentId) ? '在 WPS 中定位并选中 ' + docName(documentId) + ' › ' + location.ref : '目标文档已断开，请先在 WPS 中打开') + '" ' +
       (actionBusy || !connected(documentId) ? 'disabled' : '') + '>' + esc(label) + '</button>';
   }
   function renderDestination(variable, render) {
     const description = render.description || '未标注写入位置', location = render.targetLocation;
-    const link = label => locationButton(label, variable.variableId, render.targetDocumentId, location, render.renderId);
+    const locations = render.targetLocations?.length ? render.targetLocations : location ? [location] : [];
+    const link = (label, target = location, index = 0) => locationButton(label, variable.variableId, render.targetDocumentId, target, render.renderId, index);
     if (location?.start !== undefined) return esc(description.slice(0, location.start)) + link(description.slice(location.start, location.end)) + esc(description.slice(location.end));
-    return esc(description) + (render.targetRef ? ' · ' + link(render.targetRef) : '');
+    return esc(description) + (locations.length ? ' · ' + locations.map((target, index) => link(target.ref, target, index)).join(' · ') : render.targetRef ? ' · ' + link(render.targetRef) : '');
   }
   function deleteButton(variableId, renderId) {
     return '<button type="button" class="act sm delete-button" data-delete data-var="' + esc(variableId) + '"' + (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' title="' + (renderId ? '删除此 Render 绑定，保留文档内容' : '删除变量及全部关联 Render，保留文档内容') + '" ' + (actionBusy || !online ? 'disabled' : '') + '>删除</button>';
@@ -322,7 +323,7 @@
     const navigation = event.target.closest('[data-navigate]');
     if (navigation) {
       event.preventDefault(); event.stopPropagation();
-      if (!navigation.disabled && !actionBusy) void navigateLocation({ variableId: navigation.dataset.var, ...(navigation.dataset.render ? { renderId: navigation.dataset.render } : {}) });
+      if (!navigation.disabled && !actionBusy) void navigateLocation({ variableId: navigation.dataset.var, ...(navigation.dataset.render ? { renderId: navigation.dataset.render } : {}), locationIndex: Number(navigation.dataset.locationIndex || 0) });
       return;
     }
     const deletion = event.target.closest('[data-delete]');

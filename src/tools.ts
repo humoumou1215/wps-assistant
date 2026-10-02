@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -9,9 +11,10 @@ import { boundedSelection } from "./selection.js";
 import { analyzeReadOnlyCode, formatReadOnlyViolations, MAX_CODE_LENGTH } from "./readonly-guard.js";
 import { DATA_DIR } from "./paths.js";
 import { logger } from "./logger.js";
-import { parseSpreadsheetRef, renderLocation } from "./location.js";
+import { parseDocumentRefs, renderLocations } from "./location.js";
 
 const sourceRoot = new URL("../", import.meta.url);
+const openFile = promisify(execFile);
 const APP_DIR = resolve(fileURLToPath(existsSync(new URL("package.json", sourceRoot)) ? sourceRoot : new URL("../../", import.meta.url)));
 const PORT = Number(process.env.WPS_MCP_PORT ?? "18766");
 const STATE_FILE = join(DATA_DIR, "state.json");
@@ -256,17 +259,26 @@ async function executeWps(doc: DocumentRecord, code: string, variable?: unknown,
 }
 
 // UI-only navigation: send a fixed command, never execute a Transform or Render.
-export async function navigateVariableLocation(variableId: string, renderId?: string) {
+export async function navigateVariableLocation(variableId: string, renderId?: string, locationIndex = 0) {
   const variable = variableById(variableId);
   const render = renderId ? variable.renders.find(r => r.renderId === renderId) : undefined;
   if (renderId && !render) throw new ToolError("RENDER_NOT_FOUND", "此 Render 绑定已不存在");
   const doc = documentById(render ? render.targetDocumentId : variable.transform.sourceDocumentId);
-  if (doc.type !== "spreadsheet") throw new ToolError("LOCATION_UNSUPPORTED", "目前仅支持表格工作表与单元格区域定位");
-  const location = render ? renderLocation(render) : parseSpreadsheetRef(variable.transform.sourceRef);
-  if (!location) throw new ToolError("LOCATION_MISSING", "未标注明确的工作表与区域，无法定位；请补充来源区域或 Render 目标区域");
-  const response = await sendRpc(doc, "navigate", { location: { sheet: location.sheet, address: location.address } }) as { success?: boolean; error?: string };
+  const locations = render ? renderLocations(render, doc.type) : parseDocumentRefs(doc.type, variable.transform.sourceRef);
+  const location = locations[locationIndex];
+  if (!Number.isInteger(locationIndex) || locationIndex < 0 || !location) throw new ToolError("LOCATION_MISSING", "未标注明确的目的位置或位置已不存在，请补充来源或 Render 目标位置");
+  // macOS WPS combines ET/WPP/Writer in one native tab bar. Activating a
+  // component's COM window only changes that component's hidden selection.
+  // Open the already-registered file in the same app to reveal its existing
+  // tab, then perform the fixed location command. Unsaved documents keep the
+  // host API path. Never accept a file path from the navigation request.
+  if (process.platform === "darwin" && doc.path?.startsWith("/") && existsSync(doc.path)) {
+    try { await openFile("/usr/bin/open", ["-b", "com.kingsoft.wpsoffice.mac", doc.path], { timeout: 5000 }); }
+    catch { throw new ToolError("NAVIGATION_FAILED", "无法切换到目标 WPS 文档标签页"); }
+  }
+  const response = await sendRpc(doc, "navigate", { location }) as { success?: boolean; error?: string; result?: { ref?: string } };
   if (!response?.success) throw new ToolError("NAVIGATION_FAILED", response?.error || "WPS 定位失败");
-  return { success: true, documentId: doc.documentId, documentName: doc.name, ref: location.ref };
+  return { success: true, documentId: doc.documentId, documentName: doc.name, ref: response.result?.ref || location.ref };
 }
 function findVariable(id: string) { return state.variables.find((v) => v.variableId === id); }
 function documentResponse(doc: DocumentRecord) {
@@ -358,7 +370,7 @@ defineTool("wps_run_readonly_code", {
 
 defineTool("wps_create_variable", {
   title: "Create Variable and Transform",
-  description: "Create a Variable and save read-only WPS JavaScript that populates its value when wps_run_transform is called. Optional sourceRef describes the source region as SheetName!A1:B13.",
+  description: "Create a Variable and save read-only WPS JavaScript that populates its value when wps_run_transform is called. Optional sourceRef locates the source: SheetName!A1:B13, SlideID:257!ShapeID:4, Paragraph:4, Table:1, Heading:标题 or Range:0:20.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: {
     variableName: z.string().min(1),
@@ -433,7 +445,7 @@ defineTool("wps_update_variable", {
 
 defineTool("wps_create_render", {
   title: "Create Render rule",
-  description: "Attach a document-writing WPS JavaScript rule to an existing Variable; the rule is saved but not executed. For spreadsheets, provide targetRef as SheetName!A1:B13 so the UI can navigate to the destination.",
+  description: "Attach a document-writing WPS JavaScript rule to an existing Variable; the rule is saved but not executed. Provide targetRef for UI navigation: spreadsheets SheetName!A1:B13; presentations SlideID:257!ShapeID:4 (prefer stable IDs) or Slide:2!Shape:对象名; Writer Paragraph:4, Table:1, Heading:标题!Paragraph, Heading:标题!Table, Bookmark:名称 or Range:0:20. Join multiple Word/PPT destinations with +. Saves only, never navigates or executes.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),
@@ -446,7 +458,7 @@ defineTool("wps_create_render", {
   try {
     const variable = variableById(variableId);
     const doc = documentById(targetDocumentId);
-    if (targetRef && doc.type === "spreadsheet" && !parseSpreadsheetRef(targetRef)) throw new ToolError("INVALID_REQUEST", "targetRef 必须是明确的工作表与 A1 区域，例如 Summary!A1:B4");
+    if (targetRef && !parseDocumentRefs(doc.type, targetRef).length) throw new ToolError("INVALID_REQUEST", "targetRef 必须是明确位置：表格 Summary!A1:B4；演示 SlideID:257!ShapeID:4；文字 Heading:本周概况!Paragraph 或 Table:1");
     const renderId = nextId("render");
     variable.renders.push({ renderId, targetDocumentId, ...(targetRef ? { targetRef } : {}), ...(description ? { description } : {}), code });
     await persist();
@@ -456,7 +468,7 @@ defineTool("wps_create_render", {
 
 defineTool("wps_update_render", {
   title: "Update Render rule",
-  description: "Update one existing Render by variableId and renderId, preserving its ID and other bindings. Omitted fields stay unchanged; null clears description/targetRef. For spreadsheets, targetRef identifies the write region for UI navigation. Saves only: run wps_run_render with this renderId to apply it. Existing document content is not undone or moved.",
+  description: "Update one existing Render by variableId and renderId, preserving its ID and other bindings. Omitted fields stay unchanged; null clears description/targetRef. targetRef identifies the destination for UI navigation: Sheet!A1:B4, SlideID:257!ShapeID:4, Paragraph:4, Table:1 or Heading:标题!Paragraph/!Table. Join multiple Word/PPT destinations with +. Saves only: run wps_run_render with this renderId to apply it. Existing document content is not undone or moved.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),
@@ -474,8 +486,9 @@ defineTool("wps_update_render", {
     if ([targetDocumentId, targetRef, description, code].every(value => value === undefined)) {
       throw new ToolError("INVALID_REQUEST", "Provide at least one field to update");
     }
-    if (targetDocumentId !== undefined) documentById(targetDocumentId);
-    if (targetRef && !parseSpreadsheetRef(targetRef)) throw new ToolError("INVALID_REQUEST", "targetRef 必须是明确的工作表与 A1 区域，例如 Summary!A1:B4");
+    const targetDoc = targetDocumentId !== undefined ? documentById(targetDocumentId) : documents.get(render.targetDocumentId);
+    const effectiveRef = targetRef === undefined ? render.targetRef : targetRef;
+    if (effectiveRef && (targetRef !== undefined || targetDocumentId !== undefined) && !parseDocumentRefs(targetDoc?.type, effectiveRef).length) throw new ToolError("INVALID_REQUEST", "targetRef 与目标文档类型不匹配或位置格式无效");
     const updated: Render = { ...render };
     if (targetDocumentId !== undefined) updated.targetDocumentId = targetDocumentId;
     if (targetRef !== undefined) {
@@ -568,8 +581,11 @@ export async function callTool(name: string, args: unknown, signal?: AbortSignal
 export function getState() {
   return { documents: [...documents.values()].map(documentResponse), variables: state.variables.map(v => ({
     ...v,
-    transform: { ...v.transform, sourceLocation: documents.get(v.transform.sourceDocumentId)?.type === "spreadsheet" ? parseSpreadsheetRef(v.transform.sourceRef) : undefined },
-    renders: v.renders.map(r => ({ ...r, targetLocation: documents.get(r.targetDocumentId)?.type === "spreadsheet" ? renderLocation(r) : undefined })),
+    transform: { ...v.transform, sourceLocation: parseDocumentRefs(documents.get(v.transform.sourceDocumentId)?.type, v.transform.sourceRef)[0] },
+    renders: v.renders.map(r => {
+      const locations = renderLocations(r, documents.get(r.targetDocumentId)?.type);
+      return { ...r, targetLocation: locations[0], targetLocations: locations.length ? locations : undefined };
+    }),
   })) };
 }
 export { APP_DIR, PORT, DATA_DIR, loadState, nextId, registerDocument, connections, documents, pending, asToolError };

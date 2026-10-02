@@ -87,8 +87,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       json(res, 200, { ref, hasValue: true, value: addresses.length === 1 ? value.result[0] : addresses.map((area: { address: string }, i: number) => ({ address: area.address, value: value.result[i] })), address: addresses.map((area: { address: string }) => area.address).join(","), truncated: regions.length > 6 || addresses.some((area: { truncated: boolean }) => area.truncated) }); return;
     }
     if (path === "/api/navigate" && req.method === "POST") {
-      const { variableId, renderId } = z.object({ variableId: z.string().min(1), renderId: z.string().min(1).optional() }).strict().parse(await readJson(req));
-      try { json(res, 200, await navigateVariableLocation(variableId, renderId)); }
+      const { variableId, renderId, locationIndex } = z.object({ variableId: z.string().min(1), renderId: z.string().min(1).optional(), locationIndex: z.number().int().min(0).max(19).optional() }).strict().parse(await readJson(req));
+      try { json(res, 200, await navigateVariableLocation(variableId, renderId, locationIndex)); }
       catch (error) {
         const detail = asToolError(error);
         json(res, ["VARIABLE_NOT_FOUND", "RENDER_NOT_FOUND"].includes(detail.code) ? 404 : 422, { success: false, error: detail });

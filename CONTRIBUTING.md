@@ -27,4 +27,4 @@ npm run verify:release
 
 不要提交真实密钥、文档、会话、运行日志或本地依赖目录。项目采用 MIT；第三方 vendored 代码的许可证以其随附文件为准。
 
-工作流、仓库设置和版本发布说明见 [自动化维护指南](docs/automation.md)。
+工作流、仓库设置和版本发布说明见 [自动化维护指南](docs/spec.md#automation)。

@@ -4,7 +4,7 @@
 [![Security](https://github.com/humoumou1215/wps-mcp/actions/workflows/security.yml/badge.svg)](https://github.com/humoumou1215/wps-mcp/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-开发与贡献见 [CONTRIBUTING.md](CONTRIBUTING.md)，CI、依赖维护和版本发布见 [自动化维护指南](docs/automation.md)。
+开发与贡献见 [CONTRIBUTING.md](CONTRIBUTING.md)，CI、依赖维护和版本发布见 [自动化维护指南](docs/spec.md#automation)。
 
 通过本机桥接服务，让 AI 读取和修改当前打开的 WPS 表格、演示与文字文档。可以在 WPS 的助手面板里直接对话，也可以让外部 MCP 客户端接入；文档访问由 WPS Add-in 在真实宿主中执行 WPS JS API。
 

@@ -16,6 +16,10 @@
     // Define the callbacks first so the custom tab is not rejected during startup.
     window.WpsMcpOnLoad = function () { return true; };
     window.WpsMcpShowStatus = function () { return true; };
+    window.WpsMcpGetImage = function (control) {
+      const images = { WpsMcpAssistant: "ribbon-assistant.png", WpsMcpVariables: "ribbon-variables.png", WpsMcpStatus: "ribbon-status.png" };
+      return images[control.Id] || "";
+    };
   </script>
   <script src="main.js"></script>
 </head>

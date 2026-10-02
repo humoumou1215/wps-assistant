@@ -130,10 +130,130 @@
     const text = typeof result.content === 'string' ? result.content : result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
     try { return JSON.parse(text.replace(/^Error:\s*/, '')); } catch { return { error: { message: text } }; }
   }
-  function newTurn(text, refs = [], timestamp = Date.now()) {
-    return { key: String(timestamp), user: text, refs, timestamp, blocks: [], tools: {}, done: false };
+  // Keep native <details>, focus and scroll positions alive across stream updates.
+  function createChatRenderer(root, options) {
+    const doc = root.ownerDocument, records = new Map(), htmlCache = new WeakMap();
+    let sessionKey;
+    function patch(target, source) {
+      if (target.nodeType === 3) { if (target.nodeValue !== source.nodeValue) target.nodeValue = source.nodeValue; return; }
+      for (const attr of [...target.attributes]) if (attr.name !== 'open' && !source.hasAttribute(attr.name)) target.removeAttribute(attr.name);
+      for (const attr of [...source.attributes]) if (attr.name !== 'open' && target.getAttribute(attr.name) !== attr.value) target.setAttribute(attr.name, attr.value);
+      const children = [...source.childNodes];
+      children.forEach((child, i) => {
+        const old = target.childNodes[i];
+        if (!old) target.appendChild(child.cloneNode(true));
+        else if (old.nodeType !== child.nodeType || old.nodeName !== child.nodeName) old.replaceWith(child.cloneNode(true));
+        else patch(old, child);
+      });
+      while (target.childNodes.length > children.length) target.lastChild.remove();
+    }
+    function setHTML(node, html) {
+      if (htmlCache.get(node) === html) return false;
+      const source = doc.createElement('div'); source.innerHTML = html;
+      // Patch children only: the caller owns the container's attributes.
+      const shell = node.cloneNode(false);
+      shell.append(...source.childNodes); patch(node, shell); htmlCache.set(node, html); return true;
+    }
+    function arrange(parent, nodes) {
+      nodes.forEach((node, i) => { if (parent.children[i] !== node) parent.insertBefore(node, parent.children[i] || null); });
+      while (parent.children.length > nodes.length) parent.lastElementChild.remove();
+    }
+    function text(node, value) { value = String(value); if (node.textContent === value) return false; node.textContent = value; return true; }
+    function createRecord(turn) {
+      const el = doc.createElement('section'); el.className = 'turn'; el.dataset.turn = turn.key;
+      el.innerHTML = '<div class="msg-user"><div class="bubble"></div><div class="msg-meta"><span></span><button data-copy-turn="' + esc(turn.key) + '">复制</button><button data-quote-turn="' + esc(turn.key) + '">引用以继续</button></div></div><div class="msg-assistant"><div class="model-line"><span class="chat-model"></span><span class="chat-progress" hidden></span></div><div class="blocks live-blocks"></div><details class="process-group" data-detail="group-' + esc(turn.key) + '" hidden><summary></summary><div class="blocks"></div></details><div class="turn-writes" aria-label="本轮写入结果" hidden></div><div class="final-answer"></div><div class="action-error" hidden></div><div class="tool-state stopped-state" hidden>已停止，已经完成的写入仍然有效。</div><div class="tool-state length-state" hidden>达到模型输出上限，可继续追问。</div></div>';
+      const record = { el, blocks: new Map(), bubble: el.querySelector('.bubble'), meta: el.querySelector('.msg-meta>span'), model: el.querySelector('.chat-model'), progress: el.querySelector('.chat-progress'), live: el.querySelector('.live-blocks'), group: el.querySelector('.process-group'), writes: el.querySelector('.turn-writes'), answer: el.querySelector('.final-answer'), error: el.querySelector('.action-error'), stopped: el.querySelector('.stopped-state'), length: el.querySelector('.length-state') };
+      record.groupBlocks = record.group.querySelector('.blocks');
+      records.set(turn.key, record); return record;
+    }
+    function syncThinking(entry) {
+      if (!entry.el.open || entry.rendered === entry.block.text) return false;
+      const body = entry.body, value = entry.block.text || '', previous = entry.rendered || '';
+      const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+      if (value.startsWith(previous)) entry.content.appendData(value.slice(previous.length)); else entry.content.data = value;
+      entry.rendered = value;
+      if (atBottom && previous) body.scrollTop = body.scrollHeight;
+      return true;
+    }
+    function updateBlock(record, block, index, turn) {
+      const key = String(block.id || index); let entry = record.blocks.get(key), changed = false;
+      if (!entry || entry.kind !== block.kind) {
+        entry?.el.remove();
+        const el = doc.createElement(block.kind === 'thinking' ? 'details' : 'div');
+        entry = { el, kind: block.kind }; record.blocks.set(key, entry); changed = true;
+        if (block.kind === 'thinking') {
+          el.className = 'thinking-block'; el.dataset.detail = turn.key + '-' + key;
+          entry.summary = doc.createElement('summary'); entry.body = doc.createElement('div'); entry.body.className = 'thinking-text';
+          entry.content = doc.createTextNode(''); entry.body.appendChild(entry.content); el.append(entry.summary, entry.body);
+          el.addEventListener('toggle', () => { syncThinking(entry); });
+        }
+      }
+      entry.block = block;
+      if (block.kind === 'thinking') {
+        const value = block.text || '';
+        changed = text(entry.summary, '思考过程 · ' + value.length.toLocaleString() + ' 字 · ' + (value.slice(0, 120).trim().slice(0, 100) || '正在思考…')) || changed;
+        changed = syncThinking(entry) || changed;
+      } else if (block.kind === 'text') {
+        if (entry.value !== block.text) { changed = setHTML(entry.el, options.blockHTML(block, turn, index)) || changed; entry.value = block.text; }
+      } else {
+        const signature = [block.status, block.durationMs, block.toolName, block.args, block.result, block.facts];
+        if (!entry.signature || signature.some((v, i) => v !== entry.signature[i])) { changed = setHTML(entry.el, options.blockHTML(block, turn, index)) || changed; entry.signature = signature; }
+      }
+      return { node: entry.el, changed };
+    }
+    function updateProgress(now = Date.now()) {
+      for (const record of records.values()) {
+        const turn = record.turn; record.progress.hidden = turn.done;
+        if (!turn.done) {
+          const p = turnProgress(turn, now);
+          text(record.progress, ' · ' + p.label + ' · ' + p.seconds + 's' + (p.outputChars ? ' · 已输出 ' + p.outputChars.toLocaleString() + ' 字' : '') + (p.sinceOutput === undefined ? '' : ' · 距最近输出 ' + p.sinceOutput + 's'));
+        }
+      }
+    }
+    function render(turns, currentSessionKey) {
+      if (sessionKey !== currentSessionKey) { records.clear(); root.replaceChildren(); htmlCache.delete(root); sessionKey = currentSessionKey; }
+      let changed = false;
+      const nodes = turns.map(turn => {
+        const record = records.get(turn.key) || createRecord(turn); record.turn = turn;
+        const legacy = turn.refs.length && !turn.refs.some(r => r.marker) ? '<div class="refline">' + turn.refs.map((r, n) => '<button class="ref" data-ref-marker="legacy-' + n + '" title="' + esc(r.label || referenceChipLabel(r)) + '">' + referenceContentHTML(r) + '</button>').join('') + '</div>' : '';
+        changed = setHTML(record.bubble, userHTML(turn.user, turn.refs) + legacy) || changed;
+        text(record.meta, options.clock(turn.timestamp)); text(record.model, turn.model || options.modelName());
+        const lastText = turn.blocks.map(b => b.kind).lastIndexOf('text'), tools = turn.blocks.filter(b => b.kind === 'tool');
+        const blocks = turn.blocks.map((b, i) => { const result = updateBlock(record, b, i, turn); changed = result.changed || changed; return result.node; });
+        const keys = new Set(turn.blocks.map((b, i) => String(b.id || i)));
+        for (const [key, entry] of record.blocks) if (!keys.has(key)) { entry.el.remove(); record.blocks.delete(key); changed = true; }
+        if (record.done !== turn.done) { changed = true; if (turn.done && record.done !== true) record.group.open = lastText < 0; record.done = turn.done; }
+        record.live.hidden = turn.done; record.group.hidden = !turn.done || blocks.length - (lastText >= 0 ? 1 : 0) === 0;
+        if (turn.done) {
+          arrange(record.groupBlocks, blocks.filter((_, i) => i !== lastText)); arrange(record.answer, lastText < 0 ? [] : [blocks[lastText]]); arrange(record.live, []);
+          text(record.group.querySelector('summary'), '过程详情 · ' + (blocks.length - (lastText >= 0 ? 1 : 0)) + ' 条 · ' + tools.length + ' 次工具调用' + (tools.some(b => b.status === 'error') ? ' · 含失败' : ''));
+          const recap = tools.filter(b => b.toolName === 'wps_run_render').map(options.factsHTML).join('');
+          changed = setHTML(record.writes, recap) || changed; record.writes.hidden = !recap;
+        } else { arrange(record.live, blocks); arrange(record.answer, []); record.writes.hidden = true; }
+        record.error.hidden = !turn.error; text(record.error, turn.error || ''); record.stopped.hidden = !turn.stopped; record.length.hidden = turn.stopReason !== 'length';
+        return record.el;
+      });
+      for (const [key] of records) if (!turns.some(t => t.key === key)) records.delete(key);
+      if (nodes.length) { htmlCache.delete(root); if (root.children.length !== nodes.length || nodes.some((n, i) => root.children[i] !== n)) changed = true; arrange(root, nodes); }
+      else changed = setHTML(root, '<div class="empty-state" id="chatEmpty">连接你的 WPS 文档<br>描述要提取的数据或要更新的位置。<br>输入 @ 可引用文档、选区、变量与 Render。</div>') || changed;
+      updateProgress(); return changed;
+    }
+    return { render, updateProgress };
   }
-  function reduceEvent(turn, name, data) {
+  function turnProgress(turn, now = Date.now()) {
+    const labels = { waiting: '等待模型输出', thinking: '正在思考', writing: '正在生成回答', preparing: '正在准备工具参数', executing: '正在执行工具' };
+    return { label: labels[turn.phase] || labels.waiting, seconds: Math.max(0, Math.floor((now - (turn.phaseAt || turn.timestamp)) / 1000)), outputChars: turn.outputChars || 0, sinceOutput: turn.lastOutputAt === undefined ? undefined : Math.max(0, Math.floor((now - turn.lastOutputAt) / 1000)) };
+  }
+
+  function newTurn(text, refs = [], timestamp = Date.now()) {
+    return { key: String(timestamp), user: text, refs, timestamp, blocks: [], tools: {}, done: false, phase: 'waiting', phaseAt: timestamp, outputChars: 0 };
+  }
+  function reduceEvent(turn, name, data, now = Date.now()) {
+    const phase = name === 'message.start' || name === 'message.end' ? 'waiting' : name === 'thinking.delta' ? 'thinking' : name === 'text.delta' ? 'writing' : name === 'tool.prepare' ? 'preparing' : name === 'tool.start' ? 'executing' : name === 'tool.result' ? (Object.values(turn.tools).some(b => b.id !== data.id && b.status === 'running') ? 'executing' : 'waiting') : undefined;
+    if (phase && phase !== turn.phase) { turn.phase = phase; turn.phaseAt = now; }
+    if (name === 'text.delta' || name === 'thinking.delta' || name === 'tool.prepare') {
+      turn.lastOutputAt = now; turn.outputChars = (turn.outputChars || 0) + (data.delta?.length || data.chars || 0);
+    }
     if (name === 'refs.resolved') turn.refs = data.refs;
     if (name === 'turn.start') turn.model = data.model;
     if (name === 'message.start') { turn.model = data.model || turn.model; turn.segment = undefined; }
@@ -173,7 +293,7 @@
         refs = refs.map(r => ({ ...r, id: r.id || (r.kind === 'doc' || r.kind === 'sel' ? r.documentId : r.kind === 'render' ? r.renderId : r.variableId), label: r.label || r.name || r.renderId || r.variableId || r.documentId }));
         turn = newTurn(at >= 0 ? raw.slice(0, at) : raw, refs, item.timestamp); turns.push(turn);
         messageIndex = 0;
-        const meta = metas.get(turn.key); if (meta) { turn.refs = meta.refs || refs; Object.assign(turn, { usage: meta.usage, contextUsage: meta.contextUsage, stopped: meta.stopped, failed: meta.failed, calls: meta.calls, stopReason: meta.stopReason }); }
+        const meta = metas.get(turn.key); if (meta) { turn.user = meta.message ?? turn.user; turn.refs = meta.refs || refs; Object.assign(turn, { usage: meta.usage, contextUsage: meta.contextUsage, stopped: meta.stopped, failed: meta.failed, calls: meta.calls, stopReason: meta.stopReason }); }
       }
       if (!turn) continue;
       if (item.role === 'assistant') {
@@ -200,7 +320,7 @@
       if (item.role === 'toolResult') reduceEvent(turn, 'tool.result', { ...metas.get(turn.key)?.tools?.[item.toolCallId], id: item.toolCallId, toolName: item.toolName, isError: item.isError, result: resultValue(item) });
     }
     turns.forEach(t => { t.done = true; });
-    if (busy && turns.length) { const active = turns.at(-1); active.done = false; active.blocks.filter(b => b.status === 'stopped').forEach(b => { b.status = 'running'; }); }
+    if (busy && turns.length) { const active = turns.at(-1); active.done = false; active.phase = active.blocks.some(b => b.status === 'stopped') ? 'executing' : active.blocks.at(-1)?.kind === 'thinking' ? 'thinking' : 'waiting'; active.blocks.filter(b => b.status === 'stopped').forEach(b => { b.status = 'running'; }); }
     return turns;
   }
   function renderFacts(block, state) {
@@ -360,5 +480,5 @@
       ]),
     ];
   }
-  globalThis.WpsPaneView = { agentInfoHTML, agentToolHTML, agentSkillHTML, esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, variablesInMode, variableActions, referenceCatalog, variableReference, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML, selectionRequest };
+  globalThis.WpsPaneView = { createChatRenderer, turnProgress, agentInfoHTML, agentToolHTML, agentSkillHTML, esc, highlight, markdown, valueHTML, typeOf, formatValue, jsonPreview, toolName, resultValue, newTurn, reduceEvent, historyTurns, renderFacts, factStatus, matches, userHTML, hideHostPane, variablesInMode, variableActions, referenceCatalog, variableReference, selectionReference, selectionLabel, selectionPosition, selectionDetailsHTML, referenceChipLabel, selectionPinHTML, referenceContentHTML, selectionRequest };
 })();

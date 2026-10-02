@@ -17,6 +17,8 @@
   try { if (localStorage.getItem(variableModeKey) === 'all') variableMode = 'all'; } catch {}
   let turns = [], peerBusy = false, lastHistory = '', syncing, settingsDirty = false, configConflict = false, formRevision, settingsBusy = false, followTail = true;
   const actionErrors = new Map(), composerRefs = new Map();
+  let currentSessionId, commandBusy = false, historyRequest = 0;
+  const sessionDrafts = new Map();
   let refSerial = 0;
   const duration = ms => ms === undefined ? '历史耗时未记录' : ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(1) + 's';
   const clock = at => new Date(at).toLocaleTimeString('zh-CN', { hour12: false });
@@ -57,6 +59,7 @@
     $('agentContent').innerHTML = '<div class="agent-browser"><nav class="agent-list" aria-label="' + (agentView === 'tools' ? '工具列表' : '技能列表') + '">' + items.map(item => '<button type="button" data-agent-item="' + esc(item.name) + '" aria-pressed="' + (item.name === selected.name) + '" aria-controls="agentDetail">' + esc(item.name) + '</button>').join('') + '</nav><div class="agent-detail" id="agentDetail" tabindex="0" role="region" aria-label="' + esc(selected.name) + ' 详情">' + (agentView === 'tools' ? V.agentToolHTML(selected) : V.agentSkillHTML(selected, agentData.skillDirectory, agentData.diagnostics)) + '</div></div>';
   }
   async function openAgentResources(view, trigger) {
+    if (!$('sessionMenu').hidden) closeSessionMenu(false);
     if (!$('agentPanel').hidden && agentView === view) { closeAgentResources(); return; }
     agentReturnFocus = trigger || document.activeElement;
     const opening = $('agentPanel').hidden;
@@ -85,7 +88,72 @@
     $('agentContent').querySelector('.agent-list').scrollTop = listScroll;
     [...$('agentContent').querySelectorAll('[data-agent-item]')].find(item => item.dataset.agentItem === agentSelection[agentView])?.focus();
   };
-  $('agentClose').onclick = closeAgentResources;
+  $('agentClose').onclick = () => { if (!$('sessionMenu').hidden) closeSessionMenu(); else closeAgentResources(); };
+  let sessionData, sessionArchived = false, pendingSessionDelete, sessionRequest = 0, sessionReturnFocus, sessionSelection;
+  const systemButton = document.querySelector('[data-agent-view="system"]');
+  const sessionButton = $('sessionBtn');
+  systemButton.title = '查看系统提示词';
+  function closeSessionMenu(restoreFocus = true) {
+    sessionRequest++; $('sessionMenu').hidden = true; $('agentClose').hidden = $('agentPanel').hidden; pendingSessionDelete = undefined;
+    sessionButton.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) sessionReturnFocus?.focus();
+  }
+  function renderSessionMenu() {
+    const sessions = (sessionData?.sessions || []).filter(item => item.archived === sessionArchived);
+    const selected = sessions.find(item => item.id === sessionSelection) || sessions.find(item => item.id === sessionData?.activeId) || sessions[0];
+    sessionSelection = selected?.id;
+    const disabled = commandBusy || controller || peerBusy ? ' disabled' : '';
+    const toolbar = '<nav class="session-toolbar" aria-label="会话分类"><button type="button" class="mini" data-session-tab="active" aria-pressed="' + !sessionArchived + '">进行中</button><button type="button" class="mini" data-session-tab="archived" aria-pressed="' + sessionArchived + '">已归档</button><button type="button" class="mini" data-session-op="new"' + disabled + '>＋ 新建会话</button></nav>';
+    let content;
+    if (!sessionData) content = '<div class="agent-empty">正在读取会话…</div>';
+    else if (!selected) content = '<div class="agent-empty">' + (sessionArchived ? '暂无已归档会话' : '暂无会话') + '</div>';
+    else {
+      const id = esc(selected.id), isCurrent = selected.id === sessionData.activeId;
+      content = '<div class="agent-browser session-browser"><nav class="agent-list" aria-label="会话列表">' + sessions.map(item => '<button type="button" data-session-item="' + esc(item.id) + '" aria-pressed="' + (item.id === selected.id) + '" aria-controls="sessionDetail"><span>' + (item.id === sessionData.activeId ? '● ' : '') + esc(item.name) + '</span><small class="session-meta">' + item.messageCount + ' 条消息</small></button>').join('') + '</nav><div class="agent-detail" id="sessionDetail" role="region" aria-label="会话详情" tabindex="0"><section><h3>会话</h3><p class="agent-description">' + esc(selected.name) + '</p></section><section><h3>信息</h3><dl class="session-facts"><dt>状态</dt><dd>' + (selected.archived ? '已归档' : isCurrent ? '当前会话' : '进行中') + '</dd><dt>消息</dt><dd>' + selected.messageCount + ' 条</dd><dt>创建</dt><dd>' + esc(new Date(selected.created).toLocaleString('zh-CN', { hour12: false })) + '</dd><dt>更新</dt><dd>' + esc(new Date(selected.modified).toLocaleString('zh-CN', { hour12: false })) + '</dd><dt>ID</dt><dd>' + id + '</dd></dl></section><section class="session-operations"><h3>操作</h3>' + (!selected.archived && !isCurrent ? '<button type="button" class="mini" data-session-op="select" data-session-id="' + id + '"' + disabled + '>选择会话</button> ' : '') + '<button type="button" class="mini" data-session-op="' + (selected.archived ? 'restore' : 'archive') + '" data-session-id="' + id + '"' + disabled + '>' + (selected.archived ? '恢复' : '归档') + '</button> <button type="button" class="mini session-delete ' + (pendingSessionDelete === selected.id ? 'confirm' : '') + '" data-session-op="delete" data-session-id="' + id + '" aria-expanded="' + (pendingSessionDelete === selected.id) + '"' + (pendingSessionDelete === selected.id ? ' aria-describedby="sessionDeleteTip"' : '') + disabled + '>' + (pendingSessionDelete === selected.id ? '确认' : '删除') + '</button>' + (pendingSessionDelete === selected.id ? '<p class="session-delete-tip" id="sessionDeleteTip">将永久删除此会话记录。再次点击「确认」删除。</p>' : '') + '</section></div></div>';
+    }
+    $('sessionMenu').innerHTML = '<div class="agent-content session-content">' + toolbar + content + '</div>';
+  }
+  async function openSessionMenu(trigger = sessionButton) {
+    if (!$('agentPanel').hidden) closeAgentResources();
+    closeMention(); closeSlash(); pendingSessionDelete = undefined; sessionArchived = false; sessionSelection = undefined;
+    sessionReturnFocus = trigger; $('sessionMenu').hidden = false; $('agentClose').hidden = false; sessionData = undefined;
+    sessionButton.setAttribute('aria-expanded', 'true');
+    renderSessionMenu(); $('agentClose').focus();
+    const request = ++sessionRequest;
+    try { const value = await api('/api/sessions'); if (request === sessionRequest && !$('sessionMenu').hidden) { sessionData = value; renderSessionMenu(); $('agentClose').focus(); } }
+    catch (error) { if (request === sessionRequest) notice(error.message, true); }
+  }
+  sessionButton.onclick = () => { if ($('sessionMenu').hidden) void openSessionMenu(sessionButton); else closeSessionMenu(); };
+  sessionButton.addEventListener('contextmenu', event => { event.preventDefault(); void openSessionMenu(sessionButton); });
+  sessionButton.addEventListener('keydown', event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); void openSessionMenu(sessionButton); } });
+  async function mutateSession(op, id) {
+    if (commandBusy || controller || peerBusy) return;
+    commandBusy = true; historyRequest++; updateSendButton(); renderSessionMenu();
+    try {
+      sessionData = await api('/api/sessions', { op, id, sessionId: currentSessionId });
+      pendingSessionDelete = undefined;
+      notice({ new: '已新建会话。', select: '已切换会话。', archive: '会话已归档。', restore: '会话已恢复。', delete: '会话已删除。' }[op]);
+    } catch (error) { notice(error.message, true); }
+    finally { commandBusy = false; updateSendButton(); await history().catch(error => notice(error.message, true)); if (!$('sessionMenu').hidden) { renderSessionMenu(); $('agentClose').focus(); } }
+  }
+  $('sessionMenu').onclick = event => {
+    const item = event.target.closest('[data-session-item]');
+    if (item) {
+      sessionSelection = item.dataset.sessionItem; pendingSessionDelete = undefined;
+      if (sessionArchived) { renderSessionMenu(); $('sessionMenu').querySelector('[data-session-item="' + sessionSelection + '"]').focus(); }
+      else void mutateSession('select', sessionSelection);
+      return;
+    }
+    const tab = event.target.closest('[data-session-tab]');
+    if (tab) { sessionArchived = tab.dataset.sessionTab === 'archived'; pendingSessionDelete = undefined; renderSessionMenu(); $('sessionMenu').querySelector('[data-session-tab="' + tab.dataset.sessionTab + '"]').focus(); return; }
+    const button = event.target.closest('[data-session-op]'); if (!button || button.disabled) return;
+    const { sessionOp: op, sessionId: id } = button.dataset;
+    if (op === 'delete' && pendingSessionDelete !== id) { pendingSessionDelete = id; renderSessionMenu(); $('sessionMenu').querySelector('[data-session-op="delete"][data-session-id="' + id + '"]').focus(); return; }
+    void mutateSession(op, id);
+  };
+  document.addEventListener('keydown', event => {
+    if (!$('sessionMenu').hidden && event.key === 'Escape' && $('panel-chat').contains(document.activeElement)) { event.preventDefault(); closeSessionMenu(); }
+  });
   document.addEventListener('keydown', event => {
     if (!$('agentPanel').hidden && event.key === 'Escape' && $('panel-chat').contains(document.activeElement)) { event.preventDefault(); closeAgentResources(); }
   });
@@ -108,18 +176,30 @@
   const typeOf = V.typeOf, preview = V.jsonPreview;
   const modeVariables = () => V.variablesInMode(state, variableMode, online);
   const modeActions = op => V.variableActions(state, variableMode, op, online);
-  function locationButton(label, variableId, documentId, location, renderId) {
-    if (!location) return '<span title="未标注明确区域；目前支持表格区域定位">' + esc(label) + '</span>';
-    return '<button type="button" class="location-link" data-navigate data-var="' + esc(variableId) + '"' +
-      (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' title="' +
-      esc(connected(documentId) ? '在 WPS 中定位并选中 ' + docName(documentId) + ' › ' + location.ref : '目标文档已断开，请先在 WPS 中打开') + '" ' +
-      (actionBusy || !connected(documentId) ? 'disabled' : '') + '>' + esc(label) + '</button>';
+  function locationButton(label, variableId, documentId, location, renderId, locationIndex = 0) {
+    const registered = !!doc(documentId), available = connected(documentId) && !!location;
+    const status = !registered ? '文档未注册，暂不支持跳转' : !connected(documentId) ? '文档已断开，请先在 WPS 中打开' : !location ? '未标注明确位置，暂不支持跳转' : '在 WPS 中定位并选中 ' + docName(documentId) + ' › ' + location.ref;
+    const attributes = 'class="location-link ' + (available ? 'available' : 'unavailable') + '" title="' + esc(status) + '"';
+    if (!available) return '<span ' + attributes + '>' + esc(label) + '</span>';
+    return '<button type="button" ' + attributes + ' data-navigate data-var="' + esc(variableId) + '"' +
+      (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' data-location-index="' + locationIndex + '" ' + (actionBusy ? 'disabled' : '') + '>' + esc(label) + '</button>';
+  }
+  function locationSummary({ role, variableId, documentId, locations, ref, description, renderId }) {
+    const prefix = docName(documentId) + ' › ';
+    const links = locations?.length ? locations.map((location, index) =>
+      locationButton((index === 0 ? prefix : '') + location.ref, variableId, documentId, location, renderId, index)).join(' ')
+      : locationButton(prefix + (ref || (role === '来源' ? '未标注源区域' : '未标注写入位置')), variableId, documentId);
+    return '<span class="location-summary"><span class="location-path">' + links + '</span> <span class="location-description">' + esc(description || '未添加描述') + '</span></span>';
+  }
+  function sourceSummary(variable) {
+    const source = variable.transform;
+    return locationSummary({ role: '来源', variableId: variable.variableId, documentId: source.sourceDocumentId,
+      locations: source.sourceLocations || (source.sourceLocation ? [source.sourceLocation] : []), ref: source.sourceRef, description: variable.description });
   }
   function renderDestination(variable, render) {
-    const description = render.description || '未标注写入位置', location = render.targetLocation;
-    const link = label => locationButton(label, variable.variableId, render.targetDocumentId, location, render.renderId);
-    if (location?.start !== undefined) return esc(description.slice(0, location.start)) + link(description.slice(location.start, location.end)) + esc(description.slice(location.end));
-    return esc(description) + (render.targetRef ? ' · ' + link(render.targetRef) : '');
+    return locationSummary({ role: '写入', variableId: variable.variableId, documentId: render.targetDocumentId,
+      locations: render.targetLocations || (render.targetLocation ? [render.targetLocation] : []), ref: render.targetRef,
+      description: render.description, renderId: render.renderId });
   }
   function deleteButton(variableId, renderId) {
     return '<button type="button" class="act sm delete-button" data-delete data-var="' + esc(variableId) + '"' + (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' title="' + (renderId ? '删除此 Render 绑定，保留文档内容' : '删除变量及全部关联 Render，保留文档内容') + '" ' + (actionBusy || !online ? 'disabled' : '') + '>删除</button>';
@@ -167,10 +247,10 @@
     $('rerenderAll').disabled = actionBusy || !modeActions('render').length;
     $('varsList').innerHTML = list.length ? list.map(v => {
       const lastRender = v.renders.map(r => r.lastRun).filter(Boolean).sort((a, b) => b.at.localeCompare(a.at))[0];
-      const renders = v.renders.map(r => '<div class="render"><div class="rhead"><details class="render-detail" data-detail="' + esc(r.renderId) + '"><summary title="展开写入代码"><span class="tgt"><span class="t1">' + esc(docName(r.targetDocumentId)) + ' › ' + renderDestination(v, r) + '</span><span class="t2" title="' + esc(stampTitle(r.lastRun)) + '">' + esc(r.renderId) + ' · 上次写入 ' + stamp(r.lastRun) + (r.lastRun ? '（' + duration(r.lastRun.durationMs) + '）' : '') + (connected(r.targetDocumentId) ? '' : ' · 已断开') + '</span></span></summary><div class="rbody"><div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.targetRef || r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">来源变量</span><span class="v">' + esc(v.name) + ' · ' + esc(typeOf(v)) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre></div></details><div class="render-actions"><button data-op="render" data-var="' + esc(v.variableId) + '" data-render="' + esc(r.renderId) + '" title="只重写这一条 Render" ' + (actionBusy || !v.hasValue || !connected(r.targetDocumentId) ? 'disabled' : '') + '>重写</button>' + deleteButton(v.variableId, r.renderId) + '</div></div></div>').join('');
+      const renders = v.renders.map(r => '<div class="render"><div class="rhead"><details class="render-detail" data-detail="' + esc(r.renderId) + '"><summary title="展开写入代码"><span class="tgt"><span class="t1">' + renderDestination(v, r) + '</span><span class="t2" title="' + esc(stampTitle(r.lastRun)) + '">' + esc(r.renderId) + ' · 上次写入 ' + stamp(r.lastRun) + (r.lastRun ? '（' + duration(r.lastRun.durationMs) + '）' : '') + '</span></span></summary><div class="rbody"><div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.targetRef || r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">来源变量</span><span class="v">' + esc(v.name) + ' · ' + esc(typeOf(v)) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre></div></details><div class="render-actions"><button data-op="render" data-var="' + esc(v.variableId) + '" data-render="' + esc(r.renderId) + '" title="只重写这一条 Render" ' + (actionBusy || !v.hasValue || !connected(r.targetDocumentId) ? 'disabled' : '') + '>重写</button>' + deleteButton(v.variableId, r.renderId) + '</div></div></div>').join('');
       return '<article class="var" data-variable-id="' + esc(v.variableId) + '"><div class="var-head"><button class="var-toggle" data-toggle="' + esc(v.variableId) + '" aria-expanded="' + expanded.has(v.variableId) + '" title="展开当前值与 Transform">›</button><div class="mid"><div class="line1"><strong class="var-name">' + esc(v.name) + '</strong><span class="type ' + (typeof v.value === 'number' ? 'number' : 'table') + '">' + esc(typeOf(v)) + '</span><span class="sp"></span><span class="stamp" title="上次重算 ' + esc(stampTitle(v.transform.lastRun)) + '">' + stamp(v.transform.lastRun) + '</span><button class="act primary sm" data-op="transform" data-var="' + esc(v.variableId) + '" ' + (actionBusy || !connected(v.transform.sourceDocumentId) ? 'disabled' : '') + '>重算</button>' +
         (v.renders.length ? '<span class="stamp" title="上次重写 ' + esc(stampTitle(lastRender)) + '">' + stamp(lastRender) + '</span><button class="act sm" data-op="render" data-var="' + esc(v.variableId) + '" title="重写该变量下全部 Render" ' + (actionBusy || !v.hasValue || !v.renders.some(r => connected(r.targetDocumentId)) ? 'disabled' : '') + '>重写</button>' : '<span class="stamp none">尚未绑定 Render</span>') +
-        deleteButton(v.variableId) + '</div><div class="line2"><span class="path">' + locationButton('▦ ' + docName(v.transform.sourceDocumentId) + ' › ' + (v.transform.sourceRef || '未标注源区域'), v.variableId, v.transform.sourceDocumentId, v.transform.sourceLocation) + '</span><span class="dotsep">·</span><span class="desc">' + esc(v.description || '未添加描述') + (connected(v.transform.sourceDocumentId) ? '' : ' · 已断开') + '</span></div></div></div>' +
+        deleteButton(v.variableId) + '</div><div class="line2">' + sourceSummary(v) + '</div></div></div>' +
         (actionErrors.has(v.variableId) ? '<div class="action-error" role="alert">' + esc(actionErrors.get(v.variableId)) + '</div>' : '') +
         '<div class="var-renders"><div class="rl-head">Render 清单 <b>' + v.renders.length + '</b><span class="rl-tip">' + (v.renders.length ? '常驻展示 · 点 › 看代码' : '') + '</span></div>' + (renders || '<div class="render-empty">还没有绑定 Render · 在会话里描述写入目标。</div>') + '</div><details class="var-data" data-detail="' + esc(v.variableId) + '"><summary>当前值与 Transform</summary><div class="sect"><div class="sh">当前值<span class="r">' + esc(typeOf(v)) + '</span></div>' + V.valueHTML(v.value, v.hasValue) + '</div><div class="sect"><div class="sh">数据来源 · Transform<span class="r">' + esc(v.transform.transformId) + '</span></div><pre class="code">' + V.highlight(v.transform.code) + '</pre></div></details></article>';
     }).join('') : '<div class="empty-state">' + (!scope.length && variableMode === 'current' ? '没有与在线文档相关的变量，可切换到展示全部。' : scope.length ? '没有匹配的变量，请调整搜索或文档筛选。' : '还没有变量<br>在会话中描述需要提取的数据，助手会创建变量与绑定。') + '</div>';
@@ -251,10 +331,11 @@
     finally { actionBusy = false; await refresh(); renderVars(); }
   }
   $('varsList').onclick = event => {
+    if (event.target.closest('.location-link.unavailable')) { event.preventDefault(); event.stopPropagation(); return; }
     const navigation = event.target.closest('[data-navigate]');
     if (navigation) {
       event.preventDefault(); event.stopPropagation();
-      if (!navigation.disabled && !actionBusy) void navigateLocation({ variableId: navigation.dataset.var, ...(navigation.dataset.render ? { renderId: navigation.dataset.render } : {}) });
+      if (!navigation.disabled && !actionBusy) void navigateLocation({ variableId: navigation.dataset.var, ...(navigation.dataset.render ? { renderId: navigation.dataset.render } : {}), locationIndex: Number(navigation.dataset.locationIndex || 0) });
       return;
     }
     const deletion = event.target.closest('[data-delete]');
@@ -300,8 +381,7 @@
   function showEffective() {
     $('stNowName').textContent = config.configured ? (config.label || config.model.id) : '尚未保存配置';
     $('stNowDetail').textContent = `provider=${config.kind === 'builtin' ? 'deepseek' : 'wps-custom'}${config.kind === 'custom' ? ' · ' + config.baseUrl : ''} · model=${config.model.id} · 上下文 ${config.model.contextWindow.toLocaleString()} · 最大输出 ${config.model.maxTokens.toLocaleString()} · 思考 ${config.model.reasoning ? config.thinkingLevel : 'off'}${config.hasKey ? ' · 密钥已保存' : ' · 无密钥'}`;
-    $('modelChip').textContent = config.configured ? config.model.id : '尚未配置模型';
-    $('modelChip').title = $('modelChip').textContent;
+    syncEditorPlaceholder();
   }
   async function loadSettings(force = false) {
     const next = await api('/api/config'), changed = !config || config.revision !== next.revision; config = next; models = config.builtinModels;
@@ -382,6 +462,53 @@
     $('mentionPop').querySelector('.mi.act')?.scrollIntoView({ block: 'nearest' });
   }
   function closeMention() { $('mentionPop').classList.remove('show'); mentionRange = undefined; }
+  let slashCommands, slashLoading, slashItems = [], slashIndex = 0, slashRange, slashQuery = '', slashError;
+  function closeSlash() {
+    $('slashPop').hidden = true; slashRange = undefined;
+    $('editor').removeAttribute('aria-controls'); $('editor').removeAttribute('aria-activedescendant');
+    $('editor').setAttribute('aria-expanded', 'false');
+  }
+  async function loadSlashCommands() {
+    if (slashCommands) return;
+    if (!slashLoading) slashLoading = api('/api/commands').then(value => { slashCommands = value.commands; slashError = undefined; })
+      .catch(error => { slashError = error.message; }).finally(() => { slashLoading = undefined; });
+    await slashLoading;
+    if (!$('slashPop').hidden) renderSlash();
+  }
+  function renderSlash() {
+    slashItems = (slashCommands || []).filter(c => V.matches({ label: '/' + c.name, sub: c.description }, slashQuery, globalThis.pinyinPro?.pinyin));
+    slashIndex = Math.max(0, Math.min(slashIndex, slashItems.length - 1));
+    $('slashPop').innerHTML = '<div class="slash-head"><span>斜杠命令 · ' + slashItems.length + ' 个命令</span><span>↑↓ 选择 · Tab / Enter · Esc</span></div><div class="slash-list" id="slashList" role="listbox" aria-label="可用命令">' +
+      (!slashCommands ? '<div class="slash-empty">' + esc(slashError || '正在加载命令…') + '</div>' : slashItems.length ? ['内置', '技能'].map(group => {
+        const items = slashItems.filter(c => c.group === group); if (!items.length) return '';
+        return '<div class="slash-group"><span>' + group + '</span><span>' + items.length + '</span></div><div class="slash-grid">' + items.map(c => {
+          const i = slashItems.indexOf(c);
+          return '<button type="button" class="slash-item ' + (i === slashIndex ? 'selected' : '') + '" id="slash-option-' + i + '" role="option" aria-selected="' + (i === slashIndex) + '" data-slash="' + i + '" title="' + esc(c.description) + '"><code>/' + esc(c.name) + '</code>' + (c.manualOnly ? ' <span class="chip">仅手动</span>' : '') + '<small>' + esc(c.description) + '</small></button>';
+        }).join('') + '</div>';
+      }).join('') : '<div class="slash-empty">没有匹配的命令</div>') + '</div>';
+    $('editor').setAttribute('aria-controls', 'slashList'); $('editor').setAttribute('aria-expanded', 'true');
+    if (slashItems.length) $('editor').setAttribute('aria-activedescendant', 'slash-option-' + slashIndex);
+    else $('editor').removeAttribute('aria-activedescendant');
+    $('slashPop').querySelector('.selected')?.scrollIntoView({ block: 'nearest' });
+  }
+  function triggerSlash() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed || !$('editor').contains(selection.anchorNode)) { closeSlash(); return false; }
+    const at = selection.getRangeAt(0), range = document.createRange(); range.selectNodeContents($('editor')); range.setEnd(at.startContainer, at.startOffset);
+    const match = range.toString().match(/^\s*\/([^\s/\u00a0]*)$/);
+    if (!match || range.cloneContents().querySelector('[data-refkey]')) { closeSlash(); return false; }
+    if (slashQuery !== match[1]) slashIndex = 0;
+    slashQuery = match[1]; slashRange = range; closeMention(); $('slashPop').hidden = false; renderSlash(); void loadSlashCommands(); return true;
+  }
+  function triggerComposer() { if (!triggerSlash()) triggerMention(); }
+  function selectSlash(command) {
+    if (!command || !slashRange) return;
+    const range = slashRange.cloneRange(); range.deleteContents();
+    const node = document.createTextNode('/' + command.name + ' '); range.insertNode(node); range.setStart(node, node.length); range.collapse(true);
+    $('editor').focus(); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range); closeSlash();
+  }
+  $('slashPop').addEventListener('mousedown', event => event.preventDefault());
+  $('slashPop').onclick = event => { const button = event.target.closest('[data-slash]'); if (button) selectSlash(slashItems[Number(button.dataset.slash)]); };
   function triggerMention() {
     const info = beforeCaret(), match = info?.text.match(/@([^\s@\u00a0]*)$/);
     if (!match) { closeMention(); return; }
@@ -474,19 +601,57 @@
     $('editor').append(document.createTextNode(text.slice(end)));
     if (refs.length && refs.every(r => !r.marker)) refs.forEach(ref => { $('editor').append(document.createTextNode(' '), chipNode(ref)); });
   }
-  $('atBtn').onclick = () => {
-    if ($('mentionPop').classList.contains('show')) { closeMention(); return; }
-    $('editor').focus(); const selection = window.getSelection(); let range;
-    if (selection.rangeCount && $('editor').contains(selection.anchorNode)) range = selection.getRangeAt(0); else { range = document.createRange(); range.selectNodeContents($('editor')); range.collapse(false); }
-    range.deleteContents(); const node = document.createTextNode('@'); range.insertNode(node); range.setStart(node, node.length); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); popCategory = ''; popIndex = 0; triggerMention();
-  };
-  $('editor').oninput = triggerMention;
-  $('editor').addEventListener('paste', e => {
-    e.preventDefault(); const text = e.clipboardData.getData('text/plain'), selection = window.getSelection();
-    if (!selection.rangeCount || !$('editor').contains(selection.anchorNode)) return;
-    const range = selection.getRangeAt(0); range.deleteContents(); const node = document.createTextNode(text); range.insertNode(node); range.setStart(node, node.length); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); triggerMention();
+  const composerHint = $('editor').dataset.placeholder;
+  function syncEditorPlaceholder() {
+    const editor = $('editor');
+    const empty = String(!editor.textContent.replace(/[\s\u200b]/g, '') && !editor.querySelector('[data-refkey]'));
+    const hint = composerHint + ' 当前模型：' + (config?.configured ? config.model.name || config.model.id : '尚未配置');
+    if (editor.dataset.empty !== empty) editor.dataset.empty = empty;
+    if (editor.dataset.placeholder !== hint) editor.dataset.placeholder = hint;
+    if (editor.getAttribute('aria-description') !== hint) editor.setAttribute('aria-description', hint);
+    const placeholder = $('editorPlaceholder');
+    if (placeholder.textContent !== hint) placeholder.textContent = hint;
+    if (placeholder.hidden !== (empty !== 'true')) placeholder.hidden = empty !== 'true';
+  }
+  function editorRange() {
+    const editor = $('editor'), selection = window.getSelection();
+    if (selection.rangeCount) {
+      const range = selection.getRangeAt(0);
+      if (editor.contains(range.startContainer) && editor.contains(range.endContainer)) return range.cloneRange();
+    }
+    const range = document.createRange(); range.selectNodeContents(editor); range.collapse(false); return range;
+  }
+  function insertComposerText(text, range = editorRange()) {
+    if (!text) return;
+    const editor = $('editor'); editor.focus();
+    const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    // Native insertion preserves the editor's undo history and strips pasted HTML.
+    if (!document.execCommand('insertText', false, text)) {
+      range.deleteContents(); const node = document.createTextNode(text); range.insertNode(node); range.setStartAfter(node); range.collapse(true);
+      selection.removeAllRanges(); selection.addRange(range);
+    }
+    syncEditorPlaceholder(); triggerComposer();
+  }
+  async function pasteComposerShortcut() {
+    const range = editorRange(), draft = $('editor').innerHTML;
+    if (document.execCommand('paste')) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      // Never replace a newer draft or insert into another field after an async clipboard read.
+      if ($('editor').contains(document.activeElement) && $('editor').innerHTML === draft) insertComposerText(text, range);
+    } catch { notice('无法读取剪贴板，请使用输入框右键菜单粘贴。', true); }
+  }
+  new MutationObserver(syncEditorPlaceholder).observe($('editor'), { childList: true, subtree: true, characterData: true, attributes: false });
+  syncEditorPlaceholder();
+  $('editor').oninput = event => { syncEditorPlaceholder(); if (!event.isComposing) triggerComposer(); };
+  $('editor').addEventListener('paste', event => {
+    const text = event.clipboardData?.getData('text/plain');
+    if (text === undefined) return;
+    event.preventDefault(); event.stopPropagation(); insertComposerText(text);
   });
-  $('editor').addEventListener('compositionend', triggerMention);
+  $('editor').addEventListener('compositionend', triggerComposer);
+  $('editor').addEventListener('click', triggerComposer);
+  $('editor').addEventListener('keyup', event => { if (!event.isComposing && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) triggerComposer(); });
   $('mentionPop').addEventListener('mousedown', e => e.preventDefault());
   $('mentionPop').onclick = event => {
     const category = event.target.closest('[data-category]'); if (category) { popCategory = category.dataset.category; popIndex = 0; renderMention($('mentionPop').dataset.query); return; }
@@ -551,9 +716,10 @@
     const remove = e.target.closest('[data-remove-ref]'); if (remove) { composerRefs.delete(remove.dataset.removeRef); remove.closest('[data-refkey]').remove(); pinnedRef = undefined; hideRefPop(); return; }
     if (e.target.closest('[data-close-preview]')) { pinnedRef = undefined; hideRefPop(); return; }
     const hit = referenceAt(e.target); if (hit) showRefPop(hit.anchor, hit.ref, true); else if (!e.target.closest('#refPop')) { pinnedRef = undefined; hideRefPop(); }
-    if (!e.target.closest('#mentionPop, #editor, #atBtn')) closeMention();
+    if (!e.target.closest('#mentionPop, #editor')) closeMention();
+    if (!e.target.closest('#slashPop, #editor')) closeSlash();
   });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeMention(); pinnedRef = undefined; hideRefPop(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeMention(); closeSlash(); pinnedRef = undefined; hideRefPop(); } });
   function factsHTML(block) {
     if (!['wps_run_render', 'wps_create_render', 'wps_update_render'].includes(block.toolName)) return '';
     const facts = V.renderFacts(block, state);
@@ -565,43 +731,61 @@
   function blockHTML(block, turn, index) {
     const key = turn.key + '-' + (block.id || index);
     if (block.kind === 'text') return '<div class="body-text">' + V.markdown(block.text) + '</div>';
-    if (block.kind === 'thinking') return '<details class="thinking-block" data-detail="' + esc(key) + '"><summary>思考过程 · ' + esc(block.text.trim().slice(0, 100) || '正在思考…') + '</summary><div class="thinking-text">' + esc(block.text) + '</div></details>';
     return '<div class="tool ' + (block.status === 'error' ? 'err' : block.status === 'running' ? 'run' : '') + '"><details data-detail="' + esc(key) + '"><summary class="tool-head"><span class="tool-name">' + esc(block.toolName) + '</span><span class="tool-prev">' + ({ running: '执行中…', error: '失败', stopped: '已停止 / 未完成', done: '完成' }[block.status] || '未完成') + '</span><span class="tool-dur">' + esc(duration(block.durationMs)) + '</span></summary><div class="tool-sec"><div class="lbl">参数</div><pre>' + esc(preview(block.args)) + '</pre></div>' + (block.result ? '<div class="tool-sec res"><div class="lbl">' + (block.status === 'error' ? '错误 / 部分结果' : '返回') + '</div><pre>' + esc(preview(block.result)) + '</pre></div>' : '') + '</details>' + factsHTML(block) + '</div>';
   }
+  const chatRenderer = V.createChatRenderer($('chatInner'), { blockHTML, factsHTML, clock, modelName: () => config?.model.id || 'WPS 助手' });
   function renderTurns() {
-    const open = new Set([...$('chatInner').querySelectorAll('[data-detail][open]')].map(n => n.dataset.detail));
-    const scroll = $('chatScroll'), oldTop = scroll.scrollTop;
-    $('chatInner').innerHTML = turns.length ? turns.map(t => {
-      const lastText = t.blocks.map(b => b.kind).lastIndexOf('text'), processes = t.blocks.filter((_, i) => i !== lastText), tools = t.blocks.filter(b => b.kind === 'tool');
-      const group = processes.length ? '<details class="process-group" data-detail="group-' + esc(t.key) + '" ' + (lastText < 0 ? 'open' : '') + '><summary>过程详情 · ' + processes.length + ' 条 · ' + tools.length + ' 次工具调用' + (tools.some(b => b.status === 'error') ? ' · 含失败' : '') + '</summary><div class="blocks">' + t.blocks.map((b, i) => i === lastText ? '' : blockHTML(b, t, i)).join('') + '</div></details>' : '';
-      const recap = tools.filter(b => b.toolName === 'wps_run_render').map(factsHTML).join('');
-      const legacyRefs = t.refs.length && !t.refs.some(r => r.marker) ? '<div class="refline">' + t.refs.map((r, n) => '<button class="ref" data-ref-marker="legacy-' + n + '" title="' + esc(r.label || V.referenceChipLabel(r)) + '">' + V.referenceContentHTML(r) + '</button>').join('') + '</div>' : '';
-      return '<section class="turn" data-turn="' + esc(t.key) + '"><div class="msg-user"><div class="bubble">' + V.userHTML(t.user, t.refs) + legacyRefs + '</div><div class="msg-meta"><span>' + clock(t.timestamp) + '</span><button data-copy-turn="' + esc(t.key) + '">复制</button><button data-quote-turn="' + esc(t.key) + '">引用以继续</button></div></div><div class="msg-assistant"><div class="model-line">' + esc(t.model || config?.model.id || 'WPS 助手') + (!t.done ? ' · 正在处理…' : '') + '</div>' +
-        (t.done ? group + (recap ? '<div class="turn-writes" aria-label="本轮写入结果">' + recap + '</div>' : '') + (lastText >= 0 ? blockHTML(t.blocks[lastText], t, lastText) : '') : '<div class="blocks">' + t.blocks.map((b, i) => blockHTML(b, t, i)).join('') + '</div>') +
-        (t.error ? '<div class="action-error">' + esc(t.error) + '</div>' : '') + (t.stopped ? '<div class="tool-state">已停止，已经完成的写入仍然有效。</div>' : '') + (t.stopReason === 'length' ? '<div class="tool-state">达到模型输出上限，可继续追问。</div>' : '') + '</div></section>';
-    }).join('') : '<div class="empty-state" id="chatEmpty">连接你的 WPS 文档<br>描述要提取的数据或要更新的位置。<br>输入 @ 可引用文档、选区、变量与 Render。</div>';
-    $('chatInner').querySelectorAll('[data-detail]').forEach(n => { if (open.has(n.dataset.detail)) n.open = true; });
-    if (followTail) scroll.scrollTop = scroll.scrollHeight; else scroll.scrollTop = oldTop;
+    const changed = chatRenderer.render(turns, currentSessionId);
+    if (changed && followTail) $('chatScroll').scrollTop = $('chatScroll').scrollHeight;
   }
   let renderScheduled = false;
-  function scheduleRender() { if (renderScheduled) return; renderScheduled = true; requestAnimationFrame(() => { renderScheduled = false; renderTurns(); }); }
+  function scheduleRender() {
+    if (renderScheduled) return;
+    renderScheduled = true;
+    // Batch bursts without rebuilding the history on every animation frame.
+    setTimeout(() => requestAnimationFrame(() => { renderScheduled = false; renderTurns(); }), 100);
+  }
+  setInterval(() => { if (!document.hidden) chatRenderer.updateProgress(); }, 1000);
   $('chatScroll').onscroll = () => { followTail = $('chatScroll').scrollHeight - $('chatScroll').scrollTop - $('chatScroll').clientHeight < 55; };
   function showUsage(context, turn) {
     contextUsage = context;
     if (!$('agentPanel').hidden && agentView === 'info') renderAgentResources();
     const valid = Number.isFinite(context?.percent), percent = valid ? context.percent : 0;
-    $('ctxFill').style.width = Math.min(100, percent) + '%'; $('ctxPercent').textContent = valid ? percent.toFixed(1) + '%' : '—';
+    $('ctxPercent').textContent = valid ? percent.toFixed(1) + '%' : '—';
     $('contextChip').title = valid ? '估算上下文 ' + Number(context.tokens).toLocaleString() + ' / ' + Number(context.contextWindow).toLocaleString() + ' tokens' : '模型尚未返回用量，不能计算上下文占用';
     $('usageLabel').textContent = turn?.usage?.totalTokens ? '本轮 ' + (turn.calls || 1) + ' 次调用 · ' + turn.usage.totalTokens.toLocaleString() + ' tokens' : '';
   }
+  function updateSendButton() {
+    const running = Boolean(controller);
+    const busy = Boolean(peerBusy || commandBusy || checkingRefs), button = $('sendBtn');
+    button.classList.toggle('is-running', running);
+    button.classList.toggle('is-busy', !running && busy);
+    button.title = running ? '停止生成' : busy ? '正在处理，请稍候' : '发送消息';
+    button.setAttribute('aria-label', button.title);
+    button.disabled = !running && busy;
+  }
   async function history() {
-    const value = await api('/api/chat'); if (controller) return;
+    if (controller || commandBusy) return;
+    const request = ++historyRequest;
+    const value = await api('/api/chat'); if (controller || commandBusy || request !== historyRequest) return;
+    if (currentSessionId && value.sessionId !== currentSessionId) {
+      sessionDrafts.set(currentSessionId, readComposer());
+      const draft = sessionDrafts.get(value.sessionId) || { message: '', refs: [] };
+      composerRefs.clear(); restoreComposer(draft.message, draft.refs); closeMention(); closeSlash();
+      pinnedRef = undefined; hideRefPop(); followTail = true;
+    }
+    currentSessionId = value.sessionId;
+    sessionButton.title = '管理会话 · ' + (value.sessionName || '未命名会话');
     sessionStats = value.sessionStats;
     const changed = JSON.stringify(value) !== lastHistory; lastHistory = JSON.stringify(value);
-    const previousBusy = peerBusy; peerBusy = value.busy; $('sendBtn').disabled = peerBusy || checkingRefs;
+    const previousBusy = peerBusy; peerBusy = value.busy; updateSendButton();
     if (peerBusy && !previousBusy) notice('另一个面板正在运行会话；过程会自动同步，结束后可继续发送。');
     if (!peerBusy && previousBusy) notice('会话已完成，最新历史已同步。');
     if (changed) { turns = V.historyTurns(value.messages, value.turns, peerBusy); renderTurns(); showUsage(value.contextUsage, turns.at(-1)); }
+    if (!$('sessionMenu').hidden && sessionData) {
+      const menuRequest = sessionRequest, next = await api('/api/sessions');
+      if (!$('sessionMenu').hidden && menuRequest === sessionRequest && !commandBusy && (JSON.stringify(next) !== JSON.stringify(sessionData) || previousBusy !== peerBusy)) { sessionData = next; renderSessionMenu(); }
+    }
   }
   $('chatInner').onclick = async event => {
     const copy = event.target.closest('[data-copy-turn]'), quote = event.target.closest('[data-quote-turn]');
@@ -617,10 +801,39 @@
       $('editor').focus();
     }
   };
+  async function sendCommand(input) {
+    const match = input.message.match(/^\/(\S+)(?:\s+([\s\S]*))?$/), name = match?.[1], args = match?.[2] || '';
+    await loadSlashCommands();
+    if (commandBusy || controller || peerBusy) return true;
+    if (input.sessionId !== currentSessionId) { notice('会话已切换，请确认输入后重试。', true); return true; }
+    const command = slashCommands?.find(c => c.name === name);
+    if (!command) { notice(slashError || '未知命令，请输入 / 选择命令。', true); return true; }
+    if (command.group === '技能') return false;
+    if (input.refs.length) { notice('会话命令不能包含对象引用。', true); return true; }
+    if (name === 'name' && !args.trim()) { notice('请在 /name 后输入会话名称。', true); return true; }
+    if (!command.args && args.trim()) { notice('/' + name + ' 不接受附加参数。', true); return true; }
+    commandBusy = true; historyRequest++; updateSendButton(); closeSlash(); closeMention();
+    try {
+      if (name === 'copy') {
+        const turn = [...turns].reverse().find(t => t.blocks.some(b => b.kind === 'text' && b.text));
+        const text = turn?.blocks.filter(b => b.kind === 'text').map(b => b.text).join('\n\n');
+        if (!text) throw new Error('当前会话没有可复制的助手消息。');
+        await navigator.clipboard.writeText(text); notice('已复制最后一条助手消息。');
+      } else if (name !== 'sessions') {
+        notice(name === 'compact' ? '正在压缩上下文…' : '正在执行 /' + name + '…');
+        const result = await api('/api/commands', { name, args, sessionId: currentSessionId }); notice(result.message);
+        if (name === 'reload') slashCommands = undefined;
+      }
+      if (readComposer().message === input.message) { $('editor').replaceChildren(); composerRefs.clear(); }
+    } catch (error) { notice(error.message, true); }
+    finally { commandBusy = false; updateSendButton(); await history().catch(error => notice(error.message, true)); }
+    if (name === 'sessions') await openSessionMenu($('editor'));
+    return true;
+  }
   async function send() {
-    let input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || checkingRefs || $('editor').querySelector('[data-selection-mode]:disabled')) return;
+    let input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || checkingRefs || commandBusy || $('editor').querySelector('[data-selection-mode]:disabled')) return;
     if (input.refs.some(ref => ['var', 'render'].includes(ref.kind))) {
-      checkingRefs = true; $('sendBtn').disabled = true;
+      checkingRefs = true; updateSendButton();
       try {
         // A peer may delete a definition between polls. Check before clearing
         // the draft or opening a chat stream, retaining the user's message.
@@ -631,12 +844,16 @@
         if (deleted.length) { notice('引用已删除：' + deleted.map(ref => ref.label || ref.id).join('、') + '。请点击引用上的 × 移除后再发送。', true); return; }
       } catch (error) {
         notice('无法核对变量引用：' + error.message + '。请连接本机服务后再发送。', true); return;
-      } finally { checkingRefs = false; $('sendBtn').disabled = peerBusy || !!controller; }
-      if (controller || peerBusy) return;
+      } finally { checkingRefs = false; updateSendButton(); }
+      if (controller || peerBusy || commandBusy) return;
     }
+    input.sessionId = currentSessionId;
+    if (input.message.startsWith('/') && await sendCommand(input)) return;
+    if (commandBusy || controller || peerBusy) return;
+    historyRequest++; // A snapshot requested before sending must not overwrite this stream.
     const turn = V.newTurn(input.message, input.refs); turns.push(turn); controller = new AbortController(); followTail = true;
     turn.model = config?.model.id; showUsage(undefined, turn);
-    $('sendBtn').disabled = true; $('stopBtn').hidden = false; $('editor').replaceChildren(); closeMention(); pinnedRef = undefined; hideRefPop(); notice(''); renderTurns();
+    updateSendButton(); $('editor').replaceChildren(); closeMention(); closeSlash(); pinnedRef = undefined; hideRefPop(); notice(''); renderTurns();
     let ended = false, hadError = false;
     try {
       const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...input, refs: input.refs.map(V.selectionRequest) }), signal: controller.signal });
@@ -661,16 +878,35 @@
       if (!stopped) turn.error = error.message;
       notice(stopped ? '已停止生成。已经完成的写入仍然有效。' : error.message, !stopped);
     } finally {
-      controller = undefined; $('sendBtn').disabled = peerBusy; $('stopBtn').hidden = true; renderTurns();
+      controller = undefined; updateSendButton(); renderTurns();
       if (hadError && !readComposer().message) restoreComposer(input.message, input.refs);
       await refresh(); if (ended && !hadError) await history().catch(() => {});
     }
   }
-  $('sendBtn').onclick = send; $('stopBtn').onclick = () => controller?.abort();
+  $('sendBtn').onclick = () => { if (controller) controller.abort(); else void send(); };
   $('editor').onkeydown = event => {
     if (event.isComposing || event.keyCode === 229) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+      event.stopPropagation();
+      // macOS reserves Control+A/C/V for other commands. Handle these explicitly
+      // while leaving Command shortcuts and Windows/Linux native editing intact.
+      if (event.ctrlKey && !event.metaKey && /Mac|iPhone|iPad/.test(navigator.platform)) {
+        const key = event.key.toLowerCase();
+        if (key === 'a') {
+          event.preventDefault(); const range = document.createRange(); range.selectNodeContents($('editor'));
+          const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        } else if (key === 'c' || key === 'x') { event.preventDefault(); document.execCommand(key === 'c' ? 'copy' : 'cut'); }
+        else if (key === 'v') { event.preventDefault(); void pasteComposerShortcut(); }
+      }
+      return;
+    }
     // Let native chip buttons handle Enter/Space without submitting the message.
     if (event.target.closest('[data-selection-mode], [data-remove-ref]')) return;
+    if (!$('slashPop').hidden) {
+      if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); slashIndex = Math.max(0, Math.min(slashItems.length - 1, slashIndex + (event.key === 'ArrowDown' ? 1 : -1))); renderSlash(); return; }
+      if (['Tab', 'Enter'].includes(event.key) && !event.shiftKey) { event.preventDefault(); selectSlash(slashItems[slashIndex]); return; }
+      if (event.key === 'Escape') { event.preventDefault(); closeSlash(); return; }
+    }
     if ($('mentionPop').classList.contains('show')) {
       if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); popIndex = Math.max(0, Math.min(mentionItems.length - 1, popIndex + (event.key === 'ArrowDown' ? 1 : -1))); renderMention($('mentionPop').dataset.query); return; }
       if (['Tab', 'ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); const step = event.key === 'ArrowLeft' || event.shiftKey ? -1 : 1; popCategory = categories[(categories.findIndex(c => c[0] === popCategory) + step + categories.length) % categories.length][0]; popIndex = 0; renderMention($('mentionPop').dataset.query); return; }

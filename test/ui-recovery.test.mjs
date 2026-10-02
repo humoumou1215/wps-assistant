@@ -24,7 +24,7 @@ test('UI metadata, bounded selection reads, revision conflicts, partial writes a
     assert.equal(missing.status, 400); assert.match((await missing.json()).error, /明确工作表/);
     assert.equal((await post('/api/ref-preview', { kind: 'sel', id: 'doc_001', selection: { sheet: '销售数据', address: 'A0' } })).status, 400);
     const stream = await (await post('/api/chat', { message: '验证绑定 原型回归 [引用1:当前选区]', refs: [{ kind: 'sel', id: 'doc_001', label: '当前选区', marker: '引用1', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' } }] })).text();
-    assert.match(stream, /event: thinking.delta/); assert.match(stream, /event: message.start/); assert.match(stream, /wps_list_documents/);
+    assert.match(stream, /event: thinking.delta/); assert.match(stream, /event: tool.prepare/); assert.match(stream, /event: message.start/); assert.match(stream, /wps_list_documents/);
     const history = await (await fetch(h.base + '/api/chat')).json();
     const meta = history.turns.at(-1); assert.ok(meta.userTimestamp); assert.equal(meta.refs[0].marker, '引用1');
     assert.equal(meta.calls, 9); assert.equal(meta.usage.totalTokens, 450);

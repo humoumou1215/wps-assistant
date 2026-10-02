@@ -22,6 +22,11 @@ test('selection requests omit stale current text and bound fixed previews withou
   assert.equal(ref.selection.text.length, 350000, 'request serialization must not mutate saved metadata');
 });
 
+test('restored skill commands show original user input instead of expanded instructions', () => {
+  const turns = V.historyTurns([{ role: 'user', content: [{ type: 'text', text: '<skill name="wps-api">Expanded skill instructions</skill>\n\n任务' }], timestamp: 123 }], [{ userTimestamp: 123, message: '/skill:wps-api 任务' }]);
+  assert.equal(turns[0].user, '/skill:wps-api 任务');
+});
+
 test('selection chips follow current sheet and text ranges while fixed and sent snapshots stay put', () => {
   const state = { documents: [{ documentId: 'd', connected: true, name: '经营.xlsx', activeSheet: 'Sales', selection: { sheet: 'Sales', address: '$A$1:$B$4' } }], variables: [] };
   const refs = V.referenceCatalog(state).filter(r => r.kind === 'sel');

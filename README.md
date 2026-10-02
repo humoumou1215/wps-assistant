@@ -263,4 +263,4 @@ npm run test:wps-writer-live
 
 浏览器验证记录见 [初期审计与验收报告](docs/ui-audit-and-validation.md)、[2026-09-30 规范对照检查](docs/ui-spec-audit-2026-09-30.md)和[修复复查记录](docs/ui-fix-validation-2026-09-30.md)。
 
-复杂文档与跨文件语义映射的手工测试素材见 [`test/pressure/`](test/pressure/README.md)。仓库只保存合成数据生成器、场景说明和评阅答案；Office 产物默认生成到已忽略的 `.dev/pressure-test/`。
+办公验证素材见 [`test/sample/`](test/sample/)：包含四轮 Excel 项目交付台账、PPT 周会演示、Word 周报及《WPS-Assistant 能力测试操作手册》。请按操作手册使用这些固定 Office 样例，验证数据更新、跨文件重写和连续多轮操作。

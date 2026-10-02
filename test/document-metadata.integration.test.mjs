@@ -48,8 +48,7 @@ test('closed source and target documents retain names and stable bindings across
       await until(async () => JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')),
         s => s.documentMetadata?.[sid]?.name === source.name);
     } catch (error) {
-      error.message += `\nService diagnostics:\n${h.logs}`;
-      throw error;
+      throw new Error(`Document metadata persistence failed. Service diagnostics:\n${h.logs}`, { cause: error });
     }
     h.socket.send(JSON.stringify({ type: 'documents', documents: [main] }));
     const closed = await until(state, s => s.documents.find(d => d.documentId === tid)?.connected === false);

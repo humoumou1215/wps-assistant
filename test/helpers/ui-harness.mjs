@@ -122,6 +122,6 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps
     });
   });
   const cfg = { kind: 'custom', label: '本地验证模型', baseUrl: `http://127.0.0.1:${modelPort}/v1`, api: 'openai-completions', apiKey: 'ui-test-secret', model: { id: 'ui-test-model', name: 'UI 验证模型', contextWindow: 32768, maxTokens: 2048, reasoning: false, vision: false }, compat: { thinkingFormat: '', maxTokensField: '' }, headers: { 'X-Test': 'header-secret' }, thinkingLevel: 'off' };
-  return { base, port, modelPort, dir, cfg, child, socket, requests, appState, app,
+  return { base, port, modelPort, dir, cfg, child, socket, requests, appState, app, get logs() { return log; },
     async close() { socket.close(); child.kill(); await new Promise(r => child.exitCode !== null ? r() : child.once('exit', r)); model.closeAllConnections(); await new Promise(r => model.close(r)); if (!dataDir) await rm(dir, { recursive: true, force: true }); } };
 }

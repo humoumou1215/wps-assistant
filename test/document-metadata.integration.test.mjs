@@ -44,8 +44,13 @@ test('closed source and target documents retain names and stable bindings across
     // neither the stable document ID nor its key changes.
     source.name = '交付台账（修订）.xlsx';
     h.socket.send(JSON.stringify({ type: 'documents', documents: [main, source, target] }));
-    await until(async () => JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')),
-      s => s.documentMetadata?.[sid]?.name === source.name);
+    try {
+      await until(async () => JSON.parse(await readFile(join(dir, 'state.json'), 'utf8')),
+        s => s.documentMetadata?.[sid]?.name === source.name);
+    } catch (error) {
+      error.message += `\nService diagnostics:\n${h.logs}`;
+      throw error;
+    }
     h.socket.send(JSON.stringify({ type: 'documents', documents: [main] }));
     const closed = await until(state, s => s.documents.find(d => d.documentId === tid)?.connected === false);
     assert.equal(closed.documents.find(d => d.documentId === sid).name, source.name);

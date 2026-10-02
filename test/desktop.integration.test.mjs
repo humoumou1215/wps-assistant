@@ -18,7 +18,11 @@ test('portable controls authenticate ownership and reject stopping during chat a
     assert.equal((await get('/api/desktop/status')).status, 403);
     assert.equal((await get('/api/desktop/status', { authorization: 'Bearer invalid' })).status, 403);
     assert.equal((await get('/api/desktop/status', { ...auth, Origin: 'https://example.test' })).status, 403);
-    const status = await (await get('/api/desktop/status', auth)).json();
+    let status = await (await get('/api/desktop/status', auth)).json();
+    for (let i = 0; i < 100 && status.busy; i++) {
+      await new Promise(r => setTimeout(r, 50));
+      status = await (await get('/api/desktop/status', auth)).json();
+    }
     assert.equal(status.instanceId, instance); assert.equal(status.pid, h.child.pid); assert.equal(status.dataDir, h.dir); assert.equal(status.busy, false);
     assert.ok(!JSON.stringify(status).includes(token)); assert.equal((await (await get('/health')).json()).desktopManaged, true);
     assert.equal((await post('/api/desktop/stop', {})).status, 403);

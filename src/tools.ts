@@ -89,7 +89,9 @@ function nextId(kind: string) {
   return `${kind}_${String(state.counters[kind]).padStart(3, "0")}`;
 }
 let persistence = Promise.resolve();
+let pendingStateWrites = 0;
 function persist(variables?: Variable[]) {
+  pendingStateWrites++;
   const write = persistence.then(async () => {
     const snapshot = JSON.stringify({ ...state, variables: variables ?? state.variables }, null, 2);
     await mkdir(DATA_DIR, { recursive: true });
@@ -98,13 +100,13 @@ function persist(variables?: Variable[]) {
     await rename(temp, STATE_FILE);
     if (variables) state.variables = variables;
   });
-  persistence = write.catch(() => {});
+  persistence = write.then(() => { pendingStateWrites--; }, () => { pendingStateWrites--; });
   return write;
 }
 let variableMutation = Promise.resolve();
 let queuedMutations = 0;
 let activeToolCalls = 0;
-export function isToolBusy() { return queuedMutations > 0 || activeToolCalls > 0 || pending.size > 0; }
+export function isToolBusy() { return pendingStateWrites > 0 || queuedMutations > 0 || activeToolCalls > 0 || pending.size > 0; }
 function mutateVariables<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
   queuedMutations++;
   let cancelWaiting: (() => void) | undefined;

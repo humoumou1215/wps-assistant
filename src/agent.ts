@@ -341,6 +341,9 @@ async function runChatTurn(input: z.infer<typeof chatSchema>, emit: (event: stri
         }
         if (update.type === "text_delta") send("text.delta", { delta: update.delta });
         if (update.type === "thinking_delta") send("thinking.delta", { delta: update.delta });
+        // Report progress while arguments stream, before a tool can execute.
+        if (update.type === "toolcall_start") send("tool.prepare", { chars: 0 });
+        if (update.type === "toolcall_delta") send("tool.prepare", { chars: update.delta.length });
       }
       if (event.type === "tool_execution_start") {
         starts.set(event.toolCallId, Date.now());

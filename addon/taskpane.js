@@ -677,26 +677,21 @@
   function blockHTML(block, turn, index) {
     const key = turn.key + '-' + (block.id || index);
     if (block.kind === 'text') return '<div class="body-text">' + V.markdown(block.text) + '</div>';
-    if (block.kind === 'thinking') return '<details class="thinking-block" data-detail="' + esc(key) + '"><summary>思考过程 · ' + esc(block.text.trim().slice(0, 100) || '正在思考…') + '</summary><div class="thinking-text">' + esc(block.text) + '</div></details>';
     return '<div class="tool ' + (block.status === 'error' ? 'err' : block.status === 'running' ? 'run' : '') + '"><details data-detail="' + esc(key) + '"><summary class="tool-head"><span class="tool-name">' + esc(block.toolName) + '</span><span class="tool-prev">' + ({ running: '执行中…', error: '失败', stopped: '已停止 / 未完成', done: '完成' }[block.status] || '未完成') + '</span><span class="tool-dur">' + esc(duration(block.durationMs)) + '</span></summary><div class="tool-sec"><div class="lbl">参数</div><pre>' + esc(preview(block.args)) + '</pre></div>' + (block.result ? '<div class="tool-sec res"><div class="lbl">' + (block.status === 'error' ? '错误 / 部分结果' : '返回') + '</div><pre>' + esc(preview(block.result)) + '</pre></div>' : '') + '</details>' + factsHTML(block) + '</div>';
   }
+  const chatRenderer = V.createChatRenderer($('chatInner'), { blockHTML, factsHTML, clock, modelName: () => config?.model.id || 'WPS 助手' });
   function renderTurns() {
-    const open = new Set([...$('chatInner').querySelectorAll('[data-detail][open]')].map(n => n.dataset.detail));
-    const scroll = $('chatScroll'), oldTop = scroll.scrollTop;
-    $('chatInner').innerHTML = turns.length ? turns.map(t => {
-      const lastText = t.blocks.map(b => b.kind).lastIndexOf('text'), processes = t.blocks.filter((_, i) => i !== lastText), tools = t.blocks.filter(b => b.kind === 'tool');
-      const group = processes.length ? '<details class="process-group" data-detail="group-' + esc(t.key) + '" ' + (lastText < 0 ? 'open' : '') + '><summary>过程详情 · ' + processes.length + ' 条 · ' + tools.length + ' 次工具调用' + (tools.some(b => b.status === 'error') ? ' · 含失败' : '') + '</summary><div class="blocks">' + t.blocks.map((b, i) => i === lastText ? '' : blockHTML(b, t, i)).join('') + '</div></details>' : '';
-      const recap = tools.filter(b => b.toolName === 'wps_run_render').map(factsHTML).join('');
-      const legacyRefs = t.refs.length && !t.refs.some(r => r.marker) ? '<div class="refline">' + t.refs.map((r, n) => '<button class="ref" data-ref-marker="legacy-' + n + '" title="' + esc(r.label || V.referenceChipLabel(r)) + '">' + V.referenceContentHTML(r) + '</button>').join('') + '</div>' : '';
-      return '<section class="turn" data-turn="' + esc(t.key) + '"><div class="msg-user"><div class="bubble">' + V.userHTML(t.user, t.refs) + legacyRefs + '</div><div class="msg-meta"><span>' + clock(t.timestamp) + '</span><button data-copy-turn="' + esc(t.key) + '">复制</button><button data-quote-turn="' + esc(t.key) + '">引用以继续</button></div></div><div class="msg-assistant"><div class="model-line">' + esc(t.model || config?.model.id || 'WPS 助手') + (!t.done ? ' · 正在处理…' : '') + '</div>' +
-        (t.done ? group + (recap ? '<div class="turn-writes" aria-label="本轮写入结果">' + recap + '</div>' : '') + (lastText >= 0 ? blockHTML(t.blocks[lastText], t, lastText) : '') : '<div class="blocks">' + t.blocks.map((b, i) => blockHTML(b, t, i)).join('') + '</div>') +
-        (t.error ? '<div class="action-error">' + esc(t.error) + '</div>' : '') + (t.stopped ? '<div class="tool-state">已停止，已经完成的写入仍然有效。</div>' : '') + (t.stopReason === 'length' ? '<div class="tool-state">达到模型输出上限，可继续追问。</div>' : '') + '</div></section>';
-    }).join('') : '<div class="empty-state" id="chatEmpty">连接你的 WPS 文档<br>描述要提取的数据或要更新的位置。<br>输入 @ 可引用文档、选区、变量与 Render。</div>';
-    $('chatInner').querySelectorAll('[data-detail]').forEach(n => { if (open.has(n.dataset.detail)) n.open = true; });
-    if (followTail) scroll.scrollTop = scroll.scrollHeight; else scroll.scrollTop = oldTop;
+    const changed = chatRenderer.render(turns, currentSessionId);
+    if (changed && followTail) $('chatScroll').scrollTop = $('chatScroll').scrollHeight;
   }
   let renderScheduled = false;
-  function scheduleRender() { if (renderScheduled) return; renderScheduled = true; requestAnimationFrame(() => { renderScheduled = false; renderTurns(); }); }
+  function scheduleRender() {
+    if (renderScheduled) return;
+    renderScheduled = true;
+    // Batch bursts without rebuilding the history on every animation frame.
+    setTimeout(() => requestAnimationFrame(() => { renderScheduled = false; renderTurns(); }), 100);
+  }
+  setInterval(() => { if (!document.hidden) chatRenderer.updateProgress(); }, 1000);
   $('chatScroll').onscroll = () => { followTail = $('chatScroll').scrollHeight - $('chatScroll').scrollTop - $('chatScroll').clientHeight < 55; };
   function showUsage(context, turn) {
     contextUsage = context;
@@ -713,6 +708,7 @@
     $('sendBtn').disabled = !running && (peerBusy || commandBusy || checkingRefs);
   }
   async function history() {
+    if (controller || commandBusy) return;
     const request = ++historyRequest;
     const value = await api('/api/chat'); if (controller || commandBusy || request !== historyRequest) return;
     if (currentSessionId && value.sessionId !== currentSessionId) {
@@ -797,6 +793,7 @@
     input.sessionId = currentSessionId;
     if (input.message.startsWith('/') && await sendCommand(input)) return;
     if (commandBusy || controller || peerBusy) return;
+    historyRequest++; // A snapshot requested before sending must not overwrite this stream.
     const turn = V.newTurn(input.message, input.refs); turns.push(turn); controller = new AbortController(); followTail = true;
     turn.model = config?.model.id; showUsage(undefined, turn);
     updateSendButton(); $('editor').replaceChildren(); closeMention(); closeSlash(); pinnedRef = undefined; hideRefPop(); notice(''); renderTurns();

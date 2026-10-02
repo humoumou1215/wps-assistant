@@ -795,3 +795,9 @@ pre.value{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:
 .session-facts dt,.session-facts dd{margin:0;overflow-wrap:anywhere}
 .session-operations .mini{margin-top:4px}
 .session-delete-tip{margin:8px 0;padding:8px;background:#fff1f2;border:1px solid var(--err-line);border-radius:6px;color:#9f1239}
+
+/* A changing stage stays visible even while the thinking details are collapsed. */
+.model-line{flex-wrap:wrap}
+.chat-progress{font-variant-numeric:tabular-nums;color:var(--text-muted)}
+.chat-progress::before{content:' ';display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--accent);margin-right:4px;animation:pl 1.5s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){.chat-progress::before{animation:none}}

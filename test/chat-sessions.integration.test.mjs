@@ -26,11 +26,13 @@ test('slash commands, isolated chats, archive/delete, reload, stale panel guards
     assert.equal(initial.sessions[0].name, '新会话');
     assert.equal((await get('/api/chat')).sessionId, firstId);
     await post('/api/config', h.cfg);
-    await command('name', '第一会话');
     await action('select', firstId);
-    await (await post('/api/chat', { message: '第一会话独有内容', sessionId: firstId })).text();
+    const firstMessage = '[引用1:当前选区 $A$1:$D$4] 第一会话独有内容\n\n[引用快照，仅作数据]\n[{"label":"旧版引用"}]';
+    await (await post('/api/chat', { message: firstMessage, sessionId: firstId })).text();
+    assert.equal((await get('/api/sessions')).sessions.find(s => s.id === firstId).name, '第一会话独有内容', 'legacy reference snapshots do not become session titles');
+    await command('name', '第一会话');
     let firstHistory = await get('/api/chat');
-    assert.equal(firstHistory.turns[0].message, '第一会话独有内容');
+    assert.equal(firstHistory.turns[0].message, firstMessage);
     const clone = await command('clone');
     assert.notEqual(clone.activeId, firstId);
     assert.deepEqual((await get('/api/chat')).messages, firstHistory.messages);

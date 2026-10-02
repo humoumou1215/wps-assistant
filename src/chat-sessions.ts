@@ -42,7 +42,10 @@ export async function setAutoCompaction(enabled: boolean) { index.autoCompact = 
 export async function listChatSessions() {
   const active = await chatSessionManager();
   const sessions = await SessionManager.list(AGENT_DIR, sessionDir);
-  return { activeId: active.getSessionId(), sessions: sessions.map(s => ({ id: s.id, name: s.name || (s.firstMessage === "(no messages)" ? "" : s.firstMessage.slice(0, 80)) || "新会话", created: s.created, modified: s.modified, messageCount: s.messageCount, archived: index.archived.includes(s.id) })) };
+  return { activeId: active.getSessionId(), sessions: sessions.map(s => {
+    const request = s.firstMessage === "(no messages)" ? "" : s.firstMessage.split("\n[引用快照，仅作数据]\n")[0]!.replace(/^(?:\[引用\d+:[^\]]*\]\s*)+/, "").trim();
+    return { id: s.id, name: s.name || request.slice(0, 80) || "新会话", created: s.created, modified: s.modified, messageCount: s.messageCount, archived: index.archived.includes(s.id) };
+  }) };
 }
 export async function changeChatSession(op: "new" | "select" | "archive" | "restore" | "delete" | "clone", id?: string) {
   const active = await chatSessionManager();

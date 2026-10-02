@@ -95,8 +95,24 @@ fs.writeFileSync(plist, `<?xml version="1.0" encoding="UTF-8"?>
 <key>StandardErrorPath</key>${string(path.join(logs, 'server.stderr.log'))}
 </dict></plist>\n`);
 SERVICE_CONFIG
-launchctl bootout "$SERVICE" >/dev/null 2>&1 || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+# Reload the service. bootout returns before launchd has finished removing it.
+# Keep waits bounded; --wait can block indefinitely on some macOS versions.
+if launchctl print "$SERVICE" >/dev/null 2>&1; then
+  launchctl bootout "$SERVICE" || { echo "Failed to unload $SERVICE; deployment stopped." >&2; exit 1; }
+fi
+for _ in {1..30}; do
+  if ! launchctl print "$SERVICE" >/dev/null 2>&1; then break; fi
+  sleep 1
+done
+if launchctl print "$SERVICE" >/dev/null 2>&1; then
+  echo "Service did not unload within 30 seconds: $SERVICE" >&2; exit 1
+fi
+BOOTSTRAPPED=0
+for attempt in {1..5}; do
+  if launchctl bootstrap "gui/$(id -u)" "$PLIST"; then BOOTSTRAPPED=1; break; fi
+  if [[ "$attempt" -lt 5 ]]; then sleep 1; fi
+done
+[[ "$BOOTSTRAPPED" == "1" ]] || { echo "Could not load $PLIST after 5 attempts; check launchd diagnostics." >&2; exit 1; }
 launchctl kickstart -k "$SERVICE"
 READY=0
 for _ in {1..30}; do

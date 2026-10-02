@@ -2,6 +2,8 @@
 
 按报告的 `discovered` 对象成员展开，去掉了与 `Application` 重复的 `wpsGlobal` / `window.wps` 等别名。`function` 表示函数成员可见，不代表参数/效果已验证。查找显式验证结果应返回对应宿主 API guide 的“显式探测结果”。
 
+本目录保留历史宿主成员名称；ActiveWorkbook/ActivePresentation/ActiveDocument 及 Selection 指向活动上下文，不是本次绑定。查询、Transform、Render 中使用 `wpsDocument` 访问指定文档，并按引用快照的明确位置读取选区。宿主函数的存在性也不表示可在只读通道调用；修改只放在 Render。
+
 | 宿主 | 对象 | 成员 | 类型 | 验证范围 | 使用说明 |
 | --- | --- | --- | --- | --- | --- |
 | Presentation / WPP | ActiveWindow | Activate | function | 仅发现/枚举 | `ActiveWindow.Activate(...)`。先确认该宿主的签名/返回值；报告只枚举到函数时不代表已执行验证。 |

@@ -181,12 +181,12 @@
     }
     return { sheet: sheetName, address };
   }
-  function navigationDocument(app, type, documentKey) {
-    const collection = getProp(app, type === "presentation" ? "Presentations" : "Documents");
-    const current = getProp(app, type === "presentation" ? "ActivePresentation" : "ActiveDocument");
+  function boundDocument(app, type, documentKey) {
+    const collection = getProp(app, { spreadsheet: "Workbooks", presentation: "Presentations", writer: "Documents" }[type]);
+    const current = getProp(app, { spreadsheet: "ActiveWorkbook", presentation: "ActivePresentation", writer: "ActiveDocument" }[type]);
     const docs = enumerate(collection);
     if (current && !docs.includes(current)) docs.push(current);
-    const doc = docs.find(item => (toStringValue(getProp(item, "FullName")) || `${type}:${toStringValue(getProp(item, "Name"))}`) === documentKey);
+    const doc = docs.find(item => (toStringValue(getProp(item, "FullName") || "") || `${type}:${toStringValue(getProp(item, "Name") || "")}`) === documentKey);
     if (!doc) throw new Error("目标文档已关闭");
     return doc;
   }
@@ -198,7 +198,7 @@
   }
   function navigatePresentation(app, documentKey, location) {
     if ((!validIndex(location.slideId) && !validIndex(location.slide)) || (location.slideId !== undefined && location.slide !== undefined)) throw new Error("幻灯片位置无效");
-    const pres = navigationDocument(app, "presentation", documentKey);
+    const pres = boundDocument(app, "presentation", documentKey);
     let slide;
     if (location.slideId !== undefined) {
       // SlideID survives slide reordering; never fall back to a page number.
@@ -236,7 +236,7 @@
     return { slide: Number(slide.SlideIndex), slideId: Number(slide.SlideID), ...(shape ? { shapeId: Number(shape.Id), shapeName: toStringValue(shape.Name) } : {}), ref: location.ref };
   }
   function navigateWriter(app, documentKey, location) {
-    const doc = navigationDocument(app, "writer", documentKey);
+    const doc = boundDocument(app, "writer", documentKey);
     let range;
     if (location.rangeStart !== undefined) {
       if (![location.rangeStart, location.rangeEnd].every(n => Number.isSafeInteger(n) && n >= 0) || location.rangeEnd < location.rangeStart || location.rangeEnd > Number(doc.Content.End)) throw new Error("文字区域超出文档范围");
@@ -332,8 +332,11 @@
         }
         const wps = (typeof window !== "undefined" && window.wps) || app;
         const variable = message.variable;
-        const run = new Function("Application", "wps", "variable", `"use strict"; return (async () => {\n${message.code}\n})()`);
-        const result = await run(app, wps, variable);
+        // Resolve on every execution, without activating a document or changing selection.
+        // Application remains available for host APIs and existing saved rules.
+        const wpsDocument = boundDocument(app, appType(app), message.documentKey);
+        const run = new Function("Application", "wps", "variable", "wpsDocument", `"use strict"; return (async () => {\n${message.code}\n})()`);
+        const result = await run(app, wps, variable, wpsDocument);
         const json = JSON.stringify(result);
         if (json === undefined) throw new Error("Code returned undefined (return a JSON-serializable value)");
         payload = { success: true, result: JSON.parse(json) };

@@ -112,3 +112,67 @@ test('macOS deployment creates an escaped LaunchAgent with the requested server,
     assert.equal(envValue('WPS_MCP_TRANSPORT'), 'http');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
+
+const reloadBlock = mac.slice(mac.indexOf('# Reload the service.'), mac.indexOf('READY=0'));
+function reloadService(mode) {
+  return spawnSync('bash', ['-s', '--', mode], { encoding: 'utf8', input: `
+set -euo pipefail
+mode=$1
+SERVICE=gui/501/com.local.wps-mcp
+PLIST=/test/service.plist
+loaded=1
+if [[ "$mode" == first ]]; then loaded=0; fi
+unloading=0
+polls=0
+attempts=0
+launchctl() {
+  case "$1" in
+    print)
+      if [[ "$loaded" == 0 ]]; then return 1; fi
+      if [[ "$unloading" == 1 && "$mode" != stuck ]]; then
+        polls=$((polls + 1))
+        if [[ "$polls" -ge 3 ]]; then loaded=0; return 1; fi
+      fi
+      return 0 ;;
+    bootout)
+      printf 'bootout\\n'
+      if [[ "$mode" == unload-failed ]]; then return 1; fi
+      unloading=1 ;;
+    bootstrap)
+      printf 'bootstrap\\n'
+      if [[ "$loaded" == 1 ]]; then echo 'still loaded' >&2; return 5; fi
+      attempts=$((attempts + 1))
+      if [[ "$mode" == bootstrap-failed || ( "$mode" == retry && "$attempts" == 1 ) ]]; then return 5; fi
+      loaded=1 ;;
+    kickstart) printf 'kickstart\\n' ;;
+    *) return 2 ;;
+  esac
+}
+sleep() { printf 'wait\\n'; }
+id() { printf '501\\n'; }
+${reloadBlock}
+` });
+}
+const bashAvailable = !spawnSync('bash', ['--version']).error;
+test('macOS service reload waits for asynchronous removal and retries a transient bootstrap conflict', { skip: !bashAvailable }, () => {
+  const retry = reloadService('retry');
+  assert.equal(retry.status, 0, retry.stderr);
+  assert.deepEqual(retry.stdout.trim().split('\n'), ['bootout', 'wait', 'wait', 'bootstrap', 'wait', 'bootstrap', 'kickstart']);
+  const first = reloadService('first');
+  assert.equal(first.status, 0, first.stderr);
+  assert.deepEqual(first.stdout.trim().split('\n'), ['bootstrap', 'kickstart']);
+});
+test('macOS service reload stops on unload failure, timeout or persistent bootstrap failure', { skip: !bashAvailable }, () => {
+  for (const [mode, message, bootstraps, waits] of [
+    ['unload-failed', /Failed to unload/, 0, 0],
+    ['stuck', /did not unload within 30 seconds/, 0, 30],
+    ['bootstrap-failed', /after 5 attempts/, 5, 6],
+  ]) {
+    const result = reloadService(mode);
+    assert.equal(result.status, 1, mode);
+    assert.match(result.stderr, message);
+    assert.equal((result.stdout.match(/^bootstrap$/gm) ?? []).length, bootstraps, mode);
+    assert.equal((result.stdout.match(/^wait$/gm) ?? []).length, waits, mode);
+    assert.doesNotMatch(result.stdout, /kickstart/);
+  }
+});

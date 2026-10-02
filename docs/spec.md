@@ -382,7 +382,7 @@ interface WpsExecRequest {
 ```json
 {
   "documentId": "doc_excel_001",
-  "code": "const sheet = Application.Worksheets.Item('销售数据'); return sheet.Range('A1:B10').Value2;"
+  "code": "const sheet = wpsDocument.Worksheets.Item('销售数据'); return sheet.Range('A1:B10').Value2;"
 }
 ```
 
@@ -438,7 +438,7 @@ slide.Shapes.Add...
 
 ### 7.4.2 判据的单一来源
 
-检查逻辑集中在 `src/readonly-guard.ts`，`server.ts` 只做薄封装并 `import` 它。这样做的原因是：调用方（Agent 的离线自检工具、CI 校验脚本）需要复现同一套判定，若判据以副本形式散落各处，任一处改动都会让其它副本静默过时。
+检查逻辑集中在 `src/readonly-guard.ts`，由 `src/tools.ts` 的查询、变量创建/更新和 Transform 执行路径自动调用。内嵌 Agent 没有终端或通用本机文件读取工具，不依赖其他技能或离线检查脚本；`read` 只读取已安装技能文本。Agent 根据工具返回的一次性全部违规修正代码，不能用拼接成员名绕过拒绝。CI 直接测试同一套判据，避免散落副本静默过时。
 
 检查是纯语法层面的，**按节点类型与属性名匹配，不区分文档对象与本地对象**：
 
@@ -489,7 +489,7 @@ interface TransformCreateRequest {
   "variableName": "部门销售额",
   "description": "读取销售数据工作表中的部门和销售额",
   "sourceDocumentId": "doc_excel_001",
-  "code": "const sheet = Application.Worksheets.Item('销售数据'); const rows = sheet.Range('A2:B100').Value2; return rows.filter(row => row[0]).map(row => ({ department: String(row[0]), sales: Number(row[1]) }));"
+  "code": "const sheet = wpsDocument.Worksheets.Item('销售数据'); const rows = sheet.Range('A2:B100').Value2; return rows.filter(row => row[0]).map(row => ({ department: String(row[0]), sales: Number(row[1]) }));"
 }
 ```
 
@@ -565,7 +565,7 @@ interface RenderCreateRequest {
   "variableId": "var_001",
   "targetDocumentId": "doc_ppt_001",
   "description": "将部门销售额更新到第3页销售图",
-  "code": "const data = variable.value; const slide = Application.ActivePresentation.Slides.Item(3); const chart = slide.Shapes.Item('销售图').Chart; /* update chart */ return { updated: true };"
+  "code": "const data = variable.value; const slide = wpsDocument.Slides.Item(3); const chart = slide.Shapes.Item('销售图').Chart; /* update chart */ return { updated: true };"
 }
 ```
 
@@ -758,6 +758,10 @@ wps_run_transform(var_001)
 
 ## 12.3 执行环境
 
+查询、Transform、Render 统一提供 `wpsDocument`：Add-in 根据 MCP Server 从 `documentId` 得到的注册 `documentKey`，在 Workbooks/Presentations/Documents 中解析原生文档对象。查询对应请求文档，Transform 对应绑定源文档，Render 对应绑定目标文档。每次执行重新解析，不自动激活文档或改变选区；找不到匹配对象时失败，不回退到另一个活动文档。
+
+新代码优先从 `wpsDocument` 访问 Worksheets/Slides/Content/Range/Tables。Application 和 wps 仍用于宿主 API 并兼容旧规则，但 ActiveWorkbook/ActivePresentation/ActiveDocument/ActiveSheet/Selection 不保证属于绑定文档；旧规则若仍依赖活动对象，应原位更新代码。选区内容按引用快照中的明确坐标从绑定对象读取。`wpsDocument` 是执行上下文参数，不新增工具参数或持久化字段，也不是限制代码访问其他文档的沙箱。
+
 Render 执行时必须提供：
 
 ```js
@@ -787,7 +791,7 @@ Render Code：
 const data = variable.value;
 
 const slide =
-  Application.ActivePresentation
+  wpsDocument
     .Slides.Item(3);
 
 const shape =
@@ -1532,6 +1536,8 @@ GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默
 Windows 也支持直接执行 `scripts/install-windows.ps1` 并传入 `-Port`、`-DataDirectory`、`-AddinsDirectory`。脚本只更新 `WpsMcpET`、`WpsMcpWPP`、`WpsMcpWPS` 的注册条目；已有 URL 随端口更新，重复部署不增加重复条目，其他加载项保持原样。首次修改已有 `publish.xml` 前保存 `.backup-before-wps-mcp`；macOS 的 `authaddin.json` 首次修改前保存 `.backup-before-wps-mcp-writer`，保留其他宿主及加载项记录。无效注册文件会拒绝修改，Windows Writer 授权机制仍需实机确认。
 
 macOS 使用 `com.local.wps-mcp` 用户级 LaunchAgent，登录时启动并自动重启；Windows 使用当前用户的后台 Node 进程，不创建开机任务，进程与数据目录记录在忽略的 `.dev/windows-deployment.json`。重复部署只允许重启已确认属于当前项目且数据目录相同的服务；端口被其他进程占用或会话仍在运行时拒绝重启。Windows 初次接管旧的手动启动服务前，需要自行停止旧服务。
+
+macOS 的 `launchctl bootout` 异步移除服务。安装脚本卸载后最多等待 30 秒确认服务消失，再执行 `bootstrap`；为覆盖移除后的短暂注册冲突，最多重试 5 次，间隔 1 秒。卸载失败、超时或注册持续失败时停止部署并报告，不忽略错误继续启动。
 
 服务启动后检查 `/health`、`/addins/et/`、`/addins/wpp/`、`/addins/wps/`、任务窗格 HTML/JS。检查通过仅证明桥接服务和静态资源可用；还需重新打开 WPS，验证真实宿主加载和文档读写。
 

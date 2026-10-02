@@ -392,7 +392,7 @@ defineTool("wps_get_document", {
 
 defineTool("wps_run_readonly_code", {
   title: "Run read-only WPS JavaScript",
-  description: "Execute WPS JS API JavaScript in the selected document. Read-only; document edits belong in wps_run_render.",
+  description: "Execute read-only WPS JavaScript with wpsDocument resolved from documentId, without activating it. Use its Worksheets/Slides/Content instead of Application.Active*; document edits belong in wps_run_render.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: { documentId: z.string().min(1), code: z.string().min(1).max(MAX_CODE_LENGTH) },
 }, async ({ documentId, code }) => {
@@ -404,7 +404,7 @@ defineTool("wps_run_readonly_code", {
 
 defineTool("wps_create_variable", {
   title: "Create Variable and Transform",
-  description: "Create a Variable and save read-only WPS JavaScript that populates its value when wps_run_transform is called. Optional sourceRef locates the source: SheetName!A1:B13, SlideID:257!ShapeID:4, Paragraph:4, Table:1, Heading:标题 or Range:0:20.",
+  description: "Create a Variable and save read-only WPS JavaScript that populates its value when wps_run_transform is called. Code receives wpsDocument resolved from sourceDocumentId; use it instead of Application.Active*. Optional sourceRef locates the source: SheetName!A1:B13, SlideID:257!ShapeID:4, Paragraph:4, Table:1, Heading:标题 or Range:0:20.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: {
     variableName: z.string().min(1),
@@ -479,7 +479,7 @@ defineTool("wps_update_variable", {
 
 defineTool("wps_create_render", {
   title: "Create Render rule",
-  description: "Attach a document-writing WPS JavaScript rule to an existing Variable; the rule is saved but not executed. Provide targetRef for UI navigation: spreadsheets SheetName!A1:B13; presentations SlideID:257!ShapeID:4 (prefer stable IDs) or Slide:2!Shape:对象名; Writer Paragraph:4, Table:1, Heading:标题!Paragraph, Heading:标题!Table, Bookmark:名称 or Range:0:20. Join multiple Word/PPT destinations with +. Saves only, never navigates or executes.",
+  description: "Attach a document-writing WPS JavaScript rule to an existing Variable; the rule is saved but not executed. Code receives wpsDocument resolved from targetDocumentId and variable.value; use the bound object instead of Application.Active*. Provide targetRef for UI navigation: spreadsheets SheetName!A1:B13; presentations SlideID:257!ShapeID:4 (prefer stable IDs) or Slide:2!Shape:对象名; Writer Paragraph:4, Table:1, Heading:标题!Paragraph, Heading:标题!Table, Bookmark:名称 or Range:0:20. Join multiple Word/PPT destinations with +. Saves only, never navigates or executes.",
   annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),

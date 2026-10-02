@@ -96,3 +96,21 @@ test('Add-in caches panes, uses bridge port and does not attach another document
   assert.ok([...panes.values()].every(p => p.Visible && p.url.startsWith('http://127.0.0.1:18777/addon/taskpane.html')));
   assert.equal(new URL([...panes.values()][1].url).searchParams.get('page'), 'vars');
 });
+
+test('bound execution supports an unsaved active document without a collection and rejects a missing identity', async () => {
+  for (const [host, activeKey, type] of [['et', 'ActiveWorkbook', 'spreadsheet'], ['wps', 'ActiveDocument', 'writer'], ['wpp', 'ActivePresentation', 'presentation']]) {
+    const native = { Name: '未保存', marker: type };
+    const app = { [activeKey]: native };
+    const h = inspectHost(app, host);
+    const execute = async documentKey => {
+      await h.handlers.message({ data: JSON.stringify({ type: 'request', method: 'execute', id: 'bound', documentKey,
+        code: 'return { name: wpsDocument.Name, marker: wpsDocument.marker };' }) });
+      return h.sent.at(-1).payload;
+    };
+    assert.deepEqual((await execute(`${type}:未保存`)).result, { name: '未保存', marker: type });
+    const missing = await execute(`${type}:另一个文档`);
+    assert.equal(missing.success, false);
+    assert.match(missing.error, /no longer available/);
+    assert.equal(app[activeKey], native);
+  }
+});

@@ -1,6 +1,8 @@
 # 通用 API 与事件
 
-此处汇总三个宿主对通用 `Application` 候选项的观测；WPS版本/平台差异会造成缺失。使用 API 前先在目标宿主通过 `wps_run_readonly_code` 检查类型。对于函数，表中只列函数存在性，参数签名不由诊断快照证明。
+此处汇总三个宿主对通用 `Application` 候选项的观测；WPS版本/平台差异会造成缺失。使用只读 API 前可在目标宿主通过 `wps_run_readonly_code` 检查类型；写操作成员的检查和调用只能放进 Render。对于函数，表中只列函数存在性，参数签名不由诊断快照证明。
+
+执行代码中的 `wpsDocument` 是按本次 documentId/绑定解析的原生文档对象，不改变活动文档。下面的 ActiveWorkbook/ActivePresentation/ActiveDocument/Selection 是历史宿主成员观测，不代表绑定目标；读写指定文档应从 `wpsDocument` 出发，选区按引用快照中的明确坐标读取。读取方法是否存在时也受只读守卫限制，不能用拼接成员名绕过拒绝。
 
 ## Application / ApiEvent 通用项
 
@@ -13,9 +15,9 @@
 | Application.StartupPath | 支持 | string | 支持 | string | 缺失 | undefined | 读取 `Application.StartupPath`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
 | Application.OperatingSystem | 支持 | string | 缺失 | undefined | 支持 | string | 读取 `Application.OperatingSystem`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
 | Application.UserName | 支持 | string | 支持 | string | 支持 | string | 读取 `Application.UserName`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
-| Application.ActiveWindow | 支持 | object | 支持 | object | 支持 | object | 读取 `Application.ActiveWindow`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
+| Application.ActiveWindow | 支持 | object | 支持 | object | 支持 | object | 活动对象的历史观测；文档操作使用 `wpsDocument`，选区按已核实的引用坐标读取。 |
 | Application.Windows | 支持 | object | 支持 | object | 支持 | object | 读取 `Application.Windows`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
-| Application.Selection | 支持 | object | 支持 | object | 缺失 | undefined | 读取 `Application.Selection`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
+| Application.Selection | 支持 | object | 支持 | object | 缺失 | undefined | 活动对象的历史观测；文档操作使用 `wpsDocument`，选区按已核实的引用坐标读取。 |
 | Application.ApiEvent | 支持 | object | 支持 | object | 支持 | object | 读取 `Application.ApiEvent`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
 | Application.CommandBars | 支持 | object | 支持 | object | 支持 | object | 读取 `Application.CommandBars`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
 | Application.COMAddIns | 支持 | null | 支持 | null | 支持 | null | 读取 `Application.COMAddIns`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
@@ -38,11 +40,11 @@
 | Application.Calculate | 支持 | function | 缺失 | undefined | 缺失 | undefined | `Application.Calculate(...)`。先确认该宿主的签名/返回值；报告只枚举到函数时不代表已执行验证。 |
 | Application.CalculateFull | 支持 | function | 缺失 | undefined | 缺失 | undefined | `Application.CalculateFull(...)`。先确认该宿主的签名/返回值；报告只枚举到函数时不代表已执行验证。 |
 | Application.Documents | 缺失 | undefined | 支持 | object | 缺失 | undefined | 读取 `Application.Documents`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
-| Application.ActiveDocument | 缺失 | undefined | 支持 | object | 缺失 | undefined | 读取 `Application.ActiveDocument`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
+| Application.ActiveDocument | 缺失 | undefined | 支持 | object | 缺失 | undefined | 活动对象的历史观测；文档操作使用 `wpsDocument`，选区按已核实的引用坐标读取。 |
 | Application.Workbooks | 支持 | object | 缺失 | undefined | 缺失 | undefined | 读取 `Application.Workbooks`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
-| Application.ActiveWorkbook | 支持 | object | 缺失 | undefined | 缺失 | undefined | 读取 `Application.ActiveWorkbook`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
+| Application.ActiveWorkbook | 支持 | object | 缺失 | undefined | 缺失 | undefined | 活动对象的历史观测；文档操作使用 `wpsDocument`，选区按已核实的引用坐标读取。 |
 | Application.Presentations | 缺失 | undefined | 缺失 | undefined | 支持 | object | 读取 `Application.Presentations`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
-| Application.ActivePresentation | 缺失 | undefined | 缺失 | undefined | 支持 | object | 读取 `Application.ActivePresentation`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
+| Application.ActivePresentation | 缺失 | undefined | 缺失 | undefined | 支持 | object | 活动对象的历史观测；文档操作使用 `wpsDocument`，选区按已核实的引用坐标读取。 |
 | Application.Slides | 缺失 | undefined | 缺失 | undefined | 缺失 | undefined | 读取 `Application.Slides`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
 | Application.Sheets | 支持 | object | 缺失 | undefined | 缺失 | undefined | 读取 `Application.Sheets`；如返回 COM/WPS 对象，仅在 Add-in 执行环境中继续访问，不要直接序列化宿主对象。 |
 | Application.AddCustomFunction | 支持 | function | 缺失 | undefined | 缺失 | undefined | `Application.AddCustomFunction(...)`。先确认该宿主的签名/返回值；报告只枚举到函数时不代表已执行验证。 |
@@ -133,7 +135,7 @@
 | SlideShowOnNext | 支持 | listener registration succeeded |
 | SlideShowOnPrevious | 支持 | listener registration succeeded |
 
-基础调用形式（需要按对应 WPS 版本确认具体签名/参数）：
+以下是 Add-in 生命周期开发的历史调用形式，不是只读查询示例。文档任务通常不需要注册监听；`wps_run_readonly_code` 与 Transform 会拒绝这些成员。需要监听时在 Add-in 实现中按对应 WPS 版本确认签名/参数：
 
 ```js
 Application.ApiEvent.AddApiEventListener('WorkbookOpen', handler);

@@ -4,16 +4,16 @@
 
 ## API 根对象与常用入口
 
-文字宿主：从 `Application.ActiveDocument` → `Content`/`Range`/`Selection` 调查文本与结构。写入段落、表格、格式必须放进 Render。
+文字宿主：`wpsDocument` 是本次调用绑定的原生 Writer 文档，从它的 `Content`/`Range`/`Tables` 调查文本与结构。选区使用引用快照中的明确范围；写入段落、表格、格式必须放进 Render。`Application.ActiveDocument` 仅代表活动文档，不能代替绑定对象。
 
 ```js
-const doc = Application.ActiveDocument;
+const doc = wpsDocument;
 return { name: doc.Name, text: doc.Content.Text };
 ```
 
 ## 显式探测结果（逐项）
 
-状态说明：`支持`=报告中的探测成功；`缺失`=成员未提供；`存在但调用失败`=存在但报告所用调用失败。
+状态说明：`支持`=报告中的探测成功；`缺失`=成员未提供；`存在但调用失败`=存在但报告所用调用失败。以下为历史报告，不能保证当前宿主可调用；只读成员可用查询检查，写操作成员的检查及调用只放进 Render，不能按表中通用建议在只读通道探测。
 
 | 组 | 探测项目 / API | 结果 | 诊断细节 | 用法/建议 |
 | --- | --- | --- | --- | --- |
@@ -24,9 +24,9 @@ return { name: doc.Name, text: doc.Content.Text };
 | common | Application.StartupPath | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.OperatingSystem | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.UserName | 支持 | string | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.ActiveWindow | 支持 | object | 演示：`return Application.ActiveWindow.View.Slide.SlideIndex;`（属性因版本而异）。 |
+| common | Application.ActiveWindow | 支持 | object | 活动窗口/选区的历史观测；绑定位置按 `wps_get_document` 或引用快照中的坐标从 `wpsDocument` 读取。 |
 | common | Application.Windows | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
-| common | Application.Selection | 支持 | object | 读取当前选区对象；表格可尝试 `Application.Selection.Address`。 |
+| common | Application.Selection | 支持 | object | 活动窗口/选区的历史观测；绑定位置按 `wps_get_document` 或引用快照中的坐标从 `wpsDocument` 读取。 |
 | common | Application.ApiEvent | 支持 | object | API 事件注册/注销；报告中“listener registration succeeded”表示注册成功，不代表具体事件参数结构已验证。 |
 | common | Application.CommandBars | 支持 | object | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.COMAddIns | 支持 | null | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
@@ -49,11 +49,11 @@ return { name: doc.Name, text: doc.Content.Text };
 | common | Application.Calculate | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.CalculateFull | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.Documents | 支持 | object | 文字：`return Application.Documents.Count;` |
-| common | Application.ActiveDocument | 支持 | object | 文字：`return Application.ActiveDocument.Name;` |
-| common | Application.Workbooks | 缺失 | undefined | 表格：`const books = Application.Workbooks; return books.Count;` |
-| common | Application.ActiveWorkbook | 缺失 | undefined | 表格：`return Application.ActiveWorkbook.Name;` |
-| common | Application.Presentations | 缺失 | undefined | 演示：`return Application.Presentations.Count;` |
-| common | Application.ActivePresentation | 缺失 | undefined | 演示：`return Application.ActivePresentation.Name;` |
+| common | Application.ActiveDocument | 支持 | object | 活动对象的历史观测；当前绑定文档使用 `wpsDocument`，不是此成员。 |
+| common | Application.Workbooks | 缺失 | undefined | 本宿主诊断中未提供；不要直接使用。若目标版本不同，可在只读守卫允许时检查成员类型。 |
+| common | Application.ActiveWorkbook | 缺失 | undefined | 活动对象的历史观测；当前绑定文档使用 `wpsDocument`，不是此成员。 |
+| common | Application.Presentations | 缺失 | undefined | 本宿主诊断中未提供；不要直接使用。若目标版本不同，可在只读守卫允许时检查成员类型。 |
+| common | Application.ActivePresentation | 缺失 | undefined | 活动对象的历史观测；当前绑定文档使用 `wpsDocument`，不是此成员。 |
 | common | Application.Slides | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.Sheets | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | common | Application.AddCustomFunction | 缺失 | undefined | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
@@ -100,16 +100,16 @@ return { name: doc.Name, text: doc.Content.Text };
 | events | DocumentSync | 存在但调用失败 | Error: DocumentSync is not a valid event name. | 事件名 `DocumentSync`：通过 API 事件接口注册监听；此诊断只检查注册结果，事件回调数据形状需在目标版本实测。 |
 | events | FileAfterSave | 支持 | listener registration succeeded | 事件名 `FileAfterSave`：通过 API 事件接口注册监听；此诊断只检查注册结果，事件回调数据形状需在目标版本实测。 |
 | wps | Application.Documents | 支持 | object | 文字：`return Application.Documents.Count;` |
-| wps | Application.ActiveDocument | 支持 | object | 文字：`return Application.ActiveDocument.Name;` |
-| wps | Application.Selection | 支持 | object | 读取当前选区对象；表格可尝试 `Application.Selection.Address`。 |
+| wps | Application.ActiveDocument | 支持 | object | 活动对象的历史观测；当前绑定文档使用 `wpsDocument`，不是此成员。 |
+| wps | Application.Selection | 支持 | object | 活动窗口/选区的历史观测；绑定位置按 `wps_get_document` 或引用快照中的坐标从 `wpsDocument` 读取。 |
 | wps | Documents.Add | 支持 | function | 文字：仅在临时/测试文档或获授权的 Render 中调用 `Application.Documents.Add()`。 |
 | wps | Create temporary document | 支持 | created | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
-| wps | Range.Text write | 支持 | — | 文字：使用 `Application.ActiveDocument.Content` 或选区 Range 读取；写入只放在 `wps_run_render` 中。 |
-| wps | Range.Font.Bold write | 支持 | — | 文字：使用 `Application.ActiveDocument.Content` 或选区 Range 读取；写入只放在 `wps_run_render` 中。 |
-| wps | Range.InsertAfter | 支持 | — | 文字：使用 `Application.ActiveDocument.Content` 或选区 Range 读取；写入只放在 `wps_run_render` 中。 |
-| wps | Tables.Add | 支持 | — | 文字：用 `Application.ActiveDocument.Tables` 遍历表格；单元格文本写入只能在 `wps_run_render` 中。 |
-| wps | Table.Cell.Range.Text write | 支持 | — | 文字：用 `Application.ActiveDocument.Tables` 遍历表格；单元格文本写入只能在 `wps_run_render` 中。 |
-| wps | Range.Select | 支持 | — | 文字：使用 `Application.ActiveDocument.Content` 或选区 Range 读取；写入只放在 `wps_run_render` 中。 |
+| wps | Range.Text write | 支持 | — | 文字：使用 `wpsDocument.Content` 或按引用坐标取得的 `wpsDocument.Range(...)`；写入只放在 `wps_run_render` 中。 |
+| wps | Range.Font.Bold write | 支持 | — | 文字：使用 `wpsDocument.Content` 或按引用坐标取得的 `wpsDocument.Range(...)`；写入只放在 `wps_run_render` 中。 |
+| wps | Range.InsertAfter | 支持 | — | 文字：使用 `wpsDocument.Content` 或按引用坐标取得的 `wpsDocument.Range(...)`；写入只放在 `wps_run_render` 中。 |
+| wps | Tables.Add | 支持 | — | 文字：用 `wpsDocument.Tables` 遍历表格；单元格文本写入只能在 `wps_run_render` 中。 |
+| wps | Table.Cell.Range.Text write | 支持 | — | 文字：用 `wpsDocument.Tables` 遍历表格；单元格文本写入只能在 `wps_run_render` 中。 |
+| wps | Range.Select | 支持 | — | 文字：使用 `wpsDocument.Content` 或按引用坐标取得的 `wpsDocument.Range(...)`；写入只放在 `wps_run_render` 中。 |
 | wps | Find.Execute | 支持 | function | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | wps | Temporary document close without save | 支持 | — | 见本节宿主状态与 `显式探测`；不确定签名时先用 `wps_run_readonly_code` 读取成员/返回类型，再在测试副本验证。 |
 | modern | Application.FileSystem | 支持 | object | FileSystem 是本机文件能力；只在明确授权的流程使用，文件写入不是文档查询。 |
@@ -124,6 +124,8 @@ return { name: doc.Name, text: doc.Content.Text };
 | modern | Application.ApiEvent | 支持 | object | API 事件注册/注销；报告中“listener registration succeeded”表示注册成功，不代表具体事件参数结构已验证。 |
 
 ## 成员目录
+
+以下对象名是诊断报告的分类标签，不是执行环境提供的变量。实际对象应从 `wpsDocument` 及其子对象取得；Application 的活动对象成员仅用于理解历史 API，不能作为绑定文档入口。
 
 下表展示诊断脚本枚举到的 API 成员。类型是当时读取到的 JavaScript 值类型；除上面的显式探测项目外，不能据此断言签名或行为经过调用验证。
 

@@ -21,6 +21,14 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
     assert.ok(resources.tools.some(t => t.name === 'read' && t.parameters.properties.path));
     assert.equal((await fetch(h.base + '/api/agent', { headers: { Origin: 'https://evil.example' } })).status, 403);
     for (const path of ['/addon/taskpane.html', '/addins/et/taskpane.js', '/addins/wpp/taskpane.css', '/addins/wps/taskpane.html']) assert.equal((await fetch(h.base + path)).status, 200);
+    for (const prefix of ['/addon', '/addins/et', '/addins/wpp', '/addins/wps']) {
+      for (const icon of ['assistant', 'variables', 'status']) {
+        const response = await fetch(`${h.base}${prefix}/ribbon-${icon}.png`);
+        assert.equal(response.status, 200);
+        assert.equal(response.headers.get('content-type'), 'image/png');
+        assert.deepEqual([...new Uint8Array(await response.arrayBuffer()).slice(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+      }
+    }
     assert.equal((await fetch(h.base + '/addins/et/taskpane.html/extra')).status, 404);
     assert.equal((await post('/api/config', h.cfg, { Origin: 'https://evil.example' })).status, 403);
     assert.equal((await fetch(h.base + '/api/config', { method: 'POST', body: '{}' })).status, 415);

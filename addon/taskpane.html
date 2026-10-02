@@ -40,10 +40,15 @@
         <div class="composer">
           <div class="mention" id="mentionPop" aria-label="选择引用"></div>
           <div class="slash-pop" id="slashPop" aria-label="斜杠命令" hidden></div>
-          <div class="editor" id="editor" role="textbox" aria-label="消息" aria-multiline="true" contenteditable="true" data-placeholder="描述你的需求，输入 / 选择命令，@ 引用文档、选区、变量或 Render…"></div>
-          <div class="composer-foot">
-            <span class="chip composer-model" id="modelChip">尚未配置模型</span><button class="send" id="sendBtn" type="button" title="发送消息">发送</button>
+          <div class="composer-editor">
+            <div class="editor" id="editor" role="textbox" aria-label="消息" aria-multiline="true" contenteditable="true" data-empty="true" data-placeholder="描述你的需求，输入 / 选择命令，@ 引用文档、选区、变量或 Render…"></div>
+            <div class="editor-placeholder" id="editorPlaceholder" aria-hidden="true">描述你的需求，输入 / 选择命令，@ 引用文档、选区、变量或 Render…</div>
           </div>
+          <button class="send" id="sendBtn" type="button" title="发送消息" aria-label="发送消息">
+            <span class="send-orbit" aria-hidden="true"></span>
+            <span class="send-face send-ready" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg><span>发送</span></span>
+            <span class="send-face send-stop" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2"/></svg><span>停止</span></span>
+          </button>
         </div>
       </div>
 

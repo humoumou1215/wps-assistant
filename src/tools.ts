@@ -579,14 +579,17 @@ export async function callTool(name: string, args: unknown, signal?: AbortSignal
   return tool.invoke(args, signal);
 }
 export function getState() {
-  return { documents: [...documents.values()].map(documentResponse), variables: state.variables.map(v => ({
-    ...v,
-    transform: { ...v.transform, sourceLocation: parseDocumentRefs(documents.get(v.transform.sourceDocumentId)?.type, v.transform.sourceRef)[0] },
-    renders: v.renders.map(r => {
-      const locations = renderLocations(r, documents.get(r.targetDocumentId)?.type);
-      return { ...r, targetLocation: locations[0], targetLocations: locations.length ? locations : undefined };
-    }),
-  })) };
+  return { documents: [...documents.values()].map(documentResponse), variables: state.variables.map(v => {
+    const sourceLocations = parseDocumentRefs(documents.get(v.transform.sourceDocumentId)?.type, v.transform.sourceRef);
+    return {
+      ...v,
+      transform: { ...v.transform, sourceLocation: sourceLocations[0], sourceLocations: sourceLocations.length ? sourceLocations : undefined },
+      renders: v.renders.map(r => {
+        const locations = renderLocations(r, documents.get(r.targetDocumentId)?.type);
+        return { ...r, targetLocation: locations[0], targetLocations: locations.length ? locations : undefined };
+      }),
+    };
+  }) };
 }
 export { APP_DIR, PORT, DATA_DIR, loadState, nextId, registerDocument, connections, documents, pending, asToolError };
 export type { Connection, AddinDocument };

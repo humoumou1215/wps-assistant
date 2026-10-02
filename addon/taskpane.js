@@ -177,18 +177,29 @@
   const modeVariables = () => V.variablesInMode(state, variableMode, online);
   const modeActions = op => V.variableActions(state, variableMode, op, online);
   function locationButton(label, variableId, documentId, location, renderId, locationIndex = 0) {
-    if (!location) return '<span title="未标注明确位置；支持表格区域、演示幻灯片/形状、文字段落/表格定位">' + esc(label) + '</span>';
-    return '<button type="button" class="location-link" data-navigate data-var="' + esc(variableId) + '"' +
-      (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' data-location-index="' + locationIndex + '" title="' +
-      esc(connected(documentId) ? '在 WPS 中定位并选中 ' + docName(documentId) + ' › ' + location.ref : '目标文档已断开，请先在 WPS 中打开') + '" ' +
-      (actionBusy || !connected(documentId) ? 'disabled' : '') + '>' + esc(label) + '</button>';
+    const registered = !!doc(documentId), available = connected(documentId) && !!location;
+    const status = !registered ? '文档未注册，暂不支持跳转' : !connected(documentId) ? '文档已断开，请先在 WPS 中打开' : !location ? '未标注明确位置，暂不支持跳转' : '在 WPS 中定位并选中 ' + docName(documentId) + ' › ' + location.ref;
+    const attributes = 'class="location-link ' + (available ? 'available' : 'unavailable') + '" title="' + esc(status) + '"';
+    if (!available) return '<span ' + attributes + '>' + esc(label) + '</span>';
+    return '<button type="button" ' + attributes + ' data-navigate data-var="' + esc(variableId) + '"' +
+      (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' data-location-index="' + locationIndex + '" ' + (actionBusy ? 'disabled' : '') + '>' + esc(label) + '</button>';
+  }
+  function locationSummary({ role, variableId, documentId, locations, ref, description, renderId }) {
+    const prefix = docName(documentId) + ' › ';
+    const links = locations?.length ? locations.map((location, index) =>
+      locationButton((index === 0 ? prefix : '') + location.ref, variableId, documentId, location, renderId, index)).join(' ')
+      : locationButton(prefix + (ref || (role === '来源' ? '未标注源区域' : '未标注写入位置')), variableId, documentId);
+    return '<span class="location-summary"><span class="location-path">' + links + '</span> <span class="location-description">' + esc(description || '未添加描述') + '</span></span>';
+  }
+  function sourceSummary(variable) {
+    const source = variable.transform;
+    return locationSummary({ role: '来源', variableId: variable.variableId, documentId: source.sourceDocumentId,
+      locations: source.sourceLocations || (source.sourceLocation ? [source.sourceLocation] : []), ref: source.sourceRef, description: variable.description });
   }
   function renderDestination(variable, render) {
-    const description = render.description || '未标注写入位置', location = render.targetLocation;
-    const locations = render.targetLocations?.length ? render.targetLocations : location ? [location] : [];
-    const link = (label, target = location, index = 0) => locationButton(label, variable.variableId, render.targetDocumentId, target, render.renderId, index);
-    if (location?.start !== undefined) return esc(description.slice(0, location.start)) + link(description.slice(location.start, location.end)) + esc(description.slice(location.end));
-    return esc(description) + (locations.length ? ' · ' + locations.map((target, index) => link(target.ref, target, index)).join(' · ') : render.targetRef ? ' · ' + link(render.targetRef) : '');
+    return locationSummary({ role: '写入', variableId: variable.variableId, documentId: render.targetDocumentId,
+      locations: render.targetLocations || (render.targetLocation ? [render.targetLocation] : []), ref: render.targetRef,
+      description: render.description, renderId: render.renderId });
   }
   function deleteButton(variableId, renderId) {
     return '<button type="button" class="act sm delete-button" data-delete data-var="' + esc(variableId) + '"' + (renderId ? ' data-render="' + esc(renderId) + '"' : '') + ' title="' + (renderId ? '删除此 Render 绑定，保留文档内容' : '删除变量及全部关联 Render，保留文档内容') + '" ' + (actionBusy || !online ? 'disabled' : '') + '>删除</button>';
@@ -236,10 +247,10 @@
     $('rerenderAll').disabled = actionBusy || !modeActions('render').length;
     $('varsList').innerHTML = list.length ? list.map(v => {
       const lastRender = v.renders.map(r => r.lastRun).filter(Boolean).sort((a, b) => b.at.localeCompare(a.at))[0];
-      const renders = v.renders.map(r => '<div class="render"><div class="rhead"><details class="render-detail" data-detail="' + esc(r.renderId) + '"><summary title="展开写入代码"><span class="tgt"><span class="t1">' + esc(docName(r.targetDocumentId)) + ' › ' + renderDestination(v, r) + '</span><span class="t2" title="' + esc(stampTitle(r.lastRun)) + '">' + esc(r.renderId) + ' · 上次写入 ' + stamp(r.lastRun) + (r.lastRun ? '（' + duration(r.lastRun.durationMs) + '）' : '') + (connected(r.targetDocumentId) ? '' : ' · 已断开') + '</span></span></summary><div class="rbody"><div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.targetRef || r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">来源变量</span><span class="v">' + esc(v.name) + ' · ' + esc(typeOf(v)) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre></div></details><div class="render-actions"><button data-op="render" data-var="' + esc(v.variableId) + '" data-render="' + esc(r.renderId) + '" title="只重写这一条 Render" ' + (actionBusy || !v.hasValue || !connected(r.targetDocumentId) ? 'disabled' : '') + '>重写</button>' + deleteButton(v.variableId, r.renderId) + '</div></div></div>').join('');
+      const renders = v.renders.map(r => '<div class="render"><div class="rhead"><details class="render-detail" data-detail="' + esc(r.renderId) + '"><summary title="展开写入代码"><span class="tgt"><span class="t1">' + renderDestination(v, r) + '</span><span class="t2" title="' + esc(stampTitle(r.lastRun)) + '">' + esc(r.renderId) + ' · 上次写入 ' + stamp(r.lastRun) + (r.lastRun ? '（' + duration(r.lastRun.durationMs) + '）' : '') + '</span></span></summary><div class="rbody"><div class="rkv"><span class="k">目标</span><span class="v">' + esc(docName(r.targetDocumentId)) + ' › ' + esc(r.targetRef || r.description || '未标注写入位置') + '</span></div><div class="rkv"><span class="k">来源变量</span><span class="v">' + esc(v.name) + ' · ' + esc(typeOf(v)) + '</span></div><div class="rkv"><span class="k">上次写入</span><span class="v">' + esc(stampTitle(r.lastRun)) + '</span></div><pre class="code">' + V.highlight(r.code) + '</pre></div></details><div class="render-actions"><button data-op="render" data-var="' + esc(v.variableId) + '" data-render="' + esc(r.renderId) + '" title="只重写这一条 Render" ' + (actionBusy || !v.hasValue || !connected(r.targetDocumentId) ? 'disabled' : '') + '>重写</button>' + deleteButton(v.variableId, r.renderId) + '</div></div></div>').join('');
       return '<article class="var" data-variable-id="' + esc(v.variableId) + '"><div class="var-head"><button class="var-toggle" data-toggle="' + esc(v.variableId) + '" aria-expanded="' + expanded.has(v.variableId) + '" title="展开当前值与 Transform">›</button><div class="mid"><div class="line1"><strong class="var-name">' + esc(v.name) + '</strong><span class="type ' + (typeof v.value === 'number' ? 'number' : 'table') + '">' + esc(typeOf(v)) + '</span><span class="sp"></span><span class="stamp" title="上次重算 ' + esc(stampTitle(v.transform.lastRun)) + '">' + stamp(v.transform.lastRun) + '</span><button class="act primary sm" data-op="transform" data-var="' + esc(v.variableId) + '" ' + (actionBusy || !connected(v.transform.sourceDocumentId) ? 'disabled' : '') + '>重算</button>' +
         (v.renders.length ? '<span class="stamp" title="上次重写 ' + esc(stampTitle(lastRender)) + '">' + stamp(lastRender) + '</span><button class="act sm" data-op="render" data-var="' + esc(v.variableId) + '" title="重写该变量下全部 Render" ' + (actionBusy || !v.hasValue || !v.renders.some(r => connected(r.targetDocumentId)) ? 'disabled' : '') + '>重写</button>' : '<span class="stamp none">尚未绑定 Render</span>') +
-        deleteButton(v.variableId) + '</div><div class="line2"><span class="path">' + locationButton('▦ ' + docName(v.transform.sourceDocumentId) + ' › ' + (v.transform.sourceRef || '未标注源区域'), v.variableId, v.transform.sourceDocumentId, v.transform.sourceLocation) + '</span><span class="dotsep">·</span><span class="desc">' + esc(v.description || '未添加描述') + (connected(v.transform.sourceDocumentId) ? '' : ' · 已断开') + '</span></div></div></div>' +
+        deleteButton(v.variableId) + '</div><div class="line2">' + sourceSummary(v) + '</div></div></div>' +
         (actionErrors.has(v.variableId) ? '<div class="action-error" role="alert">' + esc(actionErrors.get(v.variableId)) + '</div>' : '') +
         '<div class="var-renders"><div class="rl-head">Render 清单 <b>' + v.renders.length + '</b><span class="rl-tip">' + (v.renders.length ? '常驻展示 · 点 › 看代码' : '') + '</span></div>' + (renders || '<div class="render-empty">还没有绑定 Render · 在会话里描述写入目标。</div>') + '</div><details class="var-data" data-detail="' + esc(v.variableId) + '"><summary>当前值与 Transform</summary><div class="sect"><div class="sh">当前值<span class="r">' + esc(typeOf(v)) + '</span></div>' + V.valueHTML(v.value, v.hasValue) + '</div><div class="sect"><div class="sh">数据来源 · Transform<span class="r">' + esc(v.transform.transformId) + '</span></div><pre class="code">' + V.highlight(v.transform.code) + '</pre></div></details></article>';
     }).join('') : '<div class="empty-state">' + (!scope.length && variableMode === 'current' ? '没有与在线文档相关的变量，可切换到展示全部。' : scope.length ? '没有匹配的变量，请调整搜索或文档筛选。' : '还没有变量<br>在会话中描述需要提取的数据，助手会创建变量与绑定。') + '</div>';
@@ -320,6 +331,7 @@
     finally { actionBusy = false; await refresh(); renderVars(); }
   }
   $('varsList').onclick = event => {
+    if (event.target.closest('.location-link.unavailable')) { event.preventDefault(); event.stopPropagation(); return; }
     const navigation = event.target.closest('[data-navigate]');
     if (navigation) {
       event.preventDefault(); event.stopPropagation();
@@ -369,8 +381,7 @@
   function showEffective() {
     $('stNowName').textContent = config.configured ? (config.label || config.model.id) : '尚未保存配置';
     $('stNowDetail').textContent = `provider=${config.kind === 'builtin' ? 'deepseek' : 'wps-custom'}${config.kind === 'custom' ? ' · ' + config.baseUrl : ''} · model=${config.model.id} · 上下文 ${config.model.contextWindow.toLocaleString()} · 最大输出 ${config.model.maxTokens.toLocaleString()} · 思考 ${config.model.reasoning ? config.thinkingLevel : 'off'}${config.hasKey ? ' · 密钥已保存' : ' · 无密钥'}`;
-    $('modelChip').textContent = config.configured ? config.model.id : '尚未配置模型';
-    $('modelChip').title = $('modelChip').textContent;
+    syncEditorPlaceholder();
   }
   async function loadSettings(force = false) {
     const next = await api('/api/config'), changed = !config || config.revision !== next.revision; config = next; models = config.builtinModels;
@@ -590,11 +601,53 @@
     $('editor').append(document.createTextNode(text.slice(end)));
     if (refs.length && refs.every(r => !r.marker)) refs.forEach(ref => { $('editor').append(document.createTextNode(' '), chipNode(ref)); });
   }
-  $('editor').oninput = event => { if (!event.isComposing) triggerComposer(); };
-  $('editor').addEventListener('paste', e => {
-    e.preventDefault(); const text = e.clipboardData.getData('text/plain'), selection = window.getSelection();
-    if (!selection.rangeCount || !$('editor').contains(selection.anchorNode)) return;
-    const range = selection.getRangeAt(0); range.deleteContents(); const node = document.createTextNode(text); range.insertNode(node); range.setStart(node, node.length); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); triggerComposer();
+  const composerHint = $('editor').dataset.placeholder;
+  function syncEditorPlaceholder() {
+    const editor = $('editor');
+    const empty = String(!editor.textContent.replace(/[\s\u200b]/g, '') && !editor.querySelector('[data-refkey]'));
+    const hint = composerHint + ' 当前模型：' + (config?.configured ? config.model.name || config.model.id : '尚未配置');
+    if (editor.dataset.empty !== empty) editor.dataset.empty = empty;
+    if (editor.dataset.placeholder !== hint) editor.dataset.placeholder = hint;
+    if (editor.getAttribute('aria-description') !== hint) editor.setAttribute('aria-description', hint);
+    const placeholder = $('editorPlaceholder');
+    if (placeholder.textContent !== hint) placeholder.textContent = hint;
+    if (placeholder.hidden !== (empty !== 'true')) placeholder.hidden = empty !== 'true';
+  }
+  function editorRange() {
+    const editor = $('editor'), selection = window.getSelection();
+    if (selection.rangeCount) {
+      const range = selection.getRangeAt(0);
+      if (editor.contains(range.startContainer) && editor.contains(range.endContainer)) return range.cloneRange();
+    }
+    const range = document.createRange(); range.selectNodeContents(editor); range.collapse(false); return range;
+  }
+  function insertComposerText(text, range = editorRange()) {
+    if (!text) return;
+    const editor = $('editor'); editor.focus();
+    const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+    // Native insertion preserves the editor's undo history and strips pasted HTML.
+    if (!document.execCommand('insertText', false, text)) {
+      range.deleteContents(); const node = document.createTextNode(text); range.insertNode(node); range.setStartAfter(node); range.collapse(true);
+      selection.removeAllRanges(); selection.addRange(range);
+    }
+    syncEditorPlaceholder(); triggerComposer();
+  }
+  async function pasteComposerShortcut() {
+    const range = editorRange(), draft = $('editor').innerHTML;
+    if (document.execCommand('paste')) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      // Never replace a newer draft or insert into another field after an async clipboard read.
+      if ($('editor').contains(document.activeElement) && $('editor').innerHTML === draft) insertComposerText(text, range);
+    } catch { notice('无法读取剪贴板，请使用输入框右键菜单粘贴。', true); }
+  }
+  new MutationObserver(syncEditorPlaceholder).observe($('editor'), { childList: true, subtree: true, characterData: true, attributes: false });
+  syncEditorPlaceholder();
+  $('editor').oninput = event => { syncEditorPlaceholder(); if (!event.isComposing) triggerComposer(); };
+  $('editor').addEventListener('paste', event => {
+    const text = event.clipboardData?.getData('text/plain');
+    if (text === undefined) return;
+    event.preventDefault(); event.stopPropagation(); insertComposerText(text);
   });
   $('editor').addEventListener('compositionend', triggerComposer);
   $('editor').addEventListener('click', triggerComposer);
@@ -704,9 +757,12 @@
   }
   function updateSendButton() {
     const running = Boolean(controller);
-    $('sendBtn').textContent = running ? '停止' : '发送';
-    $('sendBtn').title = running ? '停止生成' : '发送消息';
-    $('sendBtn').disabled = !running && (peerBusy || commandBusy || checkingRefs);
+    const busy = Boolean(peerBusy || commandBusy || checkingRefs), button = $('sendBtn');
+    button.classList.toggle('is-running', running);
+    button.classList.toggle('is-busy', !running && busy);
+    button.title = running ? '停止生成' : busy ? '正在处理，请稍候' : '发送消息';
+    button.setAttribute('aria-label', button.title);
+    button.disabled = !running && busy;
   }
   async function history() {
     if (controller || commandBusy) return;
@@ -777,7 +833,7 @@
   async function send() {
     let input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || checkingRefs || commandBusy || $('editor').querySelector('[data-selection-mode]:disabled')) return;
     if (input.refs.some(ref => ['var', 'render'].includes(ref.kind))) {
-      checkingRefs = true; $('sendBtn').disabled = true;
+      checkingRefs = true; updateSendButton();
       try {
         // A peer may delete a definition between polls. Check before clearing
         // the draft or opening a chat stream, retaining the user's message.
@@ -788,7 +844,7 @@
         if (deleted.length) { notice('引用已删除：' + deleted.map(ref => ref.label || ref.id).join('、') + '。请点击引用上的 × 移除后再发送。', true); return; }
       } catch (error) {
         notice('无法核对变量引用：' + error.message + '。请连接本机服务后再发送。', true); return;
-      } finally { checkingRefs = false; $('sendBtn').disabled = peerBusy || !!controller; }
+      } finally { checkingRefs = false; updateSendButton(); }
       if (controller || peerBusy || commandBusy) return;
     }
     input.sessionId = currentSessionId;
@@ -830,6 +886,20 @@
   $('sendBtn').onclick = () => { if (controller) controller.abort(); else void send(); };
   $('editor').onkeydown = event => {
     if (event.isComposing || event.keyCode === 229) return;
+    if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+      event.stopPropagation();
+      // macOS reserves Control+A/C/V for other commands. Handle these explicitly
+      // while leaving Command shortcuts and Windows/Linux native editing intact.
+      if (event.ctrlKey && !event.metaKey && /Mac|iPhone|iPad/.test(navigator.platform)) {
+        const key = event.key.toLowerCase();
+        if (key === 'a') {
+          event.preventDefault(); const range = document.createRange(); range.selectNodeContents($('editor'));
+          const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range);
+        } else if (key === 'c' || key === 'x') { event.preventDefault(); document.execCommand(key === 'c' ? 'copy' : 'cut'); }
+        else if (key === 'v') { event.preventDefault(); void pasteComposerShortcut(); }
+      }
+      return;
+    }
     // Let native chip buttons handle Enter/Space without submitting the message.
     if (event.target.closest('[data-selection-mode], [data-remove-ref]')) return;
     if (!$('slashPop').hidden) {

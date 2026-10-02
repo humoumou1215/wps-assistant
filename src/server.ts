@@ -23,6 +23,7 @@ function mimeType(path: string) {
   if (path.endsWith(".css")) return "text/css; charset=utf-8";
   if (path.endsWith(".js")) return "text/javascript; charset=utf-8";
   if (path.endsWith(".xml")) return "application/xml; charset=utf-8";
+  if (path.endsWith(".png")) return "image/png";
   return "text/plain; charset=utf-8";
 }
 async function readRequestJson(req: IncomingMessage): Promise<unknown> {
@@ -64,7 +65,7 @@ async function httpHandler(req: IncomingMessage, res: ServerResponse) {
     res.end(JSON.stringify({ ok: true, connections: connections.size, documents: [...documents.values()].filter((doc) => doc.connected).length }));
     return;
   }
-  const allowedAssets = ["index.html", "main.js", "manifest.xml", "ribbon.xml", "status.html", "taskpane.html", "taskpane.css", "taskpane.js", "taskpane-view.js", "pinyin-pro.js"];
+  const allowedAssets = ["index.html", "main.js", "manifest.xml", "ribbon.xml", "status.html", "taskpane.html", "taskpane.css", "taskpane.js", "taskpane-view.js", "pinyin-pro.js", "ribbon-assistant.png", "ribbon-variables.png", "ribbon-status.png"];
   const match = /^\/(?:addon|addins\/(?:et|wpp|wps))\/(?:([^/]+))?$/.exec(url.pathname);
   const fileName = match?.[1] ?? "index.html";
   const file = match && allowedAssets.includes(fileName) ? join(APP_DIR, "addon", fileName) : undefined;

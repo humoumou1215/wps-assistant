@@ -10,10 +10,6 @@
 
 核心流程是 **Transform → Variable → Render**：保存只读提取规则，得到 JSON 值，再按已保存的规则写入目标文档。创建绑定可以由 Agent 完成；之后在变量面板执行重算或重写，直接运行规则，无需再次请求模型。设计约束见 [`docs/spec.md`](docs/spec.md)。
 
-## 一眼看懂
-
-用浏览器打开 [`docs/show-me-wps-mcp.html`](docs/show-me-wps-mcp.html)：一页了解两种使用入口、核心工具、Transform / Variable / Render、读写边界和运行日志。GitHub 的 HTML 文件页显示源代码，克隆仓库后可直接打开本地 HTML 预览。
-
 ## 环境要求
 
 - Node.js **22.19.0 或更高版本**，与 `package.json` 的 `engines` 一致。
@@ -244,8 +240,7 @@ npm run test:wps-writer-live
 - 渐进式披露技能：`skills/wps-api/SKILL.md`（WorkBuddy 用户级安装位置为 `~/.workbuddy/skills/wps-api/`，需手工复制，仓库内没有安装脚本）
 - 每个报告 API 的成员清单、探测结果和使用说明：`skills/wps-api/references/`
 - 重新从诊断报告包生成 API 技能：`python3 scripts/generate-wps-api-skill.py <reports.zip>`；报告包需另行提供，当前检出的仓库不附带该文件。
-- 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。一次 macOS 联调记录见 [`docs/macos-codex-validation.md`](docs/macos-codex-validation.md)：其中 Codex 只是当时使用的测试客户端/工具，报告中的客户端限制不构成项目运行依赖。
-- 2026-09-29 的真实 WPS 冒烟记录：[ET/WPP](docs/macos-live-et-wpp-smoke-2026-09-29.md)、[Writer](docs/macos-live-writer-smoke-2026-09-29.md)。
+- 提供的三个诊断报告采集自 UOS Linux ARM64 / WPS 12.0 Build 26885；它们不是当前 macOS 的兼容性证明。macOS 联调摘要见 [`skills/wps-api/references/macos-validation.md`](skills/wps-api/references/macos-validation.md)。Codex 只是当时使用的测试客户端/工具，客户端限制不构成项目运行依赖。
 
 ## 代码导航
 
@@ -260,7 +255,5 @@ npm run test:wps-writer-live
 | `addon/` | WPS 宿主桥接、Ribbon、助手面板和视图渲染 |
 | `skills/wps-api/` | 自动安装到内嵌 Agent，同时可供外部 Agent 使用的 WPS API 技能与参考资料 |
 | `scripts/` / `test/` | 安装、重启、调试、常规与真实 WPS 测试 |
-
-浏览器验证记录见 [初期审计与验收报告](docs/ui-audit-and-validation.md)、[2026-09-30 规范对照检查](docs/ui-spec-audit-2026-09-30.md)和[修复复查记录](docs/ui-fix-validation-2026-09-30.md)。
 
 办公验证素材见 [`test/sample/`](test/sample/)：包含四轮 Excel 项目交付台账、PPT 周会演示、Word 周报及 [《WPS-Assistant 能力测试操作手册》](test/sample/WPS-Assistant能力测试操作手册.md)。请按操作手册使用这些固定 Office 样例，验证数据更新、跨文件重写和连续多轮操作。

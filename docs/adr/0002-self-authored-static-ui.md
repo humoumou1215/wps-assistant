@@ -4,7 +4,7 @@ status: accepted
 
 # 任务窗格界面自研静态页面，不引入前端框架与组件包
 
-任务窗格（会话 + 变量管理）用一份手写的 HTML/CSS/JS 静态页面实现，由现有 HTTP 服务同源托管。**不**引入 React / Vue / Vite 之类的框架与构建链，**也不**采用 pi 官方的 `@earendil-works/pi-web-ui` 组件包。`docs/ui-prototype.html`（2062 行：CSS 600 / HTML 134 / JS 1318）拆成 `addon/taskpane.{html,css,js}` 即成品骨架，不重画。
+任务窗格（会话 + 变量管理）用一份手写的 HTML/CSS/JS 静态页面实现，由现有 HTTP 服务同源托管。**不**引入 React / Vue / Vite 之类的框架与构建链，**也不**采用 pi 官方的 `@earendil-works/pi-web-ui` 组件包。最初的静态原型拆成 `addon/taskpane.{html,css,js}` 作为成品骨架，不重画。
 
 ## Considered Options
 
@@ -16,6 +16,6 @@ status: accepted
 
 ## Consequences
 
-- **上游界面改版不会自动跟进。** 设计语言靠 `docs/ui-prototype.html` 手工对齐 pi-web；对上游的每一次跟进都是一次显式改动，而不是版本号 +1。
+- **上游界面改版不会自动跟进。** 设计语言靠 `addon/taskpane.{html,css,js}` 手工对齐 pi-web；对上游的每一次跟进都是一次显式改动，而不是版本号 +1。
 - **`addon/` 保持「拷进去就能跑」的形态**：无 `node_modules`、无打包产物、无 sourcemap。代价是 CSS 600 行与 JS 1300 行要自己维护。
 - 这条决策与 ADR-0001（服务端内嵌 pi）是配套的：正因为 Agent 在服务端，界面才只剩「渲染事件 + 触发动作」两件事，手写静态页足够。

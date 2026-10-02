@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { APP_DIR, callTool, getState, PORT, deleteVariableDefinition, navigateVariableLocation, asToolError } from "./tools.js";
 import { publicConfig, parseConfig, saveConfig, redact } from "./config.js";
-import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema, chatHistory, agentResources } from "./agent.js";
+import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema, chatHistory, agentResources, commandCatalog, executeCommand, listChatSessions, sessionAction, assertChatSession } from "./agent.js";
 import { logger } from "./logger.js";
 import { resolveSelectionReference } from "./references.js";
 
@@ -37,6 +37,23 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
     if (path === "/api/state" && req.method === "GET") { json(res, 200, { ...getState(), pluginVersion }); return; }
     if (path === "/api/config" && req.method === "GET") { json(res, 200, { ...publicConfig(), builtinModels: await builtinModels() }); return; }
     if (path === "/api/chat" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(await chatHistory())))); return; }
+    if (path === "/api/commands" && req.method === "GET") { json(res, 200, await commandCatalog()); return; }
+    if (path === "/api/sessions" && req.method === "GET") { json(res, 200, await listChatSessions()); return; }
+    if (["/api/commands", "/api/sessions"].includes(path) && req.method === "POST") {
+      if (saving || isChatBusy()) { json(res, 409, { error: "会话正在运行，请先停止或等待完成" }); return; }
+      saving = true;
+      try {
+        const input = await readJson(req);
+        if (path === "/api/commands") {
+          const { name, args, sessionId } = z.object({ name: z.string().min(1), args: z.string().max(20000).default(""), sessionId: z.string().optional() }).parse(input);
+          json(res, 200, await executeCommand(name, args, sessionId));
+        } else {
+          const { op, id, sessionId } = z.object({ op: z.enum(["new", "select", "archive", "restore", "delete"]), id: z.string().min(1).optional(), sessionId: z.string().optional() }).parse(input);
+          json(res, 200, await sessionAction(op, id, sessionId));
+        }
+      } finally { saving = false; }
+      return;
+    }
     if (path === "/api/agent" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(await agentResources())))); return; }
     if (path === "/api/ref-resolve" && req.method === "POST") {
       json(res, 200, await resolveSelectionReference(await readJson(req))); return;
@@ -129,6 +146,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
     if (path === "/api/chat" && req.method === "POST") {
       const input = chatSchema.parse(await readJson(req));
       if (isChatBusy() || saving) { json(res, 409, { error: "另一个轮次或配置操作正在运行" }); return; }
+      await assertChatSession(input.sessionId);
       const controller = new AbortController();
       res.on("close", () => controller.abort());
       res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-store", connection: "keep-alive", "x-accel-buffering": "no" });

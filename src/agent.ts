@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { ModelRuntime, createAgentSession, SessionManager, SettingsManager, DefaultResourceLoader, type AgentSession, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, createAgentSession, SettingsManager, DefaultResourceLoader, type AgentSession, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { callTool, toolDefinitions, getState, refreshDocument } from "./tools.js";
 import { getConfig, type ModelConfig } from "./config.js";
 import { createGuardBudget } from "./guard-budget.js";
@@ -9,10 +9,10 @@ import { randomUUID } from "node:crypto";
 import { logger } from "./logger.js";
 import { AGENT_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, createSkillReadTool, readSkillContent } from "./agent-skills.js";
 import { resolveSelectionReference } from "./references.js";
+import { chatSessionManager, listChatSessions, changeChatSession, autoCompactionEnabled, setAutoCompaction } from "./chat-sessions.js";
 import { normalizeToolMessages } from "./tool-names.js";
 
 const agentDir = AGENT_DIR;
-const sessionDir = join(agentDir, "sessions");
 const systemPrompt = `你是 WPS 文档助手，使用中文回答。通过提供的 WPS 工具读取文档、创建或修改规则、重算或重写。
 技能列表中的技能已安装；当任务匹配技能描述时，先用 read 读取 SKILL.md，再按需读取技能目录内的参考资料。read 仅用于技能资料，不能读取其他本机文件。MCP 与本会话使用相同的 wps_ 前缀、小写下划线工具名，直接使用技能中的名称。
 技能若要求调用本机检查脚本，本会话没有终端工具；以 WPS 工具自动执行的只读守卫校验为准，不要声称已运行离线脚本。
@@ -83,6 +83,7 @@ export async function testConfig(cfg: ModelConfig) {
 
 export const chatSchema = z.object({
   message: z.string().trim().min(1).max(20000),
+  sessionId: z.string().optional(),
   refs: z.array(z.object({ kind: z.enum(["sel", "doc", "var", "render"]), id: z.string().min(1), label: z.string().max(1000).optional(), marker: z.string().max(40).optional(), selectionMode: z.enum(["current", "fixed"]).optional(), selection: z.unknown().optional(), activeSheet: z.string().optional(), activeSlide: z.number().optional() })).max(30).default([]),
 });
 export async function resolveRefs(refs: z.infer<typeof chatSchema>["refs"]) {
@@ -138,7 +139,9 @@ async function createSession(version: number) {
     }),
   }));
   customTools.push(createSkillReadTool(loader.getSkills().skills));
-  const { session: created } = await createAgentSession({ cwd: agentDir, agentDir, modelRuntime: runtime, model, thinkingLevel: cfg.thinkingLevel, noTools: "builtin", customTools, resourceLoader: loader, sessionManager: SessionManager.continueRecent(agentDir, sessionDir), settingsManager });
+  const manager = await chatSessionManager();
+  settingsManager.setCompactionEnabled(autoCompactionEnabled());
+  const { session: created } = await createAgentSession({ cwd: agentDir, agentDir, modelRuntime: runtime, model, thinkingLevel: cfg.thinkingLevel, noTools: "builtin", customTools, resourceLoader: loader, sessionManager: manager, settingsManager });
   // Translate historical call names in model context without rewriting saved conversation records.
   const transformContext = created.agent.transformContext;
   created.agent.transformContext = async (messages, signal) => normalizeToolMessages(transformContext ? await transformContext(messages, signal) : messages);
@@ -169,7 +172,6 @@ export async function agentResources() {
     tools: active.getAllTools().filter(tool => enabled.has(tool.name)).map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
   };
 }
-export function resetAgent() { if (busy) throw new Error("会话正在运行，请先停止"); sessionVersion++; sessionPending = undefined; session?.dispose(); session = undefined; guard.reset(); }
 function sessionStatistics(active: AgentSession) {
   // The SDK counts the full session log, including usage before compaction.
   const stats = active.getSessionStats();
@@ -191,12 +193,91 @@ function sessionStatistics(active: AgentSession) {
     costComplete: !hasUnpricedUsage,
   };
 }
+function disposeSession() { sessionVersion++; sessionPending = undefined; session?.dispose(); session = undefined; guard.reset(); }
+export function resetAgent() { if (busy) throw new Error("会话正在运行，请先停止"); disposeSession(); }
 export async function chatHistory() {
   const active = await ensureSession();
   const manager = active.sessionManager;
-  const messages = active.messages;
+  // The UI keeps the complete transcript even when model context is compacted.
+  const messages = manager.getBranch().flatMap(entry => entry.type === "message" ? [entry.message] : []);
   const turns = manager.getBranch().filter(e => e.type === "custom" && e.customType === "wps.ui.turn").map(e => e.type === "custom" ? e.data : undefined);
-  return { busy, messages: messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult"), turns, contextUsage: active.getContextUsage(), sessionStats: sessionStatistics(active) };
+  return { busy, sessionId: manager.getSessionId(), sessionName: manager.getSessionName(), messages: messages.filter(m => m.role === "user" || m.role === "assistant" || m.role === "toolResult"), turns, contextUsage: active.getContextUsage(), sessionStats: sessionStatistics(active) };
+}
+
+export async function assertChatSession(id?: string) {
+  if (id && id !== (await chatSessionManager()).getSessionId()) throw new Error("会话已在另一个面板切换，请同步后重试");
+}
+export async function sessionAction(op: Parameters<typeof changeChatSession>[0], id?: string, expectedSessionId?: string) {
+  if (busy) throw new Error("会话正在运行，请先停止");
+  busy = true;
+  try {
+    await assertChatSession(expectedSessionId);
+    const before = (await chatSessionManager()).getSessionId();
+    const result = await changeChatSession(op, id);
+    if (result.activeId !== before) disposeSession();
+    return result;
+  } finally { busy = false; }
+}
+export { listChatSessions };
+
+const builtinCommands = [
+  { name: "auto-compact", description: "切换自动上下文压缩（全局设置）" },
+  { name: "clone", description: "将当前会话复制为独立新会话" },
+  { name: "compact", description: "压缩上下文，可附加说明", args: true },
+  { name: "copy", description: "复制最后一条助手消息" },
+  { name: "name", description: "设置会话显示名称", args: true },
+  { name: "reload", description: "重新加载已安装技能和会话工具" },
+  { name: "session", description: "显示当前会话信息与 Token 统计" },
+  { name: "sessions", description: "选择、归档、删除或新建会话" },
+  { name: "new", description: "新建空白会话" },
+];
+export async function commandCatalog() {
+  const loader = await initializeAgentResources();
+  return { commands: [
+    ...builtinCommands.map(command => ({ ...command, group: "内置" })),
+    ...loader.getSkills().skills.map(skill => ({ name: `skill:${skill.name}`, description: skill.description, group: "技能", args: true, manualOnly: skill.disableModelInvocation })),
+  ] };
+}
+export async function executeCommand(name: string, args = "", expectedSessionId?: string) {
+  if (["new", "clone"].includes(name)) return { ...(await sessionAction(name as "new" | "clone", undefined, expectedSessionId)), message: name === "new" ? "已新建会话。" : "已复制为独立新会话。" };
+  if (!builtinCommands.some(command => command.name === name) || ["copy", "sessions"].includes(name)) throw new Error("不支持的会话命令");
+  if (busy) throw new Error("会话正在运行，请先停止");
+  busy = true;
+  try {
+    await assertChatSession(expectedSessionId);
+    if (name === "reload") {
+      disposeSession(); resourcesPending = undefined;
+      await initializeAgentResources();
+      return { message: "已重新加载技能和工具。" };
+    }
+    const active = await ensureSession();
+    if (name === "name") {
+      if (!args.trim()) throw new Error("请在 /name 后输入会话名称");
+      active.setSessionName(args.trim());
+      return { message: `会话已命名为「${args.trim()}」。` };
+    }
+    if (name === "auto-compact") {
+      const enabled = !autoCompactionEnabled();
+      await setAutoCompaction(enabled); active.setAutoCompactionEnabled(enabled);
+      return { message: `自动上下文压缩已${enabled ? "开启" : "关闭"}。` };
+    }
+    if (name === "compact") {
+      const cfg = getConfig();
+      if (cfg.kind === "builtin" && !cfg.apiKey) throw new Error("请先在设置中填写 API Key");
+      const deadline = setTimeout(() => active.abortCompaction(), 5 * 60_000);
+      try { await active.compact(args || undefined); }
+      catch (error) {
+        const message = error instanceof Error ? error.message : "上下文压缩失败";
+        if (message.includes("Nothing to compact")) throw new Error("当前会话内容较少，无需压缩上下文");
+        if (message.includes("Already compacted")) throw new Error("当前上下文已经压缩");
+        throw error;
+      }
+      finally { clearTimeout(deadline); }
+      return { message: "上下文压缩完成。" };
+    }
+    const stats = active.getSessionStats();
+    return { message: `当前会话：${active.sessionName || "未命名"}\nID：${active.sessionId}\n消息：${stats.userMessages} 条用户消息 · ${stats.assistantMessages} 条助手消息\n累计 Token：${stats.tokens.total.toLocaleString()}\n自动压缩：${autoCompactionEnabled() ? "开启" : "关闭"}` };
+  } finally { busy = false; }
 }
 
 function toolFacts(toolName: string, args: any) {
@@ -224,11 +305,17 @@ async function runChatTurn(input: z.infer<typeof chatSchema>, emit: (event: stri
   let unsubscribe: (() => void) | undefined;
   let abort: (() => void) | undefined;
   let active: AgentSession | undefined;
-  const metadata: any = { startedAt: Date.now(), refs: input.refs, tools: {}, messageOrders: [], usage: { input: 0, output: 0, totalTokens: 0 }, calls: 0 };
+  const metadata: any = { startedAt: Date.now(), message: input.message, refs: input.refs, tools: {}, messageOrders: [], usage: { input: 0, output: 0, totalTokens: 0 }, calls: 0 };
   let timedOut = false;
   logger.info("chat.start", { model: getConfig().model.id, refCount: input.refs.length });
   const deadline = setTimeout(() => { timedOut = true; logger.warn("chat.timeout", { timeoutMs: 5 * 60_000 }); void session?.abort(); }, 5 * 60_000);
   try {
+    await assertChatSession(input.sessionId);
+    if (input.message.startsWith("/")) {
+      const command = input.message.split(/\s/)[0]!.slice(1);
+      const catalog = await commandCatalog();
+      if (!catalog.commands.some(c => c.name === command && c.group === "技能")) throw new Error("未知命令，请输入 / 选择命令");
+    }
     const cfg = getConfig();
     if (cfg.kind === "builtin" && !cfg.apiKey) throw new Error("请先在设置中填写 API Key");
     const refs = await resolveRefs(input.refs);

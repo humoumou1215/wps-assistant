@@ -173,7 +173,7 @@
         refs = refs.map(r => ({ ...r, id: r.id || (r.kind === 'doc' || r.kind === 'sel' ? r.documentId : r.kind === 'render' ? r.renderId : r.variableId), label: r.label || r.name || r.renderId || r.variableId || r.documentId }));
         turn = newTurn(at >= 0 ? raw.slice(0, at) : raw, refs, item.timestamp); turns.push(turn);
         messageIndex = 0;
-        const meta = metas.get(turn.key); if (meta) { turn.refs = meta.refs || refs; Object.assign(turn, { usage: meta.usage, contextUsage: meta.contextUsage, stopped: meta.stopped, failed: meta.failed, calls: meta.calls, stopReason: meta.stopReason }); }
+        const meta = metas.get(turn.key); if (meta) { turn.user = meta.message ?? turn.user; turn.refs = meta.refs || refs; Object.assign(turn, { usage: meta.usage, contextUsage: meta.contextUsage, stopped: meta.stopped, failed: meta.failed, calls: meta.calls, stopReason: meta.stopReason }); }
       }
       if (!turn) continue;
       if (item.role === 'assistant') {

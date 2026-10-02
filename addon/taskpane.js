@@ -17,6 +17,8 @@
   try { if (localStorage.getItem(variableModeKey) === 'all') variableMode = 'all'; } catch {}
   let turns = [], peerBusy = false, lastHistory = '', syncing, settingsDirty = false, configConflict = false, formRevision, settingsBusy = false, followTail = true;
   const actionErrors = new Map(), composerRefs = new Map();
+  let currentSessionId, commandBusy = false, historyRequest = 0;
+  const sessionDrafts = new Map();
   let refSerial = 0;
   const duration = ms => ms === undefined ? '历史耗时未记录' : ms < 1000 ? ms + ' ms' : (ms / 1000).toFixed(1) + 's';
   const clock = at => new Date(at).toLocaleTimeString('zh-CN', { hour12: false });
@@ -57,6 +59,7 @@
     $('agentContent').innerHTML = '<div class="agent-browser"><nav class="agent-list" aria-label="' + (agentView === 'tools' ? '工具列表' : '技能列表') + '">' + items.map(item => '<button type="button" data-agent-item="' + esc(item.name) + '" aria-pressed="' + (item.name === selected.name) + '" aria-controls="agentDetail">' + esc(item.name) + '</button>').join('') + '</nav><div class="agent-detail" id="agentDetail" tabindex="0" role="region" aria-label="' + esc(selected.name) + ' 详情">' + (agentView === 'tools' ? V.agentToolHTML(selected) : V.agentSkillHTML(selected, agentData.skillDirectory, agentData.diagnostics)) + '</div></div>';
   }
   async function openAgentResources(view, trigger) {
+    if (!$('sessionMenu').hidden) closeSessionMenu(false);
     if (!$('agentPanel').hidden && agentView === view) { closeAgentResources(); return; }
     agentReturnFocus = trigger || document.activeElement;
     const opening = $('agentPanel').hidden;
@@ -85,7 +88,72 @@
     $('agentContent').querySelector('.agent-list').scrollTop = listScroll;
     [...$('agentContent').querySelectorAll('[data-agent-item]')].find(item => item.dataset.agentItem === agentSelection[agentView])?.focus();
   };
-  $('agentClose').onclick = closeAgentResources;
+  $('agentClose').onclick = () => { if (!$('sessionMenu').hidden) closeSessionMenu(); else closeAgentResources(); };
+  let sessionData, sessionArchived = false, pendingSessionDelete, sessionRequest = 0, sessionReturnFocus, sessionSelection;
+  const systemButton = document.querySelector('[data-agent-view="system"]');
+  const sessionButton = $('sessionBtn');
+  systemButton.title = '查看系统提示词';
+  function closeSessionMenu(restoreFocus = true) {
+    sessionRequest++; $('sessionMenu').hidden = true; $('agentClose').hidden = $('agentPanel').hidden; pendingSessionDelete = undefined;
+    sessionButton.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) sessionReturnFocus?.focus();
+  }
+  function renderSessionMenu() {
+    const sessions = (sessionData?.sessions || []).filter(item => item.archived === sessionArchived);
+    const selected = sessions.find(item => item.id === sessionSelection) || sessions.find(item => item.id === sessionData?.activeId) || sessions[0];
+    sessionSelection = selected?.id;
+    const disabled = commandBusy || controller || peerBusy ? ' disabled' : '';
+    const toolbar = '<nav class="session-toolbar" aria-label="会话分类"><button type="button" class="mini" data-session-tab="active" aria-pressed="' + !sessionArchived + '">进行中</button><button type="button" class="mini" data-session-tab="archived" aria-pressed="' + sessionArchived + '">已归档</button><button type="button" class="mini" data-session-op="new"' + disabled + '>＋ 新建会话</button></nav>';
+    let content;
+    if (!sessionData) content = '<div class="agent-empty">正在读取会话…</div>';
+    else if (!selected) content = '<div class="agent-empty">' + (sessionArchived ? '暂无已归档会话' : '暂无会话') + '</div>';
+    else {
+      const id = esc(selected.id), isCurrent = selected.id === sessionData.activeId;
+      content = '<div class="agent-browser session-browser"><nav class="agent-list" aria-label="会话列表">' + sessions.map(item => '<button type="button" data-session-item="' + esc(item.id) + '" aria-pressed="' + (item.id === selected.id) + '" aria-controls="sessionDetail"><span>' + (item.id === sessionData.activeId ? '● ' : '') + esc(item.name) + '</span><small class="session-meta">' + item.messageCount + ' 条消息</small></button>').join('') + '</nav><div class="agent-detail" id="sessionDetail" role="region" aria-label="会话详情" tabindex="0"><section><h3>会话</h3><p class="agent-description">' + esc(selected.name) + '</p></section><section><h3>信息</h3><dl class="session-facts"><dt>状态</dt><dd>' + (selected.archived ? '已归档' : isCurrent ? '当前会话' : '进行中') + '</dd><dt>消息</dt><dd>' + selected.messageCount + ' 条</dd><dt>创建</dt><dd>' + esc(new Date(selected.created).toLocaleString('zh-CN', { hour12: false })) + '</dd><dt>更新</dt><dd>' + esc(new Date(selected.modified).toLocaleString('zh-CN', { hour12: false })) + '</dd><dt>ID</dt><dd>' + id + '</dd></dl></section><section class="session-operations"><h3>操作</h3>' + (!selected.archived && !isCurrent ? '<button type="button" class="mini" data-session-op="select" data-session-id="' + id + '"' + disabled + '>选择会话</button> ' : '') + '<button type="button" class="mini" data-session-op="' + (selected.archived ? 'restore' : 'archive') + '" data-session-id="' + id + '"' + disabled + '>' + (selected.archived ? '恢复' : '归档') + '</button> <button type="button" class="mini session-delete ' + (pendingSessionDelete === selected.id ? 'confirm' : '') + '" data-session-op="delete" data-session-id="' + id + '" aria-expanded="' + (pendingSessionDelete === selected.id) + '"' + (pendingSessionDelete === selected.id ? ' aria-describedby="sessionDeleteTip"' : '') + disabled + '>' + (pendingSessionDelete === selected.id ? '确认' : '删除') + '</button>' + (pendingSessionDelete === selected.id ? '<p class="session-delete-tip" id="sessionDeleteTip">将永久删除此会话记录。再次点击「确认」删除。</p>' : '') + '</section></div></div>';
+    }
+    $('sessionMenu').innerHTML = '<div class="agent-content session-content">' + toolbar + content + '</div>';
+  }
+  async function openSessionMenu(trigger = sessionButton) {
+    if (!$('agentPanel').hidden) closeAgentResources();
+    closeMention(); closeSlash(); pendingSessionDelete = undefined; sessionArchived = false; sessionSelection = undefined;
+    sessionReturnFocus = trigger; $('sessionMenu').hidden = false; $('agentClose').hidden = false; sessionData = undefined;
+    sessionButton.setAttribute('aria-expanded', 'true');
+    renderSessionMenu(); $('agentClose').focus();
+    const request = ++sessionRequest;
+    try { const value = await api('/api/sessions'); if (request === sessionRequest && !$('sessionMenu').hidden) { sessionData = value; renderSessionMenu(); $('agentClose').focus(); } }
+    catch (error) { if (request === sessionRequest) notice(error.message, true); }
+  }
+  sessionButton.onclick = () => { if ($('sessionMenu').hidden) void openSessionMenu(sessionButton); else closeSessionMenu(); };
+  sessionButton.addEventListener('contextmenu', event => { event.preventDefault(); void openSessionMenu(sessionButton); });
+  sessionButton.addEventListener('keydown', event => { if (event.key === 'ContextMenu' || (event.shiftKey && event.key === 'F10')) { event.preventDefault(); void openSessionMenu(sessionButton); } });
+  async function mutateSession(op, id) {
+    if (commandBusy || controller || peerBusy) return;
+    commandBusy = true; historyRequest++; updateSendButton(); renderSessionMenu();
+    try {
+      sessionData = await api('/api/sessions', { op, id, sessionId: currentSessionId });
+      pendingSessionDelete = undefined;
+      notice({ new: '已新建会话。', select: '已切换会话。', archive: '会话已归档。', restore: '会话已恢复。', delete: '会话已删除。' }[op]);
+    } catch (error) { notice(error.message, true); }
+    finally { commandBusy = false; updateSendButton(); await history().catch(error => notice(error.message, true)); if (!$('sessionMenu').hidden) { renderSessionMenu(); $('agentClose').focus(); } }
+  }
+  $('sessionMenu').onclick = event => {
+    const item = event.target.closest('[data-session-item]');
+    if (item) {
+      sessionSelection = item.dataset.sessionItem; pendingSessionDelete = undefined;
+      if (sessionArchived) { renderSessionMenu(); $('sessionMenu').querySelector('[data-session-item="' + sessionSelection + '"]').focus(); }
+      else void mutateSession('select', sessionSelection);
+      return;
+    }
+    const tab = event.target.closest('[data-session-tab]');
+    if (tab) { sessionArchived = tab.dataset.sessionTab === 'archived'; pendingSessionDelete = undefined; renderSessionMenu(); $('sessionMenu').querySelector('[data-session-tab="' + tab.dataset.sessionTab + '"]').focus(); return; }
+    const button = event.target.closest('[data-session-op]'); if (!button || button.disabled) return;
+    const { sessionOp: op, sessionId: id } = button.dataset;
+    if (op === 'delete' && pendingSessionDelete !== id) { pendingSessionDelete = id; renderSessionMenu(); $('sessionMenu').querySelector('[data-session-op="delete"][data-session-id="' + id + '"]').focus(); return; }
+    void mutateSession(op, id);
+  };
+  document.addEventListener('keydown', event => {
+    if (!$('sessionMenu').hidden && event.key === 'Escape' && $('panel-chat').contains(document.activeElement)) { event.preventDefault(); closeSessionMenu(); }
+  });
   document.addEventListener('keydown', event => {
     if (!$('agentPanel').hidden && event.key === 'Escape' && $('panel-chat').contains(document.activeElement)) { event.preventDefault(); closeAgentResources(); }
   });
@@ -382,6 +450,53 @@
     $('mentionPop').querySelector('.mi.act')?.scrollIntoView({ block: 'nearest' });
   }
   function closeMention() { $('mentionPop').classList.remove('show'); mentionRange = undefined; }
+  let slashCommands, slashLoading, slashItems = [], slashIndex = 0, slashRange, slashQuery = '', slashError;
+  function closeSlash() {
+    $('slashPop').hidden = true; slashRange = undefined;
+    $('editor').removeAttribute('aria-controls'); $('editor').removeAttribute('aria-activedescendant');
+    $('editor').setAttribute('aria-expanded', 'false');
+  }
+  async function loadSlashCommands() {
+    if (slashCommands) return;
+    if (!slashLoading) slashLoading = api('/api/commands').then(value => { slashCommands = value.commands; slashError = undefined; })
+      .catch(error => { slashError = error.message; }).finally(() => { slashLoading = undefined; });
+    await slashLoading;
+    if (!$('slashPop').hidden) renderSlash();
+  }
+  function renderSlash() {
+    slashItems = (slashCommands || []).filter(c => V.matches({ label: '/' + c.name, sub: c.description }, slashQuery, globalThis.pinyinPro?.pinyin));
+    slashIndex = Math.max(0, Math.min(slashIndex, slashItems.length - 1));
+    $('slashPop').innerHTML = '<div class="slash-head"><span>斜杠命令 · ' + slashItems.length + ' 个命令</span><span>↑↓ 选择 · Tab / Enter · Esc</span></div><div class="slash-list" id="slashList" role="listbox" aria-label="可用命令">' +
+      (!slashCommands ? '<div class="slash-empty">' + esc(slashError || '正在加载命令…') + '</div>' : slashItems.length ? ['内置', '技能'].map(group => {
+        const items = slashItems.filter(c => c.group === group); if (!items.length) return '';
+        return '<div class="slash-group"><span>' + group + '</span><span>' + items.length + '</span></div><div class="slash-grid">' + items.map(c => {
+          const i = slashItems.indexOf(c);
+          return '<button type="button" class="slash-item ' + (i === slashIndex ? 'selected' : '') + '" id="slash-option-' + i + '" role="option" aria-selected="' + (i === slashIndex) + '" data-slash="' + i + '" title="' + esc(c.description) + '"><code>/' + esc(c.name) + '</code>' + (c.manualOnly ? ' <span class="chip">仅手动</span>' : '') + '<small>' + esc(c.description) + '</small></button>';
+        }).join('') + '</div>';
+      }).join('') : '<div class="slash-empty">没有匹配的命令</div>') + '</div>';
+    $('editor').setAttribute('aria-controls', 'slashList'); $('editor').setAttribute('aria-expanded', 'true');
+    if (slashItems.length) $('editor').setAttribute('aria-activedescendant', 'slash-option-' + slashIndex);
+    else $('editor').removeAttribute('aria-activedescendant');
+    $('slashPop').querySelector('.selected')?.scrollIntoView({ block: 'nearest' });
+  }
+  function triggerSlash() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed || !$('editor').contains(selection.anchorNode)) { closeSlash(); return false; }
+    const at = selection.getRangeAt(0), range = document.createRange(); range.selectNodeContents($('editor')); range.setEnd(at.startContainer, at.startOffset);
+    const match = range.toString().match(/^\s*\/([^\s/\u00a0]*)$/);
+    if (!match || range.cloneContents().querySelector('[data-refkey]')) { closeSlash(); return false; }
+    if (slashQuery !== match[1]) slashIndex = 0;
+    slashQuery = match[1]; slashRange = range; closeMention(); $('slashPop').hidden = false; renderSlash(); void loadSlashCommands(); return true;
+  }
+  function triggerComposer() { if (!triggerSlash()) triggerMention(); }
+  function selectSlash(command) {
+    if (!command || !slashRange) return;
+    const range = slashRange.cloneRange(); range.deleteContents();
+    const node = document.createTextNode('/' + command.name + ' '); range.insertNode(node); range.setStart(node, node.length); range.collapse(true);
+    $('editor').focus(); const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(range); closeSlash();
+  }
+  $('slashPop').addEventListener('mousedown', event => event.preventDefault());
+  $('slashPop').onclick = event => { const button = event.target.closest('[data-slash]'); if (button) selectSlash(slashItems[Number(button.dataset.slash)]); };
   function triggerMention() {
     const info = beforeCaret(), match = info?.text.match(/@([^\s@\u00a0]*)$/);
     if (!match) { closeMention(); return; }
@@ -474,19 +589,15 @@
     $('editor').append(document.createTextNode(text.slice(end)));
     if (refs.length && refs.every(r => !r.marker)) refs.forEach(ref => { $('editor').append(document.createTextNode(' '), chipNode(ref)); });
   }
-  $('atBtn').onclick = () => {
-    if ($('mentionPop').classList.contains('show')) { closeMention(); return; }
-    $('editor').focus(); const selection = window.getSelection(); let range;
-    if (selection.rangeCount && $('editor').contains(selection.anchorNode)) range = selection.getRangeAt(0); else { range = document.createRange(); range.selectNodeContents($('editor')); range.collapse(false); }
-    range.deleteContents(); const node = document.createTextNode('@'); range.insertNode(node); range.setStart(node, node.length); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); popCategory = ''; popIndex = 0; triggerMention();
-  };
-  $('editor').oninput = triggerMention;
+  $('editor').oninput = event => { if (!event.isComposing) triggerComposer(); };
   $('editor').addEventListener('paste', e => {
     e.preventDefault(); const text = e.clipboardData.getData('text/plain'), selection = window.getSelection();
     if (!selection.rangeCount || !$('editor').contains(selection.anchorNode)) return;
-    const range = selection.getRangeAt(0); range.deleteContents(); const node = document.createTextNode(text); range.insertNode(node); range.setStart(node, node.length); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); triggerMention();
+    const range = selection.getRangeAt(0); range.deleteContents(); const node = document.createTextNode(text); range.insertNode(node); range.setStart(node, node.length); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); triggerComposer();
   });
-  $('editor').addEventListener('compositionend', triggerMention);
+  $('editor').addEventListener('compositionend', triggerComposer);
+  $('editor').addEventListener('click', triggerComposer);
+  $('editor').addEventListener('keyup', event => { if (!event.isComposing && ['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) triggerComposer(); });
   $('mentionPop').addEventListener('mousedown', e => e.preventDefault());
   $('mentionPop').onclick = event => {
     const category = event.target.closest('[data-category]'); if (category) { popCategory = category.dataset.category; popIndex = 0; renderMention($('mentionPop').dataset.query); return; }
@@ -551,9 +662,10 @@
     const remove = e.target.closest('[data-remove-ref]'); if (remove) { composerRefs.delete(remove.dataset.removeRef); remove.closest('[data-refkey]').remove(); pinnedRef = undefined; hideRefPop(); return; }
     if (e.target.closest('[data-close-preview]')) { pinnedRef = undefined; hideRefPop(); return; }
     const hit = referenceAt(e.target); if (hit) showRefPop(hit.anchor, hit.ref, true); else if (!e.target.closest('#refPop')) { pinnedRef = undefined; hideRefPop(); }
-    if (!e.target.closest('#mentionPop, #editor, #atBtn')) closeMention();
+    if (!e.target.closest('#mentionPop, #editor')) closeMention();
+    if (!e.target.closest('#slashPop, #editor')) closeSlash();
   });
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeMention(); pinnedRef = undefined; hideRefPop(); } });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { closeMention(); closeSlash(); pinnedRef = undefined; hideRefPop(); } });
   function factsHTML(block) {
     if (!['wps_run_render', 'wps_create_render', 'wps_update_render'].includes(block.toolName)) return '';
     const facts = V.renderFacts(block, state);
@@ -590,18 +702,37 @@
     contextUsage = context;
     if (!$('agentPanel').hidden && agentView === 'info') renderAgentResources();
     const valid = Number.isFinite(context?.percent), percent = valid ? context.percent : 0;
-    $('ctxFill').style.width = Math.min(100, percent) + '%'; $('ctxPercent').textContent = valid ? percent.toFixed(1) + '%' : '—';
+    $('ctxPercent').textContent = valid ? percent.toFixed(1) + '%' : '—';
     $('contextChip').title = valid ? '估算上下文 ' + Number(context.tokens).toLocaleString() + ' / ' + Number(context.contextWindow).toLocaleString() + ' tokens' : '模型尚未返回用量，不能计算上下文占用';
     $('usageLabel').textContent = turn?.usage?.totalTokens ? '本轮 ' + (turn.calls || 1) + ' 次调用 · ' + turn.usage.totalTokens.toLocaleString() + ' tokens' : '';
   }
+  function updateSendButton() {
+    const running = Boolean(controller);
+    $('sendBtn').textContent = running ? '停止' : '发送';
+    $('sendBtn').title = running ? '停止生成' : '发送消息';
+    $('sendBtn').disabled = !running && (peerBusy || commandBusy || checkingRefs);
+  }
   async function history() {
-    const value = await api('/api/chat'); if (controller) return;
+    const request = ++historyRequest;
+    const value = await api('/api/chat'); if (controller || commandBusy || request !== historyRequest) return;
+    if (currentSessionId && value.sessionId !== currentSessionId) {
+      sessionDrafts.set(currentSessionId, readComposer());
+      const draft = sessionDrafts.get(value.sessionId) || { message: '', refs: [] };
+      composerRefs.clear(); restoreComposer(draft.message, draft.refs); closeMention(); closeSlash();
+      pinnedRef = undefined; hideRefPop(); followTail = true;
+    }
+    currentSessionId = value.sessionId;
+    sessionButton.title = '管理会话 · ' + (value.sessionName || '未命名会话');
     sessionStats = value.sessionStats;
     const changed = JSON.stringify(value) !== lastHistory; lastHistory = JSON.stringify(value);
-    const previousBusy = peerBusy; peerBusy = value.busy; $('sendBtn').disabled = peerBusy || checkingRefs;
+    const previousBusy = peerBusy; peerBusy = value.busy; updateSendButton();
     if (peerBusy && !previousBusy) notice('另一个面板正在运行会话；过程会自动同步，结束后可继续发送。');
     if (!peerBusy && previousBusy) notice('会话已完成，最新历史已同步。');
     if (changed) { turns = V.historyTurns(value.messages, value.turns, peerBusy); renderTurns(); showUsage(value.contextUsage, turns.at(-1)); }
+    if (!$('sessionMenu').hidden && sessionData) {
+      const menuRequest = sessionRequest, next = await api('/api/sessions');
+      if (!$('sessionMenu').hidden && menuRequest === sessionRequest && !commandBusy && (JSON.stringify(next) !== JSON.stringify(sessionData) || previousBusy !== peerBusy)) { sessionData = next; renderSessionMenu(); }
+    }
   }
   $('chatInner').onclick = async event => {
     const copy = event.target.closest('[data-copy-turn]'), quote = event.target.closest('[data-quote-turn]');
@@ -617,8 +748,37 @@
       $('editor').focus();
     }
   };
+  async function sendCommand(input) {
+    const match = input.message.match(/^\/(\S+)(?:\s+([\s\S]*))?$/), name = match?.[1], args = match?.[2] || '';
+    await loadSlashCommands();
+    if (commandBusy || controller || peerBusy) return true;
+    if (input.sessionId !== currentSessionId) { notice('会话已切换，请确认输入后重试。', true); return true; }
+    const command = slashCommands?.find(c => c.name === name);
+    if (!command) { notice(slashError || '未知命令，请输入 / 选择命令。', true); return true; }
+    if (command.group === '技能') return false;
+    if (input.refs.length) { notice('会话命令不能包含对象引用。', true); return true; }
+    if (name === 'name' && !args.trim()) { notice('请在 /name 后输入会话名称。', true); return true; }
+    if (!command.args && args.trim()) { notice('/' + name + ' 不接受附加参数。', true); return true; }
+    commandBusy = true; historyRequest++; updateSendButton(); closeSlash(); closeMention();
+    try {
+      if (name === 'copy') {
+        const turn = [...turns].reverse().find(t => t.blocks.some(b => b.kind === 'text' && b.text));
+        const text = turn?.blocks.filter(b => b.kind === 'text').map(b => b.text).join('\n\n');
+        if (!text) throw new Error('当前会话没有可复制的助手消息。');
+        await navigator.clipboard.writeText(text); notice('已复制最后一条助手消息。');
+      } else if (name !== 'sessions') {
+        notice(name === 'compact' ? '正在压缩上下文…' : '正在执行 /' + name + '…');
+        const result = await api('/api/commands', { name, args, sessionId: currentSessionId }); notice(result.message);
+        if (name === 'reload') slashCommands = undefined;
+      }
+      if (readComposer().message === input.message) { $('editor').replaceChildren(); composerRefs.clear(); }
+    } catch (error) { notice(error.message, true); }
+    finally { commandBusy = false; updateSendButton(); await history().catch(error => notice(error.message, true)); }
+    if (name === 'sessions') await openSessionMenu($('editor'));
+    return true;
+  }
   async function send() {
-    let input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || checkingRefs || $('editor').querySelector('[data-selection-mode]:disabled')) return;
+    let input = readComposer(); if (!input.message || controller || peerBusy || insertingRef || checkingRefs || commandBusy || $('editor').querySelector('[data-selection-mode]:disabled')) return;
     if (input.refs.some(ref => ['var', 'render'].includes(ref.kind))) {
       checkingRefs = true; $('sendBtn').disabled = true;
       try {
@@ -632,11 +792,14 @@
       } catch (error) {
         notice('无法核对变量引用：' + error.message + '。请连接本机服务后再发送。', true); return;
       } finally { checkingRefs = false; $('sendBtn').disabled = peerBusy || !!controller; }
-      if (controller || peerBusy) return;
+      if (controller || peerBusy || commandBusy) return;
     }
+    input.sessionId = currentSessionId;
+    if (input.message.startsWith('/') && await sendCommand(input)) return;
+    if (commandBusy || controller || peerBusy) return;
     const turn = V.newTurn(input.message, input.refs); turns.push(turn); controller = new AbortController(); followTail = true;
     turn.model = config?.model.id; showUsage(undefined, turn);
-    $('sendBtn').disabled = true; $('stopBtn').hidden = false; $('editor').replaceChildren(); closeMention(); pinnedRef = undefined; hideRefPop(); notice(''); renderTurns();
+    updateSendButton(); $('editor').replaceChildren(); closeMention(); closeSlash(); pinnedRef = undefined; hideRefPop(); notice(''); renderTurns();
     let ended = false, hadError = false;
     try {
       const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...input, refs: input.refs.map(V.selectionRequest) }), signal: controller.signal });
@@ -661,16 +824,21 @@
       if (!stopped) turn.error = error.message;
       notice(stopped ? '已停止生成。已经完成的写入仍然有效。' : error.message, !stopped);
     } finally {
-      controller = undefined; $('sendBtn').disabled = peerBusy; $('stopBtn').hidden = true; renderTurns();
+      controller = undefined; updateSendButton(); renderTurns();
       if (hadError && !readComposer().message) restoreComposer(input.message, input.refs);
       await refresh(); if (ended && !hadError) await history().catch(() => {});
     }
   }
-  $('sendBtn').onclick = send; $('stopBtn').onclick = () => controller?.abort();
+  $('sendBtn').onclick = () => { if (controller) controller.abort(); else void send(); };
   $('editor').onkeydown = event => {
     if (event.isComposing || event.keyCode === 229) return;
     // Let native chip buttons handle Enter/Space without submitting the message.
     if (event.target.closest('[data-selection-mode], [data-remove-ref]')) return;
+    if (!$('slashPop').hidden) {
+      if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); slashIndex = Math.max(0, Math.min(slashItems.length - 1, slashIndex + (event.key === 'ArrowDown' ? 1 : -1))); renderSlash(); return; }
+      if (['Tab', 'Enter'].includes(event.key) && !event.shiftKey) { event.preventDefault(); selectSlash(slashItems[slashIndex]); return; }
+      if (event.key === 'Escape') { event.preventDefault(); closeSlash(); return; }
+    }
     if ($('mentionPop').classList.contains('show')) {
       if (['ArrowDown', 'ArrowUp'].includes(event.key)) { event.preventDefault(); popIndex = Math.max(0, Math.min(mentionItems.length - 1, popIndex + (event.key === 'ArrowDown' ? 1 : -1))); renderMention($('mentionPop').dataset.query); return; }
       if (['Tab', 'ArrowLeft', 'ArrowRight'].includes(event.key)) { event.preventDefault(); const step = event.key === 'ArrowLeft' || event.shiftKey ? -1 : 1; popCategory = categories[(categories.findIndex(c => c[0] === popCategory) + step + categories.length) % categories.length][0]; popIndex = 0; renderMention($('mentionPop').dataset.query); return; }

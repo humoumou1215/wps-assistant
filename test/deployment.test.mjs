@@ -86,8 +86,8 @@ test('macOS deployment creates an escaped LaunchAgent with the requested server,
   const dir = await mkdtemp(join(tmpdir(), 'wps-deploy-plist-'));
   const plist = join(dir, 'LaunchAgents', 'service.plist');
   const root = join(dir, 'project & "quoted"');
-  const data = join(dir, 'data & <private>');
-  const node = '/path with spaces/node';
+  const data = join(dir, "data & 'private'");
+  const node = '/path with spaces/<node>';
   try {
     const result = spawnSync(process.execPath, ['-', plist, root, node, data, '19999'], {
       input: mac.match(/<<'SERVICE_CONFIG'\n([\s\S]*?)\nSERVICE_CONFIG/)[1], encoding: 'utf8',
@@ -95,7 +95,8 @@ test('macOS deployment creates an escaped LaunchAgent with the requested server,
     assert.equal(result.status, 0, result.stderr);
     const xml = await readFile(plist, 'utf8');
     assert.ok(xml.includes('&amp; &quot;quoted&quot;'));
-    assert.ok(xml.includes('data &amp; &lt;private&gt;'));
+    assert.ok(xml.includes('data &amp; &apos;private&apos;'));
+    assert.ok(xml.includes('&lt;node&gt;'));
     // Read the generated XML with a parser, rather than duplicating its formatting.
     const { DOMParser } = await import('linkedom');
     const document = new DOMParser().parseFromString(xml, 'text/xml');

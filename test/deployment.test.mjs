@@ -76,6 +76,30 @@ test('deployment rejects invalid registries and ports before changing either reg
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('registration validates XML before replacement and preserves comments and unrelated elements', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wps-deploy-xml-'));
+  const path = join(dir, 'publish.xml');
+  try {
+    const malformed = '<jsplugins><jspluginonline name="Other" on<jspluginonline name="WpsMcpET"/>load="x"/></jsplugins>';
+    await writeFile(path, malformed);
+    assert.notEqual(register(dir, 'win32').status, 0);
+    assert.equal(await readFile(path, 'utf8'), malformed);
+    assert.deepEqual(await readdir(dir), ['publish.xml']);
+    const comment = '<!-- <jspluginonline name="WpsMcpET"/> -->';
+    const other = '<jspluginonline name="Other" url="http://example.test/?a=&amp;b"/>';
+    await writeFile(path, `<jsplugins>\r\n${comment}\r\n${other}\r\n<jspluginonline name="WpsMcpET"></jspluginonline>\r\n<jsplugin name="WpsMcpET"/>\r\n</jsplugins>`);
+    const result = register(dir, 'win32'); assert.equal(result.status, 0, result.stderr);
+    const registered = await readFile(path, 'utf8');
+    assert.ok(registered.includes(comment)); assert.ok(registered.includes(other));
+    assert.equal((registered.replace(comment, '').match(/name="WpsMcpET"/g) ?? []).length, 1);
+    assert.ok(!registered.includes('</jspluginonline>')); assert.ok(registered.includes('\r\n'));
+    const before = registered; assert.equal(register(dir, 'win32').status, 0); assert.equal(await readFile(path, 'utf8'), before);
+    await writeFile(path, '<jsplugins/>');
+    const empty = register(dir, 'win32'); assert.equal(empty.status, 0, empty.stderr);
+    assert.equal((await readFile(path, 'utf8')).match(/name="WpsMcp/g).length, 3);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('macOS deployment creates an escaped LaunchAgent with the requested server, port, data and log paths', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'wps-deploy-plist-'));
   const plist = join(dir, 'LaunchAgents', 'service.plist');

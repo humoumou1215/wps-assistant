@@ -1536,7 +1536,7 @@ GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默
 | `WPS_MCP_ADDINS_DIR` | macOS WPS 容器或 Windows `%APPDATA%\kingsoft\wps\jsaddons` | 覆盖加载项注册目录 |
 | `WPS_MCP_ADDIN_ENABLE` | `enable_dev` | 加载项启用属性 |
 
-Windows 也支持直接执行 `scripts/install-windows.ps1` 并传入 `-Port`、`-DataDirectory`、`-AddinsDirectory`。脚本只更新 `WpsMcpET`、`WpsMcpWPP`、`WpsMcpWPS` 的注册条目；已有 URL 随端口更新，重复部署不增加重复条目，其他加载项保持原样。首次修改已有 `publish.xml` 前保存 `.backup-before-wps-mcp`；macOS 的 `authaddin.json` 首次修改前保存 `.backup-before-wps-mcp-writer`，保留其他宿主及加载项记录。无效注册文件会拒绝修改，Windows Writer 授权机制仍需实机确认。
+Windows 也支持直接执行 `scripts/install-windows.ps1` 并传入 `-Port`、`-DataDirectory`、`-AddinsDirectory`。脚本只更新 `WpsMcpET`、`WpsMcpWPP`、`WpsMcpWPS` 的注册条目；已有 URL 随端口更新，重复部署不增加重复条目，其他加载项保持原样。首次修改已有 `publish.xml` 前保存 `.backup-before-wps-mcp`；macOS 的 `authaddin.json` 首次修改前保存 `.backup-before-wps-mcp-writer`，保留其他宿主及加载项记录。注册模块用 Saxes 验证 XML 完整结构后按元素位置替换 `jsplugins` 的直接子条目，保留注释、无关元素与原格式，支持成对标签和空根元素；生成结果再次验证。无效注册文件会在备份或修改前拒绝，Windows Writer 授权机制仍需实机确认。
 
 macOS 使用 `com.local.wps-mcp` 用户级 LaunchAgent，登录时启动并自动重启；Windows 使用当前用户的后台 Node 进程，不创建开机任务，进程与数据目录记录在忽略的 `.dev/windows-deployment.json`。重复部署只允许重启已确认属于当前项目且数据目录相同的服务；端口被其他进程占用或会话仍在运行时拒绝重启。Windows 初次接管旧的手动启动服务前，需要自行停止旧服务。
 
@@ -1614,7 +1614,7 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。开发部署后�
 - 原生文件锁保证每个数据目录只出现一个托盘；短时操作锁串行化启停和注册。`desktop-service.json` 保存服务 PID、实例 ID、运行路径、端口和随机控制凭据，文件权限为当前用户，控制凭据不返回给浏览器或写入日志。托盘/控制程序通过 `/api/desktop/status` 验证实例和路径后操作；源码服务无这些管理接口。`/api/desktop/stop` 还要求随机 Bearer token 和本机同源条件，存在聊天、配置/会话变更、HTTP 工作、工具执行、WPS RPC 或排队变量修改时返回 409；接受停止后拒绝新请求并刷新日志退出。不会通过进程名或仅凭 PID 强杀服务。
 - 若端口属于源码 LaunchAgent、其他目录的免安装程序或不明进程，提示先从原入口停止，不会接管；移动程序后应从原托盘停止旧服务再打开新路径。托盘退出不代表服务停止；删除程序也不清除用户数据或 WPS 注册。关闭登录启动后该托盘在当前登录期间继续运行，但下次登录不再自动启动。
 
-**维护者构建：** 在对应平台与架构准备 Node/npm、Rust 1.90+ 和本机编译工具（macOS Xcode Command Line Tools；Windows MSVC Build Tools/SDK），执行 `npm ci` 后 `npm run build:portable`。构建下载官方 Node 24.21.0 并用官方 `SHASUMS256.txt` 验证，构建机器需要外网和 curl；用户运行不下载资源。`Cargo.lock` 和 npm lock 固定依赖，输出忽略目录 `release/wps-assistant-<版本>-<darwin|win32>-<架构>.zip` 及 `.sha256`。原生菜单版本必须与 `package.json` 同步。
+**维护者构建：** 在对应平台与架构准备 Node/npm、Rust 1.90+ 和本机编译工具（macOS Xcode Command Line Tools；Windows MSVC Build Tools/SDK），执行 `npm ci` 后 `npm run build:portable`。构建下载官方 Node 24.21.0 并用官方 `SHASUMS256.txt` 验证，构建机器需要外网和 curl；用户运行不下载资源。`Cargo.lock` 和 npm lock 固定依赖；部分 npm 版本会用 SDK 自带 shrinkwrap 覆盖根锁中的 `brace-expansion` 安全补丁，打包显式核对实际版本，必要时按根锁中 5.0.12 的 tarball 与 SHA-512 还原，再对暂存生产依赖执行 high 级审计，解压 smoke 再核对实际版本。输出忽略目录 `release/wps-assistant-<版本>-<darwin|win32>-<架构>.zip` 及 `.sha256`。原生菜单版本必须与 `package.json` 同步。
 
 构建包含原生可执行程序、随包 Node 与 `PATH` 清空的隔离验证：临时目录注册、服务启动、重复启动复用、静态页面、MCP 初始化/工具发现、技能与工具加载、loopback 模拟模型响应、停止凭据、重启及会话保留；不修改构建机器的真实 WPS 注册、不连接外部模型。平台交互仍需实机验证；CI 的 Windows 构建和 smoke 不等于真实 WPS Writer 授权验收。
 

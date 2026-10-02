@@ -39,6 +39,7 @@ await new Promise(r => model.listen(0, '127.0.0.1', r));
 let started = false;
 try {
   await run(binary, ['--smoke']);
+  assert.equal(JSON.parse(await readFile(join(app, 'node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json'), 'utf8')).version, '5.0.12', 'shipped SDK uses the security-patched dependency');
   assert.match(await run(node, ['--version']), /^v24\.21\.0/);
   // Register in a disposable directory; never touch the build machine's actual WPS.
   await run(node, ['--input-type=module', '-e', 'import { registerAddins } from "./dist/src/addin-registration.js"; registerAddins(process.env.WPS_MCP_ADDINS_DIR, process.env.WPS_MCP_PORT, "enable_dev", process.platform);']);

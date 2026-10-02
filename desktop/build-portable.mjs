@@ -9,6 +9,7 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const platform = process.platform, arch = process.arch;
 if (!['darwin', 'win32'].includes(platform) || !['x64', 'arm64'].includes(arch)) throw new Error('Build on the target macOS/Windows architecture');
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
+const lockedPackages = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8')).packages;
 const nativeVersion = (await readFile(join(root, 'desktop/native/Cargo.toml'), 'utf8')).match(/^version = "([^"]+)"/m)?.[1];
 if (nativeVersion !== pkg.version) throw new Error('Native Cargo version must match package.json');
 const nodeVersion = '24.21.0';
@@ -51,6 +52,23 @@ await mkdir(app, { recursive: true }); await mkdir(nodeDir, { recursive: true })
 for (const path of ['dist', 'addon', 'skills', 'LICENSE', 'package.json', 'package-lock.json']) await cp(join(root, path), join(app, path), { recursive: true });
 await cp(join(root, 'desktop/native/target/release', platform === 'win32' ? 'wps-assistant-tray.exe' : 'wps-assistant-tray'), binary);
 await npmRun(['ci', '--omit=dev', '--no-audit', '--no-fund'], { cwd: app });
+// Some npm versions reapply the SDK's shrinkwrap over the root lock's patched leaf.
+// Restore the exact locked tarball, checking integrity before extraction.
+const braceKey = 'node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion';
+const braceLock = lockedPackages[braceKey];
+if (braceLock?.version !== '5.0.12' || !braceLock.resolved?.startsWith('https://registry.npmjs.org/brace-expansion/')) throw new Error('Keep the bundled brace-expansion security patch locked at 5.0.12');
+const braceDirectory = join(app, braceKey);
+if (JSON.parse(await readFile(join(braceDirectory, 'package.json'), 'utf8')).version !== braceLock.version) {
+  const patch = join(build, 'brace-security-patch'); await rm(patch, { recursive: true, force: true }); await mkdir(patch, { recursive: true });
+  const tarball = join(patch, 'locked.tgz'); await download(braceLock.resolved, tarball);
+  if (`sha512-${createHash('sha512').update(await readFile(tarball)).digest('base64')}` !== braceLock.integrity) throw new Error('Bundled security patch integrity mismatch');
+  await run('tar', ['-xzf', tarball, '-C', patch]);
+  const replacement = join(patch, 'package');
+  const patchPackage = JSON.parse(await readFile(join(replacement, 'package.json'), 'utf8'));
+  if (patchPackage.name !== 'brace-expansion' || patchPackage.version !== braceLock.version) throw new Error('Bundled security patch package mismatch');
+  await rm(braceDirectory, { recursive: true }); await cp(replacement, braceDirectory, { recursive: true });
+}
+await npmRun(['audit', '--omit=dev', '--audit-level=high', '--registry=https://registry.npmjs.org'], { cwd: app });
 await rm(join(app, 'package-lock.json'));
 // The SDK's published shrinkwrap includes every esbuild platform. Keep this target only.
 const moduleRoot = join(app, 'node_modules');
@@ -95,6 +113,7 @@ await cp(join(cache, distribution, 'LICENSE'), join(nodeDir, 'LICENSE'));
 await chmod(binary, 0o755); await chmod(node, 0o755);
 // Include licenses for the Rust packages compiled into the executable.
 const notices = join(resources, 'licenses/native'); await mkdir(notices, { recursive: true });
+await cp(join(root, 'desktop/third-party'), join(resources, 'licenses/third-party'), { recursive: true });
 const metadataPath = join(build, 'cargo-metadata.json');
 const metadataFd = openSync(metadataPath, 'w');
 try { await run('cargo', ['metadata', '--locked', '--format-version', '1', '--manifest-path', 'desktop/native/Cargo.toml'], { stdio: ['ignore', metadataFd, 'inherit'] }); }

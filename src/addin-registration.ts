@@ -2,23 +2,56 @@ import { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync, const
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
+import { SaxesParser } from "saxes";
 export function registerAddins(directory: string, port: string, enable: string, platform: string) {
   if (!/^\d+$/.test(port) || Number(port) < 1025 || Number(port) > 65535 || !/^[\w-]+$/.test(enable)) throw new Error('Invalid port or Add-in enable setting');
   const hosts: [string, string][] = [['et', 'WpsMcpET'], ['wpp', 'WpsMcpWPP'], ['wps', 'WpsMcpWPS']];
   const publishPath = join(directory, 'publish.xml');
   const original = existsSync(publishPath) ? readFileSync(publishPath, 'utf8') : null;
   let publish = original ?? '<?xml version="1.0" encoding="UTF-8"?>\n<jsplugins>\n</jsplugins>\n';
-  if ((publish.match(/<\/jsplugins>/gi) ?? []).length !== 1) throw new Error('Invalid publish.xml; left unchanged');
   const eol = publish.includes('\r\n') ? '\r\n' : '\n';
   const entry = ([host, name]: [string, string]) => `<jspluginonline name="${name}" url="http://127.0.0.1:${port}/addins/${host}/" type="${host}" enable="${enable}" debug="" install="null"/>`;
-  const seen = new Set<string>();
-  publish = publish.replace(/<jsplugin(?:online)?\b[^>]*\bname\s*=\s*["'](WpsMcpET|WpsMcpWPP|WpsMcpWPS)["'][^>]*\/?>/gi, (tag, name) => {
-    if (seen.has(name)) return '';
-    seen.add(name);
-    return entry(hosts.find(host => host[1] === name)!);
+  // Validate real XML and record complete element spans. This is a registry update,
+  // not an HTML sanitizer; preserve unrelated elements, comments and formatting.
+  const parser = new SaxesParser({ xmlns: false });
+  type Span = { name: string; start: number; end: number; host?: [string, string]; selfClosing?: boolean };
+  const stack: Span[] = [], spans: Span[] = [];
+  let root: Span | undefined, rootClose = -1;
+  parser.on("error", () => { throw new Error('Invalid publish.xml; left unchanged'); });
+  parser.on("opentag", tag => {
+    const span: Span = { name: tag.name, start: publish.lastIndexOf('<', parser.position - 1), end: parser.position, selfClosing: tag.isSelfClosing };
+    if (stack.length === 0) {
+      if (tag.name.toLowerCase() !== 'jsplugins') throw new Error('Invalid publish.xml; left unchanged');
+      root = span;
+    } else if (stack.length === 1 && ['jsplugin', 'jspluginonline'].includes(tag.name.toLowerCase())) {
+      span.host = hosts.find(([, name]) => name.toLowerCase() === tag.attributes.name?.toLowerCase());
+    }
+    stack.push(span);
   });
+  parser.on("closetag", () => {
+    const span = stack.pop()!; span.end = parser.position;
+    if (span.host) spans.push(span);
+    if (stack.length === 0) rootClose = publish.lastIndexOf('<', parser.position - 1);
+  });
+  parser.write(publish).close();
+  if (!root || rootClose < 0) throw new Error('Invalid publish.xml; left unchanged');
+  const seen = new Set<string>();
+  const parts: string[] = []; let cursor = 0;
+  for (const span of spans) {
+    parts.push(publish.slice(cursor, span.start));
+    const host = span.host!;
+    if (!seen.has(host[1])) { parts.push(entry(host)); seen.add(host[1]); }
+    cursor = span.end;
+  }
   const missing = hosts.filter(host => !seen.has(host[1]));
-  if (missing.length) publish = publish.replace(/<\/jsplugins>/i, missing.map(host => '  ' + entry(host)).join(eol) + eol + '</jsplugins>');
+  const additions = missing.map(host => '  ' + entry(host)).join(eol);
+  if (root.selfClosing) {
+    parts.push(publish.slice(cursor, root.start), publish.slice(root.start, root.end - 2), '>', eol, additions, eol, `</${root.name}>`, publish.slice(root.end));
+  } else {
+    parts.push(publish.slice(cursor, rootClose), ...(missing.length ? [additions, eol] : []), publish.slice(rootClose));
+  }
+  publish = parts.join('');
+  new SaxesParser().write(publish).close();
   const changes: [string, string | null, string, string][] = [[publishPath, original, publish, '.backup-before-wps-mcp']];
   if (platform === 'darwin') {
     const authPath = join(directory, 'authaddin.json');

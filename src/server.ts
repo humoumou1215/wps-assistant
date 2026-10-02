@@ -1,4 +1,4 @@
-import { handleApi } from "./api.js";
+import { handleApi, isApiBusy } from "./api.js";
 import { loadConfig } from "./config.js";
 import { initializeAgentResources } from "./agent.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -10,8 +10,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { WebSocketServer } from "ws";
 import type { ZodRawShape } from "zod";
-import { APP_DIR, PORT, loadState, registerDocument, connections, documents, pending, toolDefinitions, type Connection, type AddinDocument } from "./tools.js";
+import { APP_DIR, PORT, loadState, registerDocument, connections, documents, pending, isToolBusy, toolDefinitions, type Connection, type AddinDocument } from "./tools.js";
 import { logger } from "./logger.js";
+import { configureDesktopStop, isDesktopStopping, desktopManaged, isDesktopBusy } from "./desktop-control.js";
+let activeHttpWork = 0;
 function createMcpServer() {
   const mcp = new McpServer({ name: "wps-mcp", version: "0.1.0" });
   for (const tool of toolDefinitions) mcp.registerTool<ZodRawShape, ZodRawShape>(tool.name, tool.config, (args, extra) => tool.invoke(args, extra.signal));
@@ -57,15 +59,16 @@ async function handleMcpHttp(req: IncomingMessage, res: ServerResponse) {
 async function httpHandler(req: IncomingMessage, res: ServerResponse) {
   if (!["127.0.0.1:" + PORT, "localhost:" + PORT].includes(req.headers.host ?? "")) { res.writeHead(403); res.end("Invalid host"); return; }
   const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "127.0.0.1"}`);
+  if (isDesktopStopping()) { res.writeHead(503); res.end("服务正在停止"); return; }
   if (url.pathname.startsWith("/api/")) { await handleApi(req, res, url.pathname); return; }
   if (url.pathname === "/mcp") { await handleMcpHttp(req, res); return; }
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
     // Count only usable documents so /health matches wps_list_documents.
-    res.end(JSON.stringify({ ok: true, connections: connections.size, documents: [...documents.values()].filter((doc) => doc.connected).length }));
+    res.end(JSON.stringify({ ok: true, connections: connections.size, documents: [...documents.values()].filter((doc) => doc.connected).length, busy: isDesktopBusy(), desktopManaged }));
     return;
   }
-  const allowedAssets = ["index.html", "main.js", "manifest.xml", "ribbon.xml", "status.html", "taskpane.html", "taskpane.css", "taskpane.js", "taskpane-view.js", "pinyin-pro.js", "ribbon-assistant.png", "ribbon-variables.png", "ribbon-status.png"];
+  const allowedAssets = ["index.html", "main.js", "manifest.xml", "ribbon.xml", "status.html", "taskpane.html", "taskpane.css", "taskpane.js", "taskpane-view.js", "pinyin-pro.js", "mcp-debug.html", "mcp-guide.html", "mcp-pages.css", "mcp-client.js", "mcp-debug.js", "mcp-guide.js", "ribbon-assistant.png", "ribbon-variables.png", "ribbon-status.png"];
   const match = /^\/(?:addon|addins\/(?:et|wpp|wps))\/(?:([^/]+))?$/.exec(url.pathname);
   const fileName = match?.[1] ?? "index.html";
   const file = match && allowedAssets.includes(fileName) ? join(APP_DIR, "addon", fileName) : undefined;
@@ -82,6 +85,8 @@ async function startBridge() {
     const requestId = randomUUID();
     // Never log query strings, arbitrary URL paths, headers or request bodies.
     const path = (req.url ?? "/").split("?")[0] ?? "/";
+    const work = path === "/mcp" || (path.startsWith("/api/") && !path.startsWith("/api/desktop/"));
+    if (work) activeHttpWork++;
     const route = /^\/(health|mcp|api\/(state|config(?:\/test)?|chat|commands|sessions|ref-preview|ref-resolve|actions|navigate))$/.test(path)
       ? path : /^\/(addon|addins\/(et|wpp|wps))\//.test(path) ? "/addon/*" : "[unknown]";
     const started = Date.now();
@@ -90,6 +95,7 @@ async function startBridge() {
     const complete = () => {
       if (recorded) return;
       recorded = true;
+      if (work) activeHttpWork--;
       logger.withContext({ requestId }, () => {
         const aborted = !res.writableFinished;
         const level = res.statusCode >= 500 ? "error" : res.statusCode >= 400 || aborted ? "warn" : req.method === "POST" ? "info" : "debug";
@@ -194,6 +200,7 @@ async function exitWithLogs(code: number) {
   clearTimeout(deadline);
   process.exit(code);
 }
+configureDesktopStop(() => { logger.info("server.stopping", { signal: "desktop" }); void exitWithLogs(0); }, () => activeHttpWork > 0 || isApiBusy() || isToolBusy());
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => {
   logger.info("server.stopping", { signal }); void exitWithLogs(0);
 });

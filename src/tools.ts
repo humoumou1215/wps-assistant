@@ -102,14 +102,18 @@ function persist(variables?: Variable[]) {
   return write;
 }
 let variableMutation = Promise.resolve();
+let queuedMutations = 0;
+let activeToolCalls = 0;
+export function isToolBusy() { return queuedMutations > 0 || activeToolCalls > 0 || pending.size > 0; }
 function mutateVariables<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  queuedMutations++;
   let cancelWaiting: (() => void) | undefined;
   const result = variableMutation.then(() => {
     // Once execution starts, keep its result and queue slot until it completes.
     if (cancelWaiting) signal!.removeEventListener("abort", cancelWaiting);
     return operation();
   });
-  variableMutation = result.then(() => {}, () => {});
+  variableMutation = result.then(() => { queuedMutations--; }, () => { queuedMutations--; });
   if (!signal) return result;
   return new Promise<T>((resolve, reject) => {
     cancelWaiting = () => reject(new ToolError("OPERATION_CANCELLED", "已停止，未执行此操作"));
@@ -343,6 +347,8 @@ export async function refreshDocument(documentId: string) {
 export const toolDefinitions: { name: string; config: any; invoke: (args: any, signal?: AbortSignal) => Promise<any> }[] = [];
 function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema: S; title: string; description: string; annotations: Record<string, boolean> }, handler: (args: z.infer<z.ZodObject<S>>) => Promise<any>) {
   toolDefinitions.push({ name, config, invoke: (args, signal) => logger.withContext({ toolCallId: randomUUID() }, async () => {
+    activeToolCalls++;
+    try {
     const started = Date.now();
     let parsed: z.infer<z.ZodObject<S>>;
     try { parsed = z.object(config.inputSchema).parse(args); }
@@ -371,6 +377,7 @@ function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema
       errorCodes: failures?.map((r: { error?: { code?: string } }) => r.error?.code),
     });
     return result;
+    } finally { activeToolCalls--; }
   }) });
 }
 defineTool("wps_list_documents", {

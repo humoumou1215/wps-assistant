@@ -37,6 +37,12 @@ WPS 助手面板 → /api/chat → 内嵌 pi Agent ──┐
 
 实时连接与选区保存在内存中，重启后由 Add-in 重新上报。会话历史可能包含文档数据，与运行日志的脱敏、轮转设置分别管理。
 
+## 免安装使用
+
+macOS 解压后双击 `WPS Assistant.app`；Windows 解压整个文件夹后双击 `wps-assistant.exe`。自带 Node 与服务依赖，无需预装开发环境；首次启动前完全退出 WPS，注册完成后重新打开。菜单栏/托盘提供助手、变量、模型设置、MCP 调试与配置引导，以及服务启停、日志和注册修复入口。
+
+免安装包可在隔离网络运行，模型需另行配置为内网可达端点。构建入口为 `npm run build:portable`，平台产物见 `Portable desktop` 工作流；运行系统、首次注册、数据保留和签名要求见 [SPEC 免安装桌面程序](docs/spec.md#portable-desktop)。
+
 ## 开发部署
 
 安装 Node.js 22.19.0 或更高版本和 WPS Office，部署前完全退出 WPS（包括托盘进程）。在项目根目录执行对应命令，一次完成依赖安装、构建、Add-in 注册和桥接服务启动：
@@ -118,6 +124,8 @@ tail -n 30 -f "$HOME/Library/Application Support/wps-mcp/logs/wps-mcp.log"
 如客户端使用 stdio，应由客户端启动 `node <仓库绝对路径>/dist/src/server.js`，保留默认 `WPS_MCP_TRANSPORT=stdio`；该进程同样占用本机桥接端口，须先停止该端口已有的服务。stdout 仅输出 MCP 协议，日志写入 stderr 和文件。
 
 客户端配置格式因产品而异，请按其 MCP 配置说明填写上述传输方式和 URL。服务仅监听本机 loopback，因此 MCP 客户端需运行在能访问该本机地址的环境中。
+
+本地 [MCP 配置引导](http://127.0.0.1:18766/addon/mcp-guide.html) 提供 Codex、Claude Code、WorkBuddy 的配置与验证步骤；[MCP 接口调试](http://127.0.0.1:18766/addon/mcp-debug.html) 可手动发送真实请求。两页也可从助手「设置」和连接状态页打开，自定义端口时使用实际服务端口。行为与验证边界见 [SPEC 本地 MCP 页面](docs/spec.md#local-mcp-pages)。
 
 该服务向客户端提供以下 MCP 工具：
 

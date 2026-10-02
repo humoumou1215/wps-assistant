@@ -7,14 +7,8 @@ import { spawnSync } from 'node:child_process';
 
 const mac = (await readFile(new URL('../scripts/install-macos.sh', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
 const windows = (await readFile(new URL('../scripts/install-windows.ps1', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
-const registrars = {
-  darwin: mac.match(/<<'REGISTRY'\n([\s\S]*?)\nREGISTRY/)[1],
-  win32: windows.match(/\$registryScript = @'\n([\s\S]*?)\n'@/)[1],
-};
 function register(directory, platform, port = '18766') {
-  return spawnSync(process.execPath, ['-', directory, port, 'enable_dev', platform], {
-    input: registrars[platform], encoding: 'utf8',
-  });
+  return spawnSync(process.execPath, ['dist/src/addin-registration.js', directory, port, 'enable_dev', platform], { encoding: 'utf8' });
 }
 
 for (const platform of ['darwin', 'win32']) {

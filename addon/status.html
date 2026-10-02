@@ -5,7 +5,7 @@
   <title>WPS MCP Bridge</title>
   <style>body{font:13px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:18px;color:#202124}#dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#d93025;margin-right:8px}.ok{background:#188038!important}pre{white-space:pre-wrap;overflow-wrap:anywhere}</style>
 </head>
-<body><h3><span id="dot"></span>WPS MCP Bridge</h3><p id="state">Checking local server…</p><pre id="details"></pre>
+<body><h3><span id="dot"></span>WPS MCP Bridge</h3><p id="state">Checking local server…</p><pre id="details"></pre><p><a href="mcp-guide.html" target="_blank" rel="noopener noreferrer">MCP 配置引导</a> · <a href="mcp-debug.html" target="_blank" rel="noopener noreferrer">MCP 接口调试</a></p>
 <script>
 async function refresh(){try{const r=await fetch('/health');const d=await r.json();document.querySelector('#dot').classList.toggle('ok',d.ok);document.querySelector('#state').textContent=d.ok?'MCP bridge is running':'MCP bridge unavailable';document.querySelector('#details').textContent=`Add-in connections: ${d.connections}\nDocuments: ${d.documents}\nWebSocket: ws://127.0.0.1:18766/ws\nMCP: http://127.0.0.1:18766/mcp`;}catch(e){document.querySelector('#state').textContent='Cannot reach the local WPS MCP server';}}
 refresh();setInterval(refresh,2000);

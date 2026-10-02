@@ -21,6 +21,7 @@ docs/*.ref/
 release/
 test-results.xml
 coverage/
+desktop/native/target/
 
 # Historical UI screenshots; keep textual validation reports in Git.
 docs/pi-web-models-config/

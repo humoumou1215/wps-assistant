@@ -12,7 +12,7 @@
 
 ## 环境要求
 
-- Node.js **22.19.0 或更高版本**，与 `package.json` 的 `engines` 一致。
+- 源码部署要求 Node.js **22.19.0 或更高版本**；免安装包自带 Node。
 - 本机安装支持 JS Add-in 的 WPS Office；桥接服务与 WPS 必须运行在同一台机器上。
 - 内置助手需要在「设置」中配置模型；支持 DeepSeek 内置目录和自定义 OpenAI 兼容端点（completions / responses）。模型请求按配置发送到对应服务商。
 

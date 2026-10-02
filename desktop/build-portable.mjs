@@ -109,6 +109,12 @@ for (const crate of metadata.packages) {
   }
 }
 await writeFile(join(resources, 'licenses/native-packages.json'), JSON.stringify(metadata.packages.map(({ name, version, license, repository }) => ({ name, version, license, repository })), null, 2));
+const sysrootPath = join(build, 'rust-sysroot.txt');
+const sysrootFd = openSync(sysrootPath, 'w');
+try { await run('rustc', ['--print', 'sysroot'], { stdio: ['ignore', sysrootFd, 'inherit'] }); } finally { closeSync(sysrootFd); }
+const rustDocs = join((await readFile(sysrootPath, 'utf8')).trim(), 'share/doc/rust');
+await cp(join(rustDocs, 'COPYRIGHT-library.html'), join(resources, 'licenses/Rust-standard-library.html'));
+await cp(join(rustDocs, 'licenses'), join(resources, 'licenses/rust'), { recursive: true });
 await writeFile(join(resources, 'portable.json'), JSON.stringify({ version: pkg.version, node: nodeVersion, platform, arch, nodeArchiveSha256: expected }, null, 2));
 if (platform === 'darwin') {
   await writeFile(join(bundle, 'Contents/Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleName</key><string>WPS Assistant</string><key>CFBundleDisplayName</key><string>WPS 助手</string><key>CFBundleIdentifier</key><string>com.local.wps-assistant</string><key>CFBundleExecutable</key><string>wps-assistant</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>${pkg.version}</string><key>CFBundleVersion</key><string>${pkg.version}</string><key>LSUIElement</key><true/><key>LSMinimumSystemVersion</key><string>13.5</string></dict></plist>\n`);
@@ -129,7 +135,6 @@ if (platform === 'darwin') {
 } else if (process.env.WPS_MCP_SIGNTOOL_CERT_SHA1) {
   await run('signtool.exe', ['sign', '/sha1', process.env.WPS_MCP_SIGNTOOL_CERT_SHA1, '/fd', 'SHA256', '/tr', 'http://timestamp.digicert.com', '/td', 'SHA256', binary]);
 }
-await run(process.execPath, ['desktop/smoke-portable.mjs', bundle]);
 await mkdir(release, { recursive: true });
 const output = join(release, `${name}.zip`); await rm(output, { force: true });
 if (platform === 'darwin') await run('ditto', ['-c', '-k', '--keepParent', bundle, output]);
@@ -139,6 +144,11 @@ if (platform === 'darwin' && process.env.WPS_MCP_NOTARY_PROFILE) {
   await run('xcrun', ['stapler', 'staple', bundle]);
   await rm(output); await run('ditto', ['-c', '-k', '--keepParent', bundle, output]);
 }
+// Validate what users receive, including archive layout and executable permissions.
+const extracted = join(build, 'archive-check'); await rm(extracted, { recursive: true, force: true }); await mkdir(extracted);
+if (platform === 'darwin') await run('ditto', ['-x', '-k', output, extracted]);
+else await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Expand-Archive -LiteralPath $env:WPS_BUILD_ARCHIVE -DestinationPath $env:WPS_BUILD_EXTRACT -Force'], { env: { ...process.env, WPS_BUILD_ARCHIVE: output, WPS_BUILD_EXTRACT: extracted } });
+await run(process.execPath, ['desktop/smoke-portable.mjs', join(extracted, platform === 'darwin' ? 'WPS Assistant.app' : 'WPS Assistant')]);
 const digest = createHash('sha256').update(await readFile(output)).digest('hex');
 await writeFile(`${output}.sha256`, `${digest}  ${name}.zip\n`);
 console.log(`Portable bundle: ${bundle}\nArchive: ${output} (${((await stat(output)).size / 1024 / 1024).toFixed(1)} MiB)`);

@@ -4,7 +4,7 @@
 
 - 工具规范与数据模型：第 1–23 章。
 - [架构决策](#architecture-decisions)：第 24 章，包含 ADR-0001 至 ADR-0004。
-- [仓库与自动化维护](#automation)：第 25 章，包含 CI、安全检查、发布和真实 WPS 验收。
+- [仓库与自动化维护](#automation)：第 25 章，包含 CI、安全检查、开发部署和真实 WPS 验收。
 - [项目术语与关系](#project-context)：第 26 章，包含命名约定、关系约束、对话示例和易混淆含义。
 
 ## 1. 目标
@@ -1499,50 +1499,55 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 
 | 工作流 | 触发 | 检查或产物 |
 | --- | --- | --- |
-| CI | main 推送、PR、手动、Release 调用 | Linux/Windows/macOS × Node 22.19.0/24，类型及 JS 语法检查、模拟测试和 JUnit 报告 |
-| CI 打包 | 同上 | Shell 语法、生产依赖高危审计、压缩包/校验和、独立目录安装及 HTTP/Add-in 资源冒烟 |
+| CI | main 推送、PR、手动、复用调用 | Linux/Windows/macOS × Node 22.19.0/24，类型与 JS 语法检查、Windows 部署脚本语法检查、模拟测试和 JUnit 报告 |
+| CI 审计 | 同上 | macOS 部署脚本 Shell 语法检查、生产依赖高危审计 |
 | Security | main 推送、PR、每周一 10:23（北京时间）、手动 | CodeQL；PR 检查新增依赖高危漏洞；定时及手动进行生产依赖审计 |
-| Release | 推送 `v*` 标签 | 完整 CI 成功后检查版本一致性，发布 GitHub Release、安装包和 SHA-256 |
 | Dependabot | 每周一 03:00（北京时间） | npm 和 Actions 更新 PR；小版本/补丁分组，保留人工审查 |
 
-GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默认只有 `contents: read`；CodeQL 上传和 Release 发布在对应任务中单独授权。PR 使用 `pull_request`，无外部密钥，也不连接个人电脑或真实 WPS。
+GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默认只有 `contents: read`；CodeQL 上传在对应任务中单独授权。PR 使用 `pull_request`，无外部密钥，也不连接个人电脑或真实 WPS。
 
 主分支保护要求 `CI passed` 和 `CodeQL`，分支必须与 main 保持同步，讨论必须解决，禁止强制推送和删除。个人项目不强制第二位审批者；仍必须通过 PR 合并。配置调整在 GitHub Settings → Branches。Actions 默认令牌为只读，不允许其创建/批准 PR。
 
-## 25.2 发布
+<a id="development-deployment"></a>
 
-先确保本次变更已合并到 main，工作区干净。更新版本并通过 PR 合并：
+## 25.2 开发部署
 
-```sh
-npm version patch --no-git-tag-version
-# 将 package.json / package-lock.json 的变更提交到分支并创建 PR
-```
+`scripts/` 仅保留三个文件，面向源码仓库的快速部署和验证：
 
-合并后拉取 main，再创建与包版本相同的标签（下面以 0.1.1 为例）：
+| 文件 | 入口 | 职责 |
+| --- | --- | --- |
+| `scripts/install-macos.sh` | `npm run install:macos` | 安装依赖、构建、注册三个宿主的 Add-in 和 Writer 授权、安装或重启用户级 LaunchAgent、检查服务和页面资源 |
+| `scripts/install-windows.ps1` | `npm run install:windows` | 安装依赖、构建、注册三个宿主的 Add-in、启动或重启后台 Node 服务、检查服务和页面资源 |
+| `scripts/check-js.mjs` | `npm run check` 的 JS 检查部分 | 检查 Add-in、脚本和测试的 JavaScript 语法 |
 
-```sh
-git switch main
-git pull --ff-only
-git tag -a v0.1.1 -m "Release v0.1.1"
-git push origin v0.1.1
-```
+要求安装 Node.js 22.19.0 或更高版本，以及支持 JS Add-in 的 WPS Office。macOS 使用系统的 Bash、launchctl、plutil、lsof 和 curl；Windows 使用 PowerShell 5.1 或更高版本及系统网络/进程命令。执行部署前须完全退出 WPS（包括托盘进程），脚本不会强制关闭用户文档。部署统一执行 `npm ci` 和 `npm run build`；依赖或构建失败时不重启旧服务。
 
-只有标签对应提交的完整 CI 成功且该提交已合并到 main 才发布；标签和 `package.json` 版本不一致会失败。包含 `-` 的版本发布为 prerelease。此流程不发布到 npm，不自动递增版本，也不自动合并依赖更新。
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `WPS_MCP_PORT` | `18766` | 服务端口，1025–65535；同时写入 Add-in 注册和服务配置 |
+| `WPS_MCP_DATA_DIR` | macOS：`~/Library/Application Support/wps-mcp`；Windows：`%APPDATA%\wps-mcp` | 保留本机模型配置、变量、会话及运行日志；重复部署不删除这些数据 |
+| `WPS_MCP_ADDINS_DIR` | macOS WPS 容器或 Windows `%APPDATA%\kingsoft\wps\jsaddons` | 覆盖加载项注册目录 |
+| `WPS_MCP_ADDIN_ENABLE` | `enable_dev` | 加载项启用属性 |
 
-发布包含编译后的服务、Add-in、API skill、安装脚本、README、许可证和完整锁文件，不携带 Node.js 或依赖。解压后安装运行依赖即可启动：
+Windows 也支持直接执行 `scripts/install-windows.ps1` 并传入 `-Port`、`-DataDirectory`、`-AddinsDirectory`。脚本只更新 `WpsMcpET`、`WpsMcpWPP`、`WpsMcpWPS` 的注册条目；已有 URL 随端口更新，重复部署不增加重复条目，其他加载项保持原样。首次修改已有 `publish.xml` 前保存 `.backup-before-wps-mcp`；macOS 的 `authaddin.json` 首次修改前保存 `.backup-before-wps-mcp-writer`，保留其他宿主及加载项记录。无效注册文件会拒绝修改，Windows Writer 授权机制仍需实机确认。
 
-```sh
-npm ci --omit=dev
-npm start
-```
+macOS 使用 `com.local.wps-mcp` 用户级 LaunchAgent，登录时启动并自动重启；Windows 使用当前用户的后台 Node 进程，不创建开机任务，进程与数据目录记录在忽略的 `.dev/windows-deployment.json`。重复部署只允许重启已确认属于当前项目且数据目录相同的服务；端口被其他进程占用或会话仍在运行时拒绝重启。Windows 初次接管旧的手动启动服务前，需要自行停止旧服务。
 
-然后按 README 注册 Add-in。不要对发布包执行 `npm run build`；需要开发或运行实机测试时使用源码仓库。macOS 服务安装脚本可以直接使用包内的编译产物。
+服务启动后检查 `/health`、`/addins/et/`、`/addins/wpp/`、`/addins/wps/`、任务窗格 HTML/JS。检查通过仅证明桥接服务和静态资源可用；还需重新打开 WPS，验证真实宿主加载和文档读写。
 
-生产依赖审计阈值为 high；发现高危/严重漏洞时阻断 CI，并由 Dependabot 提交修复。CodeQL 的分析任务成功表示扫描执行成功，告警详情仍需在 Security → Code scanning 中审查。
+<a id="live-validation"></a>
 
 ## 25.3 真实 WPS 验收
 
-CI 的宿主为模拟对象，不能证明真实 WPS API 兼容性。真实 ET/WPP/Writer 验收在安装 WPS 的本机显式运行 README 中的 `test:wps-live` 和 `test:wps-writer-live`。公开仓库不为 PR 配置个人电脑上的 self-hosted runner。
+CI 使用模拟宿主，不能证明真实 WPS API 兼容性。开发部署后，用 `test/sample/` 中的可丢弃副本验证 ET/WPP/Writer 的读取、变量重算、重写、结果读回及定位行为，在任务回复或 PR 中记录宿主、系统和结果。公开仓库不为 PR 配置个人电脑上的 self-hosted runner。
+
+`test/wps-live/` 保留已有测试与素材生成器，但默认不运行。原有自动切换端口、限定测试文档及退出清理的脚本已移除，不再提供一键实机测试命令；不要直接开启实机测试开关并让它访问日常文档。
+
+## 25.4 发布状态
+
+当前仅提供源码开发部署。旧打包、校验和、发布包验证脚本及标签触发的 Release 工作流已移除，CI 不再生成发布包。后续重新设计打包和发布流程；在此之前，推送版本标签不会自动发布安装包。
+
+生产依赖审计阈值仍为 high，发现高危/严重漏洞时阻断 CI。CodeQL 的分析任务成功表示扫描执行成功，告警详情仍需在 Security → Code scanning 中审查。
 
 ---
 

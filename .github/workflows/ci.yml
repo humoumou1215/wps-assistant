@@ -34,6 +34,14 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - name: Check Windows deployment script syntax
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD/scripts/install-windows.ps1", [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { $errors | Format-List; exit 1 }
       - run: npm run check
       - run: npm run test:ci
       - name: Upload test report
@@ -45,8 +53,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  package:
-    name: Package and security audit
+  audit:
+    name: Production dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -62,26 +70,18 @@ jobs:
       - name: Check shell scripts
         run: |
           for script in scripts/*.sh; do bash -n "$script"; done
-      - run: npm run package:release
-      - run: npm run verify:release
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: release-package
-          path: release/*
-          if-no-files-found: error
-          retention-days: 14
 
   gate:
     name: CI passed
     if: always()
-    needs: [test, package]
+    needs: [test, audit]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
       - name: Require all jobs to pass
         env:
           TEST_RESULT: ${{ needs.test.result }}
-          PACKAGE_RESULT: ${{ needs.package.result }}
+          AUDIT_RESULT: ${{ needs.audit.result }}
         run: |
           test "$TEST_RESULT" = success
-          test "$PACKAGE_RESULT" = success
+          test "$AUDIT_RESULT" = success

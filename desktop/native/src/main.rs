@@ -36,6 +36,26 @@ fn error(message: &str) {
         .show();
 }
 const APP_VERSION: &str = env!("WPS_ASSISTANT_VERSION");
+#[cfg(target_os = "macos")]
+fn show_about() {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSAlert, NSAlertStyle, NSApplication};
+    use objc2_foundation::NSString;
+
+    let mtm = MainThreadMarker::new().expect("关于窗口必须在主线程显示");
+    let alert = NSAlert::new(mtm);
+    alert.setAlertStyle(NSAlertStyle::Informational);
+    alert.setMessageText(&NSString::from_str("关于 WPS 助手"));
+    alert.setInformativeText(&NSString::from_str(&format!(
+        "WPS 助手\n版本 {APP_VERSION}\n\n原生托盘 · 本机服务 · 浏览器界面"
+    )));
+    alert.addButtonWithTitle(&NSString::from_str("好"));
+    // Accessory apps have no main window: activate explicitly so the alert is visible.
+    #[allow(deprecated)]
+    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+    alert.runModal();
+}
+#[cfg(not(target_os = "macos"))]
 fn show_about() {
     rfd::MessageDialog::new()
         .set_title("关于 WPS 助手")

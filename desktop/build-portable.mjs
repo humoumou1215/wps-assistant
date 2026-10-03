@@ -4,8 +4,10 @@ import { createHash } from 'node:crypto';
 import { cp, mkdir, readFile, readdir, rm, writeFile, chmod, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { syncVersion } from '../scripts/sync-version.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
+await syncVersion(root);
 const platform = process.platform, arch = process.arch;
 if (!['darwin', 'win32'].includes(platform) || !['x64', 'arm64'].includes(arch)) throw new Error('Build on the target macOS/Windows architecture');
 const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));

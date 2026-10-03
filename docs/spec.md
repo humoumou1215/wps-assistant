@@ -1556,7 +1556,7 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。开发部署后�
 
 支持源码开发部署和第 25.6 节的原生托盘免安装包。`Portable desktop` 工作流通过 PR 或手动运行生成平台 ZIP 与 SHA-256，产物保留 14 天；推送版本标签不会自动创建 GitHub Release。默认构建没有正式发布签名；公开分发前由维护者配置平台签名和 macOS 公证。
 
-应用版本的唯一手工来源是根目录 `package.json.version`。服务 MCP `serverInfo`、`/health`、管理状态和任务窗格版本从它读取；本地 MCP 页面从生成的 `addon/version.js` 读取；Rust 构建脚本从同一文件嵌入版本，并校验 Cargo 包版本。`scripts/sync-version.mjs` 自动同步 npm 根锁、Cargo 清单/根包锁和浏览器版本模块；`npm run build` 前自动同步，`npm run check` 拒绝漂移。用 `npm version patch --no-git-tag-version`（或指定版本）更新并运行同步 hook，再在同一提交纳入生成文件；不单独修改各处版本。Node、第三方依赖、WPS 宿主及 MCP 协议版本各自独立，不是应用版本。
+应用版本的唯一手工来源是根目录 `package.json.version`。服务 MCP `serverInfo`、`/health`、管理状态和任务窗格版本从它读取；本地 MCP 页面从生成的 `addon/version.js` 读取；Rust 构建脚本从同一文件嵌入版本，并校验 Cargo 包版本。`scripts/sync-version.mjs` 自动同步 npm 根锁、Cargo 清单/根包锁和浏览器版本模块；`npm run build` 与 `npm run build:portable` 前自动同步，`npm run check` 拒绝漂移。用 `npm version patch --no-git-tag-version`（或指定版本）更新并运行同步 hook，再在同一提交纳入生成文件；不单独修改各处版本。Node、第三方依赖、WPS 宿主及 MCP 协议版本各自独立，不是应用版本。
 
 生产依赖审计阈值仍为 high，发现高危/严重漏洞时阻断 CI。CodeQL 的分析任务成功表示扫描执行成功，告警详情仍需在 Security → Code scanning 中审查。
 

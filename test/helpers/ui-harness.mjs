@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
-export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps, usage = { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 } } = {}) {
+export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps, serviceEnv = {}, usage = { prompt_tokens: 40, completion_tokens: 10, total_tokens: 50 } } = {}) {
   if (!port) { const probe = createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r)); port = probe.address().port; await new Promise(r => probe.close(r)); }
   const dir = dataDir || await mkdtemp(join(tmpdir(), 'wps-ui-test-'));
   const requests = [], appState = { value: 120, written: null, failRender: false, type: 'spreadsheet', activeSheet: '销售数据', selection: { sheet: '销售数据', address: 'A1:B3' }, inspected: 0, reads: [] };
@@ -51,7 +51,7 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps
   });
   await new Promise(r => model.listen(modelPort, '127.0.0.1', r)); modelPort = model.address().port;
   const base = `http://127.0.0.1:${port}`;
-  const child = spawn(process.execPath, [fileURLToPath(new URL('../../dist/src/server.js', import.meta.url))], { env: { ...process.env, WPS_MCP_PORT: String(port), WPS_MCP_DATA_DIR: dir, WPS_MCP_TRANSPORT: 'http' }, stdio: ['ignore', 'ignore', 'pipe'] });
+  const child = spawn(process.execPath, [fileURLToPath(new URL('../../dist/src/server.js', import.meta.url))], { env: { ...process.env, ...serviceEnv, WPS_MCP_PORT: String(port), WPS_MCP_DATA_DIR: dir, WPS_MCP_TRANSPORT: 'http' }, stdio: ['ignore', 'ignore', 'pipe'] });
   let log = ''; child.stderr.on('data', chunk => { log += chunk; });
   for (let i = 0; i < 100; i++) { try { if ((await fetch(base + '/health')).ok) break; } catch {} if (child.exitCode !== null) throw new Error(log); await new Promise(r => setTimeout(r, 100)); }
   const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
@@ -122,6 +122,6 @@ export async function startHarness({ port = 0, modelPort = 0, dataDir, toolSteps
     });
   });
   const cfg = { kind: 'custom', label: '本地验证模型', baseUrl: `http://127.0.0.1:${modelPort}/v1`, api: 'openai-completions', apiKey: 'ui-test-secret', model: { id: 'ui-test-model', name: 'UI 验证模型', contextWindow: 32768, maxTokens: 2048, reasoning: false, vision: false }, compat: { thinkingFormat: '', maxTokensField: '' }, headers: { 'X-Test': 'header-secret' }, thinkingLevel: 'off' };
-  return { base, port, modelPort, dir, cfg, child, socket, requests, appState, app,
+  return { base, port, modelPort, dir, cfg, child, socket, requests, appState, app, get logs() { return log; },
     async close() { socket.close(); child.kill(); await new Promise(r => child.exitCode !== null ? r() : child.once('exit', r)); model.closeAllConnections(); await new Promise(r => model.close(r)); if (!dataDir) await rm(dir, { recursive: true, force: true }); } };
 }

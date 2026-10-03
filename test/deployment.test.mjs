@@ -7,14 +7,8 @@ import { spawnSync } from 'node:child_process';
 
 const mac = (await readFile(new URL('../scripts/install-macos.sh', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
 const windows = (await readFile(new URL('../scripts/install-windows.ps1', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
-const registrars = {
-  darwin: mac.match(/<<'REGISTRY'\n([\s\S]*?)\nREGISTRY/)[1],
-  win32: windows.match(/\$registryScript = @'\n([\s\S]*?)\n'@/)[1],
-};
 function register(directory, platform, port = '18766') {
-  return spawnSync(process.execPath, ['-', directory, port, 'enable_dev', platform], {
-    input: registrars[platform], encoding: 'utf8',
-  });
+  return spawnSync(process.execPath, ['dist/src/addin-registration.js', directory, port, 'enable_dev', platform], { encoding: 'utf8' });
 }
 
 for (const platform of ['darwin', 'win32']) {
@@ -79,6 +73,30 @@ test('deployment rejects invalid registries and ports before changing either reg
       assert.equal(await readFile(join(dir, 'authaddin.json'), 'utf8'), invalidAuth);
     }
     assert.deepEqual((await readdir(dir)).sort(), ['authaddin.json', 'publish.xml']);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('registration validates XML before replacement and preserves comments and unrelated elements', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wps-deploy-xml-'));
+  const path = join(dir, 'publish.xml');
+  try {
+    const malformed = '<jsplugins><jspluginonline name="Other" on<jspluginonline name="WpsMcpET"/>load="x"/></jsplugins>';
+    await writeFile(path, malformed);
+    assert.notEqual(register(dir, 'win32').status, 0);
+    assert.equal(await readFile(path, 'utf8'), malformed);
+    assert.deepEqual(await readdir(dir), ['publish.xml']);
+    const comment = '<!-- <jspluginonline name="WpsMcpET"/> -->';
+    const other = '<jspluginonline name="Other" url="http://example.test/?a=&amp;b"/>';
+    await writeFile(path, `<jsplugins>\r\n${comment}\r\n${other}\r\n<jspluginonline name="WpsMcpET"></jspluginonline>\r\n<jsplugin name="WpsMcpET"/>\r\n</jsplugins>`);
+    const result = register(dir, 'win32'); assert.equal(result.status, 0, result.stderr);
+    const registered = await readFile(path, 'utf8');
+    assert.ok(registered.includes(comment)); assert.ok(registered.includes(other));
+    assert.equal((registered.replace(comment, '').match(/name="WpsMcpET"/g) ?? []).length, 1);
+    assert.ok(!registered.includes('</jspluginonline>')); assert.ok(registered.includes('\r\n'));
+    const before = registered; assert.equal(register(dir, 'win32').status, 0); assert.equal(await readFile(path, 'utf8'), before);
+    await writeFile(path, '<jsplugins/>');
+    const empty = register(dir, 'win32'); assert.equal(empty.status, 0, empty.stderr);
+    assert.equal((await readFile(path, 'utf8')).match(/name="WpsMcp/g).length, 3);
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

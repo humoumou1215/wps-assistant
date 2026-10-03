@@ -1,14 +1,15 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { z } from "zod";
 import { APP_DIR, callTool, getState, PORT, deleteVariableDefinition, navigateVariableLocation, asToolError } from "./tools.js";
 import { publicConfig, parseConfig, saveConfig, redact } from "./config.js";
 import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema, chatHistory, agentResources, commandCatalog, executeCommand, listChatSessions, sessionAction, assertChatSession } from "./agent.js";
 import { logger } from "./logger.js";
 import { resolveSelectionReference } from "./references.js";
+import { DATA_DIR } from "./paths.js";
+import { APP_VERSION } from "./version.js";
+import { desktopManaged, desktopInstance, desktopAuthorized, isDesktopBusy, requestDesktopStop, desktopParentPid } from "./desktop-control.js";
 
-const pluginVersion: string = JSON.parse(await readFile(join(APP_DIR, "package.json"), "utf8")).version;
+const pluginVersion = APP_VERSION;
 
 export async function readJson(req: IncomingMessage): Promise<unknown> {
   let size = 0;
@@ -26,6 +27,7 @@ function json(res: ServerResponse, status: number, value: unknown) {
   res.end(JSON.stringify(value));
 }
 let saving = false;
+export function isApiBusy() { return saving || isChatBusy(); }
 export async function handleApi(req: IncomingMessage, res: ServerResponse, path: string) {
   const host = req.headers.host;
   const allowed = [`127.0.0.1:${PORT}`, `localhost:${PORT}`];
@@ -34,6 +36,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
   }
   if (req.method === "POST" && !req.headers["content-type"]?.startsWith("application/json")) { json(res, 415, { error: "需要 application/json" }); return; }
   try {
+    if (path.startsWith("/api/desktop/")) {
+      if (!desktopManaged) { json(res, 404, { error: "服务由源码部署管理" }); return; }
+      if (!desktopAuthorized(req.headers.authorization)) { json(res, 403, { error: "需要托盘管理凭据" }); return; }
+      if (path === "/api/desktop/status" && req.method === "GET") {
+        json(res, 200, { version: APP_VERSION, instanceId: desktopInstance, pid: process.pid, parentPid: desktopParentPid, appDir: APP_DIR, dataDir: DATA_DIR, port: PORT, busy: isDesktopBusy() }); return;
+      }
+      if (path === "/api/desktop/stop" && req.method === "POST") {
+        if (isDesktopBusy()) { json(res, 409, { error: "会话或文档操作正在运行，请等待完成后再停止服务" }); return; }
+        requestDesktopStop(); json(res, 202, { ok: true }); return;
+      }
+      json(res, 404, { error: "未知管理操作" }); return;
+    }
     if (path === "/api/state" && req.method === "GET") { json(res, 200, { ...getState(), pluginVersion }); return; }
     if (path === "/api/config" && req.method === "GET") { json(res, 200, { ...publicConfig(), builtinModels: await builtinModels() }); return; }
     if (path === "/api/chat" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(await chatHistory())))); return; }

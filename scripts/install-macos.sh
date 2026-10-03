@@ -30,49 +30,7 @@ fi
 cd "$ROOT"
 npm ci
 npm run build
-node - "$DEPLOY_ADDINS_DIR" "$DEPLOY_PORT" "$DEPLOY_ENABLE" darwin <<'REGISTRY'
-const { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync, constants } = require('node:fs');
-const { join } = require('node:path');
-const { randomBytes } = require('node:crypto');
-const [directory, port, enable, platform] = process.argv.slice(2);
-if (!/^\d+$/.test(port) || Number(port) < 1025 || Number(port) > 65535 || !/^[\w-]+$/.test(enable)) throw new Error('Invalid port or Add-in enable setting');
-const hosts = [['et', 'WpsMcpET'], ['wpp', 'WpsMcpWPP'], ['wps', 'WpsMcpWPS']];
-const publishPath = join(directory, 'publish.xml');
-const original = existsSync(publishPath) ? readFileSync(publishPath, 'utf8') : null;
-let publish = original ?? '<?xml version="1.0" encoding="UTF-8"?>\n<jsplugins>\n</jsplugins>\n';
-if ((publish.match(/<\/jsplugins>/gi) ?? []).length !== 1) throw new Error('Invalid publish.xml; left unchanged');
-const eol = publish.includes('\r\n') ? '\r\n' : '\n';
-const entry = ([host, name]) => `<jspluginonline name="${name}" url="http://127.0.0.1:${port}/addins/${host}/" type="${host}" enable="${enable}" debug="" install="null"/>`;
-const seen = new Set();
-publish = publish.replace(/<jsplugin(?:online)?\b[^>]*\bname\s*=\s*["'](WpsMcpET|WpsMcpWPP|WpsMcpWPS)["'][^>]*\/?>/gi, (tag, name) => {
-  if (seen.has(name)) return '';
-  seen.add(name);
-  return entry(hosts.find(host => host[1] === name));
-});
-const missing = hosts.filter(host => !seen.has(host[1]));
-if (missing.length) publish = publish.replace(/<\/jsplugins>/i, missing.map(host => '  ' + entry(host)).join(eol) + eol + '</jsplugins>');
-const changes = [[publishPath, original, publish, '.backup-before-wps-mcp']];
-if (platform === 'darwin') {
-  const authPath = join(directory, 'authaddin.json');
-  const oldAuth = existsSync(authPath) ? readFileSync(authPath, 'utf8') : null;
-  const auth = oldAuth === null ? {} : JSON.parse(oldAuth);
-  const isObject = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-  if (!isObject(auth) || (auth.wps !== undefined && !isObject(auth.wps))) throw new Error('Invalid authaddin.json; registries left unchanged');
-  const writer = auth.wps ??= {};
-  const id = Object.keys(writer).find(key => key !== 'namelist' && writer[key]?.name === 'WpsMcpWPS') ?? randomBytes(16).toString('hex');
-  writer[id] = { ...writer[id], enable: true, isload: true, md5: '', mode: 2, name: 'WpsMcpWPS', path: `http://127.0.0.1:${port}/addins/wps` };
-  writer.namelist = [...new Set([...String(writer.namelist ?? '').split(';').filter(Boolean), id])].join(';');
-  changes.push([authPath, oldAuth, JSON.stringify(auth, null, 2) + '\n', '.backup-before-wps-mcp-writer']);
-}
-// Validate both files before writing either; keep the first backups and all unrelated Add-ins.
-mkdirSync(directory, { recursive: true });
-for (const [path, before, after, suffix] of changes) {
-  if (before === after) continue;
-  if (before !== null && !existsSync(path + suffix)) copyFileSync(path, path + suffix, constants.COPYFILE_EXCL);
-  writeFileSync(path, after, 'utf8');
-}
-console.log('Registered ET/WPP/Writer Add-ins:', directory);
-REGISTRY
+node "$ROOT/dist/src/addin-registration.js" "$DEPLOY_ADDINS_DIR" "$DEPLOY_PORT" "$DEPLOY_ENABLE" darwin
 node - "$PLIST" "$ROOT" "$NODE" "$DEPLOY_DATA_DIR" "$DEPLOY_PORT" <<'SERVICE_CONFIG'
 const fs = require('node:fs'), path = require('node:path');
 const [plist, root, node, data, port] = process.argv.slice(2);
@@ -120,5 +78,5 @@ for _ in {1..30}; do
   sleep 1
 done
 [[ "$READY" == "1" ]] || { echo "Server did not become ready; see $DEPLOY_DATA_DIR/logs/server.stderr.log" >&2; exit 1; }
-for asset in addins/et/ addins/wpp/ addins/wps/ addon/taskpane.html addon/taskpane.js; do curl -fsS --max-time 5 "http://127.0.0.1:$DEPLOY_PORT/$asset" >/dev/null; done
+for asset in addins/et/ addins/wpp/ addins/wps/ addon/taskpane.html addon/taskpane.js addon/mcp-debug.html addon/mcp-guide.html addon/mcp-pages.css addon/mcp-client.js addon/mcp-debug.js addon/mcp-guide.js; do curl -fsS --max-time 5 "http://127.0.0.1:$DEPLOY_PORT/$asset" >/dev/null; done
 printf 'Deployed. Open WPS to verify the assistant.\nServer: http://127.0.0.1:%s\nData: %s\n' "$DEPLOY_PORT" "$DEPLOY_DATA_DIR"

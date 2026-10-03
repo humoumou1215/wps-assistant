@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>WPS MCP · 接口调试</title><link rel="stylesheet" href="mcp-pages.css"><script type="module" src="mcp-debug.js"></script></head>
+<body>
+<header><div class="topbar"><a class="brand" href="taskpane.html"><span class="mark" aria-hidden="true">M</span>WPS MCP</a><nav aria-label="页面导航"><a href="taskpane.html#chat">助手</a><a href="taskpane.html#vars">变量管理</a><a href="taskpane.html#settings">模型设置</a><a href="mcp-debug.html" aria-current="page">MCP 调试</a><a href="mcp-guide.html">MCP 配置引导</a></nav></div></header>
+<main>
+  <div class="intro"><h1>MCP 接口调试</h1><p class="muted">手动调用本地 MCP 工具，查看真实请求与响应。无需模型 API Key。</p><div class="endpoint"><span>Streamable HTTP</span><code id="endpoint"></code><button id="copyEndpoint" type="button">复制地址</button></div></div>
+  <section class="card"><div class="toolbar"><button id="connect" class="primary" type="button">连接并加载工具</button><span id="connection" role="status" aria-live="polite">正在发现工具…</span></div><p class="small">调用会执行真实操作。create / update 保存规则，run_transform 重算变量，run_render 写入 WPS 文档。网络失败或超时不会自动重试。</p></section>
+  <div class="grid">
+    <section class="card"><h2>请求</h2><div class="toolbar"><button data-method="initialize" type="button">初始化</button><button data-method="ping" type="button">Ping</button><button data-method="tools/list" type="button">工具列表</button></div>
+      <label for="toolSelect">选择工具</label><select id="toolSelect" disabled><option value="">连接后选择工具</option></select>
+      <div id="toolInfo" hidden><div class="chips"><span class="chip" id="toolEffect"></span></div><p class="small" id="toolDescription"></p><details><summary>参数 Schema</summary><pre id="toolSchema"></pre></details></div>
+      <label for="requestBody">JSON-RPC 请求（可手动编辑方法和参数）</label><textarea id="requestBody" spellcheck="false" aria-describedby="requestHint"></textarea><p id="requestHint" class="small">保留 jsonrpc、id、method；工具参数位于 params.arguments。也可发送不含 id 的通知。</p>
+      <div class="toolbar bottom"><button id="send" class="primary" type="button">发送请求</button><button id="format" type="button">格式化 JSON</button></div>
+    </section>
+    <section class="card"><h2>响应</h2><p id="requestStatus" class="status" role="status" aria-live="polite">发送请求后在此查看结果。</p><div id="responseMeta" class="response-meta"></div><pre id="responseBody">尚无响应</pre><button id="copyResponse" type="button" disabled>复制响应</button><details><summary>本次发送的请求</summary><pre id="sentRequest">尚未发送</pre></details><details><summary>原始 HTTP 响应</summary><pre id="rawResponse">尚无响应</pre></details></section>
+  </div>
+</main>
+</body></html>

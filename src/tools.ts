@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -89,27 +89,45 @@ function nextId(kind: string) {
   return `${kind}_${String(state.counters[kind]).padStart(3, "0")}`;
 }
 let persistence = Promise.resolve();
+let pendingStateWrites = 0;
 function persist(variables?: Variable[]) {
+  pendingStateWrites++;
   const write = persistence.then(async () => {
     const snapshot = JSON.stringify({ ...state, variables: variables ?? state.variables }, null, 2);
     await mkdir(DATA_DIR, { recursive: true });
     const temp = `${STATE_FILE}.${randomUUID()}.tmp`;
-    await writeFile(temp, snapshot, { mode: 0o600 });
-    await rename(temp, STATE_FILE);
+    try {
+      await writeFile(temp, snapshot, { mode: 0o600 });
+      for (let attempt = 0; ; attempt++) {
+        try { await rename(temp, STATE_FILE); break; }
+        catch (error) {
+          // Windows readers and antivirus can briefly deny replacing an existing file.
+          if (process.platform !== "win32" || attempt >= 20 || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      }
+    } catch (error) {
+      await rm(temp, { force: true }).catch(() => {});
+      throw error;
+    }
     if (variables) state.variables = variables;
   });
-  persistence = write.catch(() => {});
+  persistence = write.then(() => { pendingStateWrites--; }, () => { pendingStateWrites--; });
   return write;
 }
 let variableMutation = Promise.resolve();
+let queuedMutations = 0;
+let activeToolCalls = 0;
+export function isToolBusy() { return pendingStateWrites > 0 || queuedMutations > 0 || activeToolCalls > 0 || pending.size > 0; }
 function mutateVariables<T>(operation: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  queuedMutations++;
   let cancelWaiting: (() => void) | undefined;
   const result = variableMutation.then(() => {
     // Once execution starts, keep its result and queue slot until it completes.
     if (cancelWaiting) signal!.removeEventListener("abort", cancelWaiting);
     return operation();
   });
-  variableMutation = result.then(() => {}, () => {});
+  variableMutation = result.then(() => { queuedMutations--; }, () => { queuedMutations--; });
   if (!signal) return result;
   return new Promise<T>((resolve, reject) => {
     cancelWaiting = () => reject(new ToolError("OPERATION_CANCELLED", "已停止，未执行此操作"));
@@ -343,6 +361,8 @@ export async function refreshDocument(documentId: string) {
 export const toolDefinitions: { name: string; config: any; invoke: (args: any, signal?: AbortSignal) => Promise<any> }[] = [];
 function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema: S; title: string; description: string; annotations: Record<string, boolean> }, handler: (args: z.infer<z.ZodObject<S>>) => Promise<any>) {
   toolDefinitions.push({ name, config, invoke: (args, signal) => logger.withContext({ toolCallId: randomUUID() }, async () => {
+    activeToolCalls++;
+    try {
     const started = Date.now();
     let parsed: z.infer<z.ZodObject<S>>;
     try { parsed = z.object(config.inputSchema).parse(args); }
@@ -371,6 +391,7 @@ function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema
       errorCodes: failures?.map((r: { error?: { code?: string } }) => r.error?.code),
     });
     return result;
+    } finally { activeToolCalls--; }
   }) });
 }
 defineTool("wps_list_documents", {

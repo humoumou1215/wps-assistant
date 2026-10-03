@@ -2,7 +2,7 @@ import { readdir } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 
 let count = 0;
-for (const root of ['addon', 'scripts', 'test']) {
+for (const root of ['addon', 'scripts', 'test', 'desktop']) {
   for (const entry of await readdir(root, { recursive: true, withFileTypes: true })) {
     if (!entry.isFile() || !/\.(mjs|js)$/.test(entry.name)) continue;
     const path = `${entry.parentPath}/${entry.name}`;

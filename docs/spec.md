@@ -1566,6 +1566,8 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。开发部署后�
 
 应用版本的唯一手工来源是根目录 `package.json.version`。服务 MCP `serverInfo`、`/health`、管理状态和任务窗格版本从它读取；本地 MCP 页面从生成的 `addon/version.js` 读取；Rust 构建脚本从同一文件嵌入版本，并校验 Cargo 包版本。`scripts/sync-version.mjs` 自动同步 npm 根锁、Cargo 清单/根包锁和浏览器版本模块；`npm run build` 与 `npm run build:portable` 前自动同步，`npm run check` 拒绝漂移。用 `npm version patch --no-git-tag-version`（或指定版本）更新并运行同步 hook，再在同一提交纳入生成文件；不单独修改各处版本。Node、第三方依赖、WPS 宿主及 MCP 协议版本各自独立，不是应用版本。
 
+涉及应用功能、行为、界面、随包资源或分发内容的变更，在提交前递增应用版本，默认使用 patch；用户指定版本或变更需要 minor/major 时按要求处理。仅修改文档、测试或 CI 配置时无需递增，除非用户明确要求。提交或创建 PR 前检查本次版本更新和同步结果，交付时说明版本变更。
+
 生产依赖审计阈值仍为 high，发现高危/严重漏洞时阻断 CI。CodeQL 的分析任务成功表示扫描执行成功，告警详情仍需在 Security → Code scanning 中审查。
 
 <a id="local-mcp-pages"></a>

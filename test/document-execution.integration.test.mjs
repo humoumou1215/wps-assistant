@@ -37,12 +37,16 @@ test('query, Transform and Render bind native documents through real RPC indepen
       const make = (role, value) => {
         const native = { Name: `same.${extension}`, FullName: `/${host}/${role}/same.${extension}`, value,
           Activate() { throw new Error('Execution must not activate documents'); } };
-        if (host === 'et') native.Worksheets = { Item(name) {
-          assert.equal(name, '销售数据');
-          return { Name: name, Range() { return { get Value2() { return native.value; }, set Value2(v) { native.value = v; } }; } };
+        if (host === 'et') native.Worksheets = { Count: 1, Item(name) {
+          assert.ok(name === '销售数据' || name === 1);
+          return { Name: '销售数据', UsedRange: { Address() { return '$A$1'; }, Rows: { Count: 1 }, Columns: { Count: 1 } },
+            Range() { return { get Value2() { return native.value; }, set Value2(v) { native.value = v; } }; } };
         } };
-        if (host === 'wps') native.Content = { get Text() { return native.value; }, set Text(v) { native.value = v; } };
-        if (host === 'wpp') native.Slides = collection([{ Shapes: collection([{ Name: '内容', Type: 17,
+        if (host === 'wps') {
+          native.Content = { get Text() { return native.value; }, set Text(v) { native.value = v; } };
+          native.Paragraphs = collection([{}]); native.Tables = collection([]);
+        }
+        if (host === 'wpp') native.Slides = collection([{ SlideID: 257, Shapes: collection([{ Id: 4, Name: '内容', Type: 17, HasTextFrame: true,
           TextFrame: { TextRange: { get Text() { return native.value; }, set Text(v) { native.value = v; } } } }]) }]);
         return native;
       };
@@ -67,9 +71,12 @@ test('query, Transform and Render bind native documents through real RPC indepen
       const guide = await readFile(new URL(`../skills/wps-api/references/${{ et: 'spreadsheet', wps: 'writer', wpp: 'presentation' }[host]}.md`, import.meta.url), 'utf8');
       const example = /```js\r?\n([\s\S]*?)\r?\n```/.exec(guide)?.[1]; assert.ok(example);
       const inspected = await invoke('wps_run_readonly_code', { documentId: sourceDoc.documentId, code: example });
-      if (host === 'et') assert.equal(inspected.result.values, first.value);
-      if (host === 'wps') assert.equal(inspected.result.text, first.value);
-      if (host === 'wpp') assert.equal(inspected.result.shapes[0].name, '内容');
+      if (host === 'et') assert.deepEqual(inspected.result, [{ 名称: '销售数据', 区域: '$A$1', 行数: 1, 列数: 1, 样本: first.value }]);
+      if (host === 'wps') assert.deepEqual(inspected.result, { 名称: first.Name, 段落数: 1, 表格数: 0, 预览: first.value });
+      if (host === 'wpp') {
+        assert.equal(inspected.result[0].页面ID, 257);
+        assert.deepEqual(inspected.result[0].对象, [{ 对象ID: 4, 名称: '内容', 文本: first.value }]);
+      }
       assert.equal((await invoke('wps_run_readonly_code', { documentId: sourceDoc.documentId, code: `return { path: wpsDocument.FullName, value: ${expression}, version: Application.Version };` })).result.path, first.FullName);
 
       const variable = await invoke('wps_create_variable', { variableName: 'bound ' + type, sourceDocumentId: sourceDoc.documentId, code: `return ${expression};` });

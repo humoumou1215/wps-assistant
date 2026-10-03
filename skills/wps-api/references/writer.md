@@ -1,3 +1,26 @@
+# 文字操作指引
+
+## 定位与读取
+
+`wpsDocument.Content` / `Range(start,end)` / `Paragraphs` / `Tables` 访问绑定文档。段落/表格集合通常为 1-based；Range 字符位置按宿主返回的坐标，不能由预览长度推算。查询结果仅返回文本及明确位置，不返回原生代理。
+
+```js
+return {名称: wpsDocument.Name, 段落数: wpsDocument.Paragraphs.Count,
+  表格数: wpsDocument.Tables.Count, 预览: wpsDocument.Content.Text.slice(0, 800)};
+```
+
+用户选区按 [选区章节](common.md) 中的 start/end/storyType/caret 处理。重算读取完整范围，超长内容按已保存坐标分段读。长期绑定优先使用实际书签/标题锚点，序号或字符范围可能随编辑漂移。
+
+## 更新
+
+仅 Render 写 Range.Text 或调用插入/表格修改方法。替换精确目标，保留选区之外内容与样式；插入点与范围替换不同。先验证书签/标题唯一、表格存在和单元格范围，缺失时报错，避免回退到整个 Content。写后读回目标文本、邻近内容和关键样式。
+
+跨源报告按 [报告绑定](report-sync.md) 建立可复用规则。字段和样式更新分开，行列变化按实际表头映射，避免全篇重建。
+
+## 历史诊断的查阅边界
+
+以下为历史 UOS 诊断，成员存在不证明当前宿主签名/效果；按需分页。当前平台验证见 [验证范围](validation.md)。
+
 # Writer / WPS API guide
 
 诊断环境：UnionTech UOS 20 (1060) / WPS Office 2026 Summer Update 12.8.2.26885；WPS文字 12.0 Build 12.1.2.26885。

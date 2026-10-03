@@ -1,3 +1,37 @@
+# 演示操作指引
+
+## 定位与读取
+
+`wpsDocument.Slides.Item(i)`、`slide.Shapes.Item(j)` 通常为 1-based 集合；Shape.Id、Slide.SlideID 是稳定定位依据，页码用于人类描述。先读取相关文本、HasTable/HasChart、表头、几何和关键样式，避免转储全部空白装饰。
+
+```js
+const slides = [];
+for (let i = 1; i <= wpsDocument.Slides.Count; i = i + 1) {
+  const slide = wpsDocument.Slides.Item(i);
+  const shapes = [];
+  for (let j = 1; j <= slide.Shapes.Count; j = j + 1) {
+    const shape = slide.Shapes.Item(j);
+    const text = shape.HasTextFrame ? shape.TextFrame.TextRange.Text : '';
+    if (text || shape.HasTable || shape.HasChart) {
+      shapes.push({对象ID: shape.Id, 名称: shape.Name, 表格: shape.HasTable,
+        图表: shape.HasChart, 文本: text});
+    }
+  }
+  slides.push({页码: i, 页面ID: slide.SlideID, 对象: shapes});
+}
+return slides;
+```
+
+## 更新
+
+只在 Render 改 `shape.TextFrame.TextRange.Text`、`shape.Table.Cell(r,c).Shape.TextFrame.TextRange.Text` 或图表数据。保留原对象、位置尺寸和样式，按实际稳定 ID 查找并核实存在。图表读取 `shape.Chart` 的可用系列/数据路径，再写后读回；写方法的存在性检查也仅放在 Render。
+
+表格动态增减行列、原生图表、模板样式和防溢出按 [报告绑定](report-sync.md) 操作。创建对象或探测未知写 API 前保留恢复依据，失败后先检查当前状态，不重复追加。
+
+## 历史诊断的查阅边界
+
+以下为历史 UOS 诊断，API 枚举不是调用验证；仅查具体成员。平台结论先看 [验证范围](validation.md)。
+
 # Presentation / WPP API guide
 
 诊断环境：UnionTech UOS 20 (1060) / WPS Office 2026 Summer Update 12.8.2.26885；WPS 演示 12.0 Build 12.1.2.26885。

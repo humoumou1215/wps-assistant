@@ -1519,6 +1519,8 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 
 GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默认只有 `contents: read`；CodeQL 上传在对应任务中单独授权。PR 使用 `pull_request`，无外部密钥，也不连接个人电脑或真实 WPS。
 
+CI 的 JUnit 报告和 Portable desktop 的 ZIP/SHA-256 在 PR 运行中保留 3 天；其他触发方式保留 14 天，便于手动构建后下载和排查主分支失败。保留期按新上传的产物生效，已有产物仍遵循上传时的保留期。
+
 主分支保护要求 `CI passed` 和 `CodeQL`，分支必须与 main 保持同步，讨论必须解决，禁止强制推送和删除。个人项目不强制第二位审批者；仍必须通过 PR 合并。配置调整在 GitHub Settings → Branches。Actions 默认令牌为只读，不允许其创建/批准 PR。
 
 <a id="development-deployment"></a>
@@ -1560,7 +1562,7 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。开发部署后�
 
 ## 25.4 发布状态
 
-支持源码开发部署和第 25.6 节的原生托盘免安装包。`Portable desktop` 工作流通过 PR 或手动运行生成平台 ZIP 与 SHA-256，产物保留 14 天；推送版本标签不会自动创建 GitHub Release。默认构建没有正式发布签名；公开分发前由维护者配置平台签名和 macOS 公证。
+支持源码开发部署和第 25.6 节的原生托盘免安装包。`Portable desktop` 工作流通过 PR 或手动运行生成平台 ZIP 与 SHA-256，PR 产物保留 3 天，手动构建产物保留 14 天；推送版本标签不会自动创建 GitHub Release。默认构建没有正式发布签名；公开分发前由维护者配置平台签名和 macOS 公证。
 
 应用版本的唯一手工来源是根目录 `package.json.version`。服务 MCP `serverInfo`、`/health`、管理状态和任务窗格版本从它读取；本地 MCP 页面从生成的 `addon/version.js` 读取；Rust 构建脚本从同一文件嵌入版本，并校验 Cargo 包版本。`scripts/sync-version.mjs` 自动同步 npm 根锁、Cargo 清单/根包锁和浏览器版本模块；`npm run build` 与 `npm run build:portable` 前自动同步，`npm run check` 拒绝漂移。用 `npm version patch --no-git-tag-version`（或指定版本）更新并运行同步 hook，再在同一提交纳入生成文件；不单独修改各处版本。Node、第三方依赖、WPS 宿主及 MCP 协议版本各自独立，不是应用版本。
 

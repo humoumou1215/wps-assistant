@@ -51,7 +51,7 @@ jobs:
           name: tests-${{ matrix.os }}-node-${{ matrix.node }}
           path: test-results.xml
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}
 
   audit:
     name: Production dependency audit

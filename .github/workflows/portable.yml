@@ -44,4 +44,4 @@ jobs:
             release/*.zip
             release/*.sha256
           if-no-files-found: error
-          retention-days: 14
+          retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}

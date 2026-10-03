@@ -1,3 +1,32 @@
+# 表格操作指引
+
+## 取数
+
+从 `wpsDocument.Worksheets.Item(工作表名)` 取得绑定工作表，`Range(地址).Value2` 读取数据；`Value` 在部分 Mac 版本读写失败，优先 Value2。`UsedRange` 提供候选边界及 Rows/Columns.Count，不保证每行均有业务数据；按关键列过滤。
+
+```js
+const sheets = [];
+for (let i = 1; i <= wpsDocument.Worksheets.Count; i = i + 1) {
+  const sheet = wpsDocument.Worksheets.Item(i);
+  const used = sheet.UsedRange;
+  sheets.push({名称: sheet.Name, 区域: used.Address(), 行数: used.Rows.Count,
+    列数: used.Columns.Count, 样本: sheet.Range('A1:H4').Value2});
+}
+return sheets;
+```
+
+先表头与样本，确认列语义再取所需明细。单格可能返回标量、多格返回二维数组，先检查形状；比例保持数值。Transform 每次重读有效范围，表头定位字段以适应列移动/新增。
+
+日期按实际值类型处理；保存/重开后 Value2 的日期类型可能变化。文本规范化年月日；现代日期的 1900 制序列用 `Date.UTC(1899, 11, 30) + serial * 86400000`，1904 制用 `Date.UTC(1904, 0, 1) + serial * 86400000`，从工作簿日期制或已知日期样本核实后选择。时间戳可比较；需要年月日时用 `Intl.DateTimeFormat('en', {timeZone:'UTC', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(ms)` 取得具名字段，无需 `new` 或穷举年月。1900 年 1–2 月需单独处理 Excel 闰年兼容规则。
+
+## 写入
+
+仅 Render 给 Range.Value2/Formula、样式等赋值；保留公式与用户未要求替换的内容。批量写入二维数组尺寸须与目标范围一致，单元格样式优先沿用。写后读回关键值/公式/行列数。查询和 Transform 不 Select/Activate。
+
+## 历史诊断的查阅边界
+
+以下原始 UOS 诊断保留作成员查证，成员可见不证明当前宿主可调用；仅需具体 API 时分页查阅。当前 Mac 行为见 [验证范围](validation.md)。
+
 # Spreadsheet / ET API guide
 
 诊断环境：UnionTech UOS 20 (1060) / WPS Office 2026 Summer Update 12.8.2.26885；WPS表格 12.0 Build 26885。

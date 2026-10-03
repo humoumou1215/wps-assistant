@@ -1,6 +1,6 @@
 {
   "name": "wps-mcp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -13,11 +13,14 @@
   "type": "module",
   "main": "dist/src/server.js",
   "scripts": {
+    "version:sync": "node scripts/sync-version.mjs",
+    "version": "node scripts/sync-version.mjs",
+    "prebuild": "node scripts/sync-version.mjs",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
     "dev": "tsx src/server.ts",
     "test": "npm run build && node --test test/*.test.mjs",
-    "check": "tsc -p tsconfig.json --noEmit && node scripts/check-js.mjs",
+    "check": "node scripts/sync-version.mjs --check && tsc -p tsconfig.json --noEmit && node scripts/check-js.mjs",
     "test:ci": "npm run build && node --test --test-timeout=120000 --test-reporter=spec --test-reporter=junit --test-reporter-destination=stdout --test-reporter-destination=test-results.xml test/*.test.mjs",
     "install:macos": "bash scripts/install-macos.sh",
     "install:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows.ps1",

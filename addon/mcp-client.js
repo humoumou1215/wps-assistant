@@ -1,5 +1,6 @@
 // Small browser client for this bridge's stateless Streamable HTTP endpoint.
 // No model calls, external resources, persistent history, or automatic retries.
+import { APP_VERSION } from './version.js';
 export const PROTOCOL_VERSION = '2025-11-25';
 
 export function parseMcpResponse(text, contentType, id) {
@@ -66,7 +67,7 @@ export class LocalMcpClient {
 
   async initialize() {
     const exchange = await this.send(this.request('initialize', {
-      protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'wps-mcp-local-pages', version: '1.0.0' },
+      protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'wps-mcp-local-pages', version: APP_VERSION },
     }));
     rpcResult(exchange);
     const notification = await this.send({ jsonrpc: '2.0', method: 'notifications/initialized' });

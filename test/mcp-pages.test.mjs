@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { LocalMcpClient, parseMcpResponse, rpcResult, PROTOCOL_VERSION } from '../addon/mcp-client.js';
 import { clientProfiles } from '../addon/mcp-guide.js';
 import { startHarness } from './helpers/ui-harness.mjs';
+import { APP_VERSION } from '../addon/version.js';
 
 test('MCP page client matches JSON and SSE responses by ID and preserves protocol/tool errors', () => {
   const ok = { jsonrpc: '2.0', id: 7, result: { tools: [] } };
@@ -26,6 +27,7 @@ test('MCP page client negotiates the version, sends initialized and does not ret
   });
   await client.initialize();
   assert.equal(requests[0].request.params.protocolVersion, PROTOCOL_VERSION);
+  assert.equal(requests[0].request.params.clientInfo.version, APP_VERSION);
   assert.equal(requests[1].options.headers['MCP-Protocol-Version'], '2025-03-26');
   assert.equal(Object.hasOwn(requests[1].request, 'id'), false);
   await assert.rejects(client.send(client.request('tools/call', { name: 'wps_run_render', arguments: {} })), /network failed/);
@@ -59,7 +61,7 @@ test('client configuration uses the active endpoint without a second server or o
 test('local pages call the real MCP endpoint, expose tool failures and preserve WPS guards without a model', { timeout: 30000 }, async () => {
   const h = await startHarness();
   try {
-    for (const name of ['mcp-debug.html', 'mcp-guide.html', 'mcp-pages.css', 'mcp-client.js', 'mcp-debug.js', 'mcp-guide.js']) {
+    for (const name of ['mcp-debug.html', 'mcp-guide.html', 'mcp-pages.css', 'mcp-client.js', 'mcp-debug.js', 'mcp-guide.js', 'version.js']) {
       const response = await fetch(`${h.base}/addon/${name}`);
       assert.equal(response.status, 200, name);
     }
@@ -67,6 +69,8 @@ test('local pages call the real MCP endpoint, expose tool failures and preserve 
     const client = new LocalMcpClient(h.base + '/mcp');
     const init = rpcResult(await client.initialize());
     assert.equal(init.serverInfo.name, 'wps-mcp');
+    assert.equal(init.serverInfo.version, APP_VERSION);
+    assert.equal((await fetch(h.base + '/health').then(r => r.json())).version, APP_VERSION);
     const tools = rpcResult(await client.send(client.request('tools/list'))).tools;
     assert.ok(tools.some(tool => tool.name === 'wps_run_render' && tool.annotations.destructiveHint));
     const call = async (name, args) => client.send(client.request('tools/call', { name, arguments: args }));

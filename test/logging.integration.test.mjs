@@ -56,7 +56,7 @@ test('HTTP, chat, model, tool and RPC logs correlate and omit content including 
   } finally { echoProvider.closeAllConnections(); await new Promise(resolve => echoProvider.close(resolve)); await h.close(); }
 });
 
-test('stdio stdout contains only MCP messages and shutdown flushes log files', { timeout: 15000 }, async t => {
+test('stdio stdout contains only MCP messages and shutdown flushes log files', { timeout: 30000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'wps-log-stdio-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const probe = createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
@@ -70,7 +70,9 @@ test('stdio stdout contains only MCP messages and shutdown flushes log files', {
   try {
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'log-test', version: '1' } } }) + '\n');
     // Pipe chunks may split a JSON message after its id; wait for its line terminator.
-    for (let i = 0; i < 100 && !(stdout.includes('"id":1') && stdout.endsWith('\n')); i++) await new Promise(resolve => setTimeout(resolve, 20));
+    const deadline = Date.now() + 10_000;
+    while (!(stdout.includes('"id":1') && stdout.endsWith('\n')) && Date.now() < deadline && child.exitCode === null) await new Promise(resolve => setTimeout(resolve, 20));
+    assert.ok(stdout.includes('"id":1') && stdout.endsWith('\n'), `MCP initialization did not finish: ${stderr}`);
     const messages = stdout.trim().split('\n').map(JSON.parse);
     assert.ok(messages.some(m => m.id === 1 && m.result));
     assert.ok(messages.every(m => m.jsonrpc === '2.0' && !m.event));

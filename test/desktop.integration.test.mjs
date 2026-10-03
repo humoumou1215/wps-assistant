@@ -69,6 +69,8 @@ test('portable runtime refuses foreign listeners and stale or altered ownership,
   try {
     const rejected = await command('start'); assert.equal(rejected.ok, false); assert.match(rejected.message, /其他服务占用/);
     assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).status, 200);
+    assert.equal((await command('quit')).ok, true, 'quitting a tray never stops a source/foreign listener');
+    assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).status, 200);
     await assert.rejects(readFile(metadata), { code: 'ENOENT' });
     await new Promise(r => foreign.close(r));
     await writeFile(join(data, 'desktop-registration.json'), JSON.stringify({ port, addinsDir: env.WPS_MCP_ADDINS_DIR }));
@@ -83,7 +85,7 @@ test('portable runtime refuses foreign listeners and stale or altered ownership,
       assert.equal((await fetch(`http://127.0.0.1:${port}/health`)).status, 200);
     }
     await writeFile(metadata, original);
-    assert.equal((await command('stop')).ok, true); original = undefined;
+    assert.equal((await command('quit')).ok, true); original = undefined;
     assert.ok(await readFile(join(data, 'state.json'), 'utf8'));
     await assert.rejects(readFile(metadata), { code: 'ENOENT' });
   } finally {
@@ -91,4 +93,22 @@ test('portable runtime refuses foreign listeners and stale or altered ownership,
     if (foreign.listening) await new Promise(r => foreign.close(r));
     await rm(data, { recursive: true, force: true });
   }
+});
+
+test('portable service exits when its tray owner disappears and flushes the shutdown log', { timeout: 30000 }, async () => {
+  const owner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+  await new Promise((resolveOwner, reject) => { owner.once('spawn', resolveOwner); owner.once('error', reject); });
+  let h;
+  try {
+    h = await startHarness({ serviceEnv: { WPS_MCP_DESKTOP_TOKEN: randomUUID(), WPS_MCP_DESKTOP_INSTANCE: randomUUID(), WPS_MCP_DESKTOP_PARENT_PID: String(owner.pid) } });
+    const exit = new Promise(resolveExit => h.child.once('exit', resolveExit));
+    const ownerExit = new Promise(resolveExit => owner.once('exit', resolveExit));
+    owner.kill(); await ownerExit;
+    let timer;
+    try { await Promise.race([exit, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Service outlived the tray owner')), 5000); })]); }
+    finally { clearTimeout(timer); }
+    assert.equal(h.child.exitCode, 0);
+    assert.match(await readFile(join(h.dir, 'logs/wps-mcp.log'), 'utf8'), /desktop-parent-exit/);
+    await assert.rejects(fetch(h.base + '/health'));
+  } finally { owner.kill(); if (h) await h.close(); }
 });

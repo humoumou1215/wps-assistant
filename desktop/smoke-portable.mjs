@@ -14,7 +14,7 @@ const data = await mkdtemp(join(tmpdir(), 'wps-portable-'));
 const addinsDir = join(data, 'addins');
 const probe = createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r));
 const port = probe.address().port; await new Promise(r => probe.close(r));
-const env = { ...process.env, PATH: '', WPS_MCP_DATA_DIR: data, WPS_MCP_ADDINS_DIR: addinsDir, WPS_MCP_PORT: String(port) };
+const env = { ...process.env, PATH: '', WPS_MCP_DATA_DIR: data, WPS_MCP_ADDINS_DIR: addinsDir, WPS_MCP_PORT: String(port), WPS_MCP_DESKTOP_PARENT_PID: String(process.pid) };
 delete env.NODE_PATH; delete env.NODE_OPTIONS;
 const base = `http://127.0.0.1:${port}`;
 async function run(command, args) {
@@ -62,6 +62,8 @@ try {
     }
   }
   await run(binary, ['--smoke']);
+  const version = JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).version;
+  assert.equal((await run(binary, ['--version'])).trim(), version);
   assert.equal(JSON.parse(await readFile(join(app, 'node_modules/@earendil-works/pi-coding-agent/node_modules/brace-expansion/package.json'), 'utf8')).version, '5.0.12', 'shipped SDK uses the security-patched dependency');
   assert.match(await run(node, ['--version']), /^v24\.21\.0/);
   // Register in a disposable directory; never touch the build machine's actual WPS.
@@ -69,13 +71,16 @@ try {
   await writeFile(join(data, 'desktop-registration.json'), JSON.stringify({ port, addinsDir }));
   assert.equal(JSON.parse(await helper('initialize')).ok, true); started = true;
   const metadata = JSON.parse(await readFile(join(data, 'desktop-service.json'), 'utf8'));
+  assert.equal(metadata.parentPid, process.pid);
   assert.equal(JSON.parse(await helper('start')).ok, true);
   assert.equal(JSON.parse(await readFile(join(data, 'desktop-service.json'), 'utf8')).pid, metadata.pid, 'start reuses the service');
   assert.equal((await get('/health')).desktopManaged, true);
+  assert.equal((await get('/health')).version, version);
   for (const asset of ['taskpane.html', 'mcp-debug.html', 'mcp-guide.html', 'mcp-client.js', 'mcp-pages.css']) assert.equal((await fetch(`${base}/addon/${asset}`)).status, 200);
   const headers = { accept: 'application/json, text/event-stream' };
   const init = await (await post('/mcp', { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'portable-smoke', version: '1' } } }, headers)).text();
   assert.match(init, /protocolVersion/);
+  assert.ok(init.includes(`"version":"${version}"`));
   assert.match(await (await post('/mcp', { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, headers)).text(), /wps_run_render/);
   const agent = await get('/api/agent'); assert.equal(agent.tools.length, 11); assert.ok(agent.skills.some(s => s.name === 'wps-api'));
   const cfg = { kind: 'custom', label: 'Offline smoke', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, api: 'openai-completions', apiKey: 'fixture', model: { id: 'fixture', name: 'fixture', contextWindow: 32768, maxTokens: 1024, reasoning: false, vision: false }, thinkingLevel: 'off', compat: { thinkingFormat: '', maxTokensField: '' }, revision: (await get('/api/config')).revision };
@@ -86,7 +91,7 @@ try {
   assert.equal(JSON.parse(await helper('restart')).ok, true);
   assert.notEqual(JSON.parse(await readFile(join(data, 'desktop-service.json'), 'utf8')).pid, metadata.pid);
   assert.ok((await get('/api/chat')).turns.length > 0, 'restart preserves sessions');
-  assert.equal(JSON.parse(await helper('stop')).ok, true); started = false;
+  assert.equal(JSON.parse(await helper('quit')).ok, true); started = false;
   console.log('Portable smoke passed: bundled Node, native executable, registration, MCP, resources, local model, duplicate start, restart and data retention (PATH empty).');
 } finally {
   if (started) await helper('stop').catch(console.error);

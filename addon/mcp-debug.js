@@ -1,4 +1,5 @@
 import { LocalMcpClient, rpcResult, copyText, pretty, PROTOCOL_VERSION } from './mcp-client.js';
+import { APP_VERSION } from './version.js';
 
 const $ = id => document.getElementById(id);
 const client = new LocalMcpClient(new URL('/mcp', location.href).href);
@@ -10,7 +11,7 @@ function template(method, params) {
   $('requestBody').value = pretty(client.request(method, params));
 }
 function initializeParams() {
-  return { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'wps-mcp-debug', version: '1.0.0' } };
+  return { protocolVersion: PROTOCOL_VERSION, capabilities: {}, clientInfo: { name: 'wps-mcp-debug', version: APP_VERSION } };
 }
 function setBusy(value) {
   busy = value;

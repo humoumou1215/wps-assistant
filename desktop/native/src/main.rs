@@ -7,7 +7,7 @@ use tao::{
     event_loop::{ControlFlow, EventLoopBuilder},
 };
 use tray_icon::{
-    menu::{AboutMetadata, CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem},
     Icon, TrayIconBuilder,
 };
 
@@ -33,6 +33,16 @@ fn error(message: &str) {
         .set_title("WPS 助手")
         .set_description(message)
         .set_level(rfd::MessageLevel::Error)
+        .show();
+}
+const APP_VERSION: &str = env!("WPS_ASSISTANT_VERSION");
+fn show_about() {
+    rfd::MessageDialog::new()
+        .set_title("关于 WPS 助手")
+        .set_description(format!(
+            "WPS 助手\n版本 {APP_VERSION}\n\n原生托盘 · 本机服务 · 浏览器界面"
+        ))
+        .set_level(rfd::MessageLevel::Info)
         .show();
 }
 fn runtime() -> Result<Runtime, Box<dyn std::error::Error>> {
@@ -86,6 +96,7 @@ impl Runtime {
     fn run(&self, command: &str) -> Value {
         let mut child = Command::new(&self.node);
         child
+            .env("WPS_MCP_DESKTOP_PARENT_PID", std::process::id().to_string())
             .arg(self.app.join("dist/src/desktop-runtime.js"))
             .arg(command)
             .arg(&self.exe);
@@ -130,7 +141,8 @@ impl Runtime {
                             && status["pid"] == meta["pid"]
                             && status["appDir"] == json!(self.app)
                             && status["dataDir"] == json!(self.data)
-                            && status["port"] == json!(self.port);
+                            && status["port"] == json!(self.port)
+                            && status["parentPid"] == json!(std::process::id());
                         result["managed"] = json!(managed);
                         result["busy"] = status["busy"].clone();
                     }
@@ -186,6 +198,11 @@ fn icon() -> Icon {
     Icon::from_rgba(rgba, 24, 24).expect("内置图标")
 }
 fn main() {
+    if std::env::args().any(|a| a == "--version") {
+        println!("{APP_VERSION}");
+        return;
+    }
+    let about_only = std::env::args().any(|a| a == "--about");
     let runtime = match runtime() {
         Ok(r) => r,
         Err(e) => {
@@ -246,17 +263,8 @@ fn main() {
     let register = MenuItem::new("修复 WPS 加载项注册", true, None);
     let logs = MenuItem::new("打开日志目录", true, None);
     let login = CheckMenuItem::new("登录时启动", true, runtime.login_enabled(), None);
-    let quit = MenuItem::new("退出托盘（服务继续运行）", true, None);
-    let quit_stop = MenuItem::new("停止服务并退出", false, None);
-    let about = PredefinedMenuItem::about(
-        Some("关于 WPS 助手"),
-        Some(AboutMetadata {
-            name: Some("WPS 助手".into()),
-            version: Some(env!("CARGO_PKG_VERSION").into()),
-            comments: Some("原生托盘 · 本机服务 · 浏览器界面".into()),
-            ..Default::default()
-        }),
-    );
+    let quit = MenuItem::new("退出 WPS 助手", false, None);
+    let about = MenuItem::new("关于 WPS 助手", true, None);
     menu.append_items(&[
         &state,
         &PredefinedMenuItem::separator(),
@@ -275,7 +283,6 @@ fn main() {
         &about,
         &PredefinedMenuItem::separator(),
         &quit,
-        &quit_stop,
     ])
     .expect("托盘菜单");
     let mut tray = None;
@@ -287,6 +294,11 @@ fn main() {
         *control = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) => {
+                if about_only {
+                    show_about();
+                    *control = ControlFlow::Exit;
+                    return;
+                }
                 let builder = TrayIconBuilder::new()
                     .with_menu(Box::new(menu.clone()))
                     .with_tooltip("WPS 助手")
@@ -354,9 +366,10 @@ fn main() {
                     let _ = tray.set_tooltip(Some(&text));
                 }
                 start.set_enabled(!operating && !running);
-                for item in [&stop, &restart, &quit_stop] {
+                for item in [&stop, &restart] {
                     item.set_enabled(!operating && running && managed && !busy);
                 }
+                quit.set_enabled(!operating && !(running && managed && busy));
                 register.set_enabled(!operating);
                 login.set_enabled(!operating);
                 for item in [&chat, &vars, &settings, &debug, &guide] {
@@ -392,8 +405,8 @@ fn main() {
                 let _ = proxy.send_event(UserEvent::Status(last.clone()));
             }
             Event::UserEvent(UserEvent::Menu(e)) => {
-                if e.id == quit.id() {
-                    *control = ControlFlow::Exit;
+                if e.id == about.id() {
+                    show_about();
                     return;
                 }
                 if e.id == logs.id() {
@@ -425,8 +438,10 @@ fn main() {
                 }
                 let command = if e.id == start.id() {
                     "start"
-                } else if e.id == stop.id() || e.id == quit_stop.id() {
+                } else if e.id == stop.id() {
                     "stop"
+                } else if e.id == quit.id() {
+                    "quit"
                 } else if e.id == restart.id() {
                     "restart"
                 } else if e.id == register.id() {
@@ -441,7 +456,7 @@ fn main() {
                     return;
                 };
                 operating = true;
-                let exit = e.id == quit_stop.id();
+                let exit = e.id == quit.id();
                 let runtime = runtime.clone();
                 let proxy = proxy.clone();
                 let command = command.to_owned();

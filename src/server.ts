@@ -12,10 +12,11 @@ import { WebSocketServer } from "ws";
 import type { ZodRawShape } from "zod";
 import { APP_DIR, PORT, loadState, registerDocument, connections, documents, pending, isToolBusy, toolDefinitions, type Connection, type AddinDocument } from "./tools.js";
 import { logger } from "./logger.js";
-import { configureDesktopStop, isDesktopStopping, desktopManaged, isDesktopBusy } from "./desktop-control.js";
+import { configureDesktopStop, isDesktopStopping, desktopManaged, isDesktopBusy, watchDesktopParent } from "./desktop-control.js";
+import { APP_VERSION } from "./version.js";
 let activeHttpWork = 0;
 function createMcpServer() {
-  const mcp = new McpServer({ name: "wps-mcp", version: "0.1.0" });
+  const mcp = new McpServer({ name: "wps-mcp", version: APP_VERSION });
   for (const tool of toolDefinitions) mcp.registerTool<ZodRawShape, ZodRawShape>(tool.name, tool.config, (args, extra) => tool.invoke(args, extra.signal));
   return mcp;
 }
@@ -65,10 +66,10 @@ async function httpHandler(req: IncomingMessage, res: ServerResponse) {
   if (url.pathname === "/health") {
     res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": "*" });
     // Count only usable documents so /health matches wps_list_documents.
-    res.end(JSON.stringify({ ok: true, connections: connections.size, documents: [...documents.values()].filter((doc) => doc.connected).length, busy: isDesktopBusy(), desktopManaged }));
+    res.end(JSON.stringify({ ok: true, version: APP_VERSION, connections: connections.size, documents: [...documents.values()].filter((doc) => doc.connected).length, busy: isDesktopBusy(), desktopManaged }));
     return;
   }
-  const allowedAssets = ["index.html", "main.js", "manifest.xml", "ribbon.xml", "status.html", "taskpane.html", "taskpane.css", "taskpane.js", "taskpane-view.js", "pinyin-pro.js", "mcp-debug.html", "mcp-guide.html", "mcp-pages.css", "mcp-client.js", "mcp-debug.js", "mcp-guide.js", "ribbon-assistant.png", "ribbon-variables.png", "ribbon-status.png"];
+  const allowedAssets = ["index.html", "main.js", "manifest.xml", "ribbon.xml", "status.html", "taskpane.html", "taskpane.css", "taskpane.js", "taskpane-view.js", "pinyin-pro.js", "mcp-debug.html", "mcp-guide.html", "mcp-pages.css", "mcp-client.js", "mcp-debug.js", "mcp-guide.js", "version.js", "ribbon-assistant.png", "ribbon-variables.png", "ribbon-status.png"];
   const match = /^\/(?:addon|addins\/(?:et|wpp|wps))\/(?:([^/]+))?$/.exec(url.pathname);
   const fileName = match?.[1] ?? "index.html";
   const file = match && allowedAssets.includes(fileName) ? join(APP_DIR, "addon", fileName) : undefined;
@@ -201,6 +202,7 @@ async function exitWithLogs(code: number) {
   process.exit(code);
 }
 configureDesktopStop(() => { logger.info("server.stopping", { signal: "desktop" }); void exitWithLogs(0); }, () => activeHttpWork > 0 || isApiBusy() || isToolBusy());
+watchDesktopParent(() => { logger.info("server.stopping", { signal: "desktop-parent-exit" }); void exitWithLogs(0); });
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.once(signal, () => {
   logger.info("server.stopping", { signal }); void exitWithLogs(0);
 });

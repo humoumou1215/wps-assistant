@@ -21,7 +21,7 @@ const markerPath = join(DATA_DIR, "desktop-registration.json");
 const addinsDir = resolve(process.env.WPS_MCP_ADDINS_DIR ?? (process.platform === "darwin"
   ? join(homedir(), "Library/Containers/com.kingsoft.wpsoffice.mac/Data/.kingsoft/wps/jsaddons")
   : join(process.env.APPDATA ?? join(homedir(), "AppData/Roaming"), "kingsoft/wps/jsaddons")));
-type Metadata = { pid: number; instanceId: string; token: string; appDir: string; dataDir: string; port: number };
+type Metadata = { pid: number; instanceId: string; token: string; appDir: string; dataDir: string; port: number; parentPid?: number };
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 function alive(pid: number) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -73,7 +73,10 @@ async function start(firstRun: boolean) {
   const meta = await readObject<Metadata>(metaPath);
   if (await listening()) {
     if (!meta) throw new Error(`端口 ${port} 已被其他服务占用。请先停止原来的源码部署服务，再启动免安装版`);
-    await ownedStatus(meta); return "服务已在运行";
+    await ownedStatus(meta);
+    const parentPid = Number(process.env.WPS_MCP_DESKTOP_PARENT_PID);
+    if (parentPid && meta.parentPid !== parentPid) throw new Error("当前服务绑定其他托盘或旧版本，请先停止旧服务后重试");
+    return "服务已在运行";
   }
   if (meta && alive(meta.pid)) throw new Error("已有服务进程尚未就绪或正在退出，请稍后重试；不会启动第二个服务");
   if (firstRun) {
@@ -84,6 +87,8 @@ async function start(firstRun: boolean) {
   const output = openSync(join(logs, "desktop.stdout.log"), "a", 0o600);
   const errors = openSync(join(logs, "desktop.stderr.log"), "a", 0o600);
   const instanceId = randomUUID(), token = randomBytes(32).toString("hex");
+  const parentPid = process.env.WPS_MCP_DESKTOP_PARENT_PID ? Number(process.env.WPS_MCP_DESKTOP_PARENT_PID) : undefined;
+  if (parentPid !== undefined && (!Number.isInteger(parentPid) || parentPid <= 1 || !alive(parentPid))) throw new Error("托盘进程已退出，取消服务启动");
   let child;
   try {
     child = spawn(process.execPath, [join(appDir, "dist/src/server.js")], {
@@ -92,7 +97,7 @@ async function start(firstRun: boolean) {
     });
     await new Promise<void>((resolve, reject) => { child!.once("spawn", resolve); child!.once("error", reject); });
   } finally { closeSync(output); closeSync(errors); }
-  const next: Metadata = { pid: child.pid!, instanceId, token, appDir, dataDir: DATA_DIR, port };
+  const next: Metadata = { pid: child.pid!, instanceId, token, appDir, dataDir: DATA_DIR, port, parentPid };
   try { await writeFile(metaPath, JSON.stringify(next), { mode: 0o600 }); }
   catch (error) { child.kill(); throw error; }
   child.unref();
@@ -168,6 +173,12 @@ export async function desktopCommand(command: string, tray = "") {
     switch (command) {
       case "initialize": case "start": return start(true);
       case "stop": return stop();
+      case "quit": {
+        const meta = await readObject<Metadata>(metaPath);
+        // A source deployment or another app is never stopped when this tray exits.
+        if (!meta || meta.appDir !== appDir || meta.dataDir !== DATA_DIR || meta.port !== port) return "已退出";
+        return stop();
+      }
       case "restart": await stop(); return start(true);
       case "register": return register();
       case "login-on": return login(true, tray);

@@ -1,9 +1,12 @@
 [package]
 name = "wps-assistant-tray"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
+
+[build-dependencies]
+serde_json = "1"
 
 [dependencies]
 tray-icon = { version = "=0.26.0", default-features = false }

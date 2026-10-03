@@ -1,6 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 import { z } from "zod";
 import { APP_DIR, callTool, getState, PORT, deleteVariableDefinition, navigateVariableLocation, asToolError } from "./tools.js";
 import { publicConfig, parseConfig, saveConfig, redact } from "./config.js";
@@ -8,9 +6,10 @@ import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema,
 import { logger } from "./logger.js";
 import { resolveSelectionReference } from "./references.js";
 import { DATA_DIR } from "./paths.js";
-import { desktopManaged, desktopInstance, desktopAuthorized, isDesktopBusy, requestDesktopStop } from "./desktop-control.js";
+import { APP_VERSION } from "./version.js";
+import { desktopManaged, desktopInstance, desktopAuthorized, isDesktopBusy, requestDesktopStop, desktopParentPid } from "./desktop-control.js";
 
-const pluginVersion: string = JSON.parse(await readFile(join(APP_DIR, "package.json"), "utf8")).version;
+const pluginVersion = APP_VERSION;
 
 export async function readJson(req: IncomingMessage): Promise<unknown> {
   let size = 0;
@@ -41,7 +40,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       if (!desktopManaged) { json(res, 404, { error: "服务由源码部署管理" }); return; }
       if (!desktopAuthorized(req.headers.authorization)) { json(res, 403, { error: "需要托盘管理凭据" }); return; }
       if (path === "/api/desktop/status" && req.method === "GET") {
-        json(res, 200, { instanceId: desktopInstance, pid: process.pid, appDir: APP_DIR, dataDir: DATA_DIR, port: PORT, busy: isDesktopBusy() }); return;
+        json(res, 200, { version: APP_VERSION, instanceId: desktopInstance, pid: process.pid, parentPid: desktopParentPid, appDir: APP_DIR, dataDir: DATA_DIR, port: PORT, busy: isDesktopBusy() }); return;
       }
       if (path === "/api/desktop/stop" && req.method === "POST") {
         if (isDesktopBusy()) { json(res, 409, { error: "会话或文档操作正在运行，请等待完成后再停止服务" }); return; }

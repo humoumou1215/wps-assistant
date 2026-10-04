@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startHarness } from './helpers/ui-harness.mjs';
+import { GUARD_RETRY_LIMIT } from '../dist/src/guard-budget.js';
 
 test('task pane API, isolated pi session, full tool loop, errors, cancellation and config privacy', { timeout: 60000 }, async () => {
   const h = await startHarness();
@@ -81,7 +82,7 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
     const failed = await post('/api/actions', { op: 'render', variableId }); assert.equal(failed.status, 422); assert.match(await failed.text(), /模拟文档写保护/);
     h.appState.failRender = false;
     const blocked = await (await post('/api/chat', { message: '守卫验证' })).text();
-    assert.equal((blocked.match(/event: tool.start/g) || []).length, 3);
+    assert.equal((blocked.match(/event: tool.start/g) || []).length, GUARD_RETRY_LIMIT);
     assert.equal((await get('/api/state')).variables.length, 1);
     const failure = await (await post('/api/chat', { message: '模拟失败' })).text(); assert.match(failure, /event: error/);
     assert.ok((await get('/api/chat')).messages.length > 1);

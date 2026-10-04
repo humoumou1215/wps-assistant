@@ -10,9 +10,9 @@ npm test
 
 开发环境部署使用 `npm run install:macos` 或 `npm run install:windows`，详细约定见 [SPEC](docs/spec.md#development-deployment)。
 
-从 `main` 创建功能分支，通过 Pull Request 合并。CI 必须通过，讨论必须解决。常规测试使用模拟 Add-in；涉及 WPS JS API 的变更还需使用可丢弃文档做实机验收，并在 PR 中记录 WPS 版本、操作系统和测试结果。真实测试命令见 README。
+从 `main` 创建功能分支，通过 Pull Request 合并。CI 必须通过，讨论必须解决。常规测试使用模拟 Add-in；涉及 WPS JS API 的变更还需使用可丢弃文档做实机验收，并在 PR 中记录 WPS 版本、操作系统和测试结果。验收要求和固定样例见 [SPEC 真实 WPS 验收](docs/spec.md#live-validation)。
 
-变更部署脚本时，在对应平台验证 Add-in 注册、重复部署和服务健康检查；使用临时目录测试注册逻辑，不覆盖真实用户配置。发布打包流程暂时撤下，后续重新设计。
+变更部署脚本时，在对应平台验证 Add-in 注册、重复部署和服务健康检查；使用临时目录测试注册逻辑，不覆盖真实用户配置。免安装包构建见 [SPEC](docs/spec.md#portable-desktop)，应用版本更新与同步见 [发布状态](docs/spec.md#254-发布状态)。
 
 不要提交真实密钥、文档、会话、运行日志或本地依赖目录。项目采用 MIT；第三方 vendored 代码的许可证以其随附文件为准。
 

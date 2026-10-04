@@ -4,8 +4,8 @@ import { createGuardBudget, GUARD_RETRY_LIMIT } from "../dist/src/guard-budget.j
 
 /**
  * The budget is charged per *model round*, because one assistant message can fire several
- * `wps_run_readonly_code` calls in parallel. These tests pin that behaviour: a regression here is what
- * aborted a whole session after two mistakes instead of three.
+ * `wps_run_readonly_code` calls in parallel. These tests pin that behaviour so parallel
+ * tool calls cannot exhaust the budget before the model has a chance to correct them.
  */
 
 test("parallel violations inside one model round cost a single charge", () => {
@@ -18,12 +18,15 @@ test("parallel violations inside one model round cost a single charge", () => {
   assert.equal(budget.exhausted, false);
 });
 
-test("three correction rounds exhaust the budget, and only the last charge reports it", () => {
+test("30 correction rounds exhaust the default budget, and only the last charge reports it", () => {
+  assert.equal(GUARD_RETRY_LIMIT, 30);
   const budget = createGuardBudget();
-  budget.startTurn();
-  assert.equal(budget.charge(), false);
-  budget.startTurn();
-  assert.equal(budget.charge(), false);
+  for (let round = 1; round < 30; round++) {
+    budget.startTurn();
+    assert.equal(budget.charge(), false);
+    assert.equal(budget.exhausted, false);
+    assert.equal(budget.failures, round);
+  }
   budget.startTurn();
   assert.equal(budget.charge(), true);
   assert.equal(budget.exhausted, true);
@@ -51,10 +54,12 @@ test("rounds that violate nothing spend nothing", () => {
 test("without turn events, charging falls back to one per call", () => {
   const budget = createGuardBudget();
   assert.equal(budget.tracksTurns, false);
-  assert.equal(budget.charge(), false);
-  assert.equal(budget.charge(), false);
+  for (let call = 1; call < 30; call++) {
+    assert.equal(budget.charge(), false);
+    assert.equal(budget.exhausted, false);
+  }
   assert.equal(budget.charge(), true);
-  assert.equal(budget.failures, 3);
+  assert.equal(budget.failures, 30);
 });
 
 test("reset returns the budget to its initial state, including turn tracking", () => {

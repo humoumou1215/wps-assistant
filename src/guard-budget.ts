@@ -13,7 +13,7 @@
  */
 
 /** Charges allowed before the session is aborted: one correction round per charge. */
-export const GUARD_RETRY_LIMIT = 3;
+export const GUARD_RETRY_LIMIT = 30;
 
 export type GuardBudget = {
   /** Mark the start of a new model round. Called once per `turn_start` event. */

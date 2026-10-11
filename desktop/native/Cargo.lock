@@ -2216,10 +2216,11 @@ dependencies = [
 
 [[package]]
 name = "wps-assistant-tray"
-version = "0.1.3"
+version = "0.1.4"
 dependencies = [
  "dirs",
  "dunce",
+ "flate2",
  "fs2",
  "objc2",
  "objc2-app-kit",

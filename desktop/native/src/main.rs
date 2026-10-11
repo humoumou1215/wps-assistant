@@ -1,7 +1,13 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 use fs2::FileExt;
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, process::Command, time::Duration};
+use std::{
+    fs,
+    io::{Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
+    process::Command,
+    time::Duration,
+};
 use tao::{
     event::{Event, StartCause},
     event_loop::{ControlFlow, EventLoopBuilder},
@@ -65,6 +71,107 @@ fn show_about() {
         .set_level(rfd::MessageLevel::Info)
         .show();
 }
+// 自解压单文件在可执行文件尾部追加 zlib 载荷和固定长度页脚；ZIP/文件夹形态没有页脚，
+// 继续按可执行文件所在目录解析资源。格式与打包侧 desktop/build-sfx.mjs 成对维护。
+const SFX_MAGIC: &[u8; 8] = b"WPSMCPX1";
+const SFX_VERSION_LEN: usize = 24;
+const SFX_FOOTER_LEN: usize = 8 + SFX_VERSION_LEN + 8;
+
+/// 读取尾部页脚；不是自解压包时返回 None。载荷长度只用于定位，非法值按非自解压处理。
+fn embedded_archive(exe: &Path) -> Option<(String, u64)> {
+    let total = fs::metadata(exe).ok()?.len();
+    if total < SFX_FOOTER_LEN as u64 {
+        return None;
+    }
+    let mut footer = [0u8; SFX_FOOTER_LEN];
+    let mut file = fs::File::open(exe).ok()?;
+    file.seek(SeekFrom::End(-(SFX_FOOTER_LEN as i64))).ok()?;
+    file.read_exact(&mut footer).ok()?;
+    if &footer[..8] != SFX_MAGIC {
+        return None;
+    }
+    let raw = &footer[8..8 + SFX_VERSION_LEN];
+    let end = raw.iter().position(|b| *b == 0).unwrap_or(SFX_VERSION_LEN);
+    let version = String::from_utf8(raw[..end].to_vec()).ok()?;
+    let payload = u64::from_le_bytes(footer[8 + SFX_VERSION_LEN..].try_into().ok()?);
+    if version.is_empty() || payload == 0 || payload > total - SFX_FOOTER_LEN as u64 {
+        return None;
+    }
+    Some((version, payload))
+}
+
+/// 把内嵌载荷落盘到用户目录后返回程序根；同版本已存在时直接复用，不重复解压。
+fn materialize_package(
+    exe: &Path,
+    version: &str,
+    payload_len: u64,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // 用户目录一定可写；程序放在 exe 旁边会在只读位置或 U 盘上失败。
+    let root = std::env::var_os("WPS_MCP_EXTRACT_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| dirs::data_local_dir().expect("用户目录不可用").join("WPS Assistant"));
+    let target = root.join(version);
+    let marker = target.join("resources").join("portable.json");
+    if marker.is_file() {
+        return Ok(target);
+    }
+    fs::create_dir_all(&root)?;
+    // 先解到同目录的临时位置再整体改名，中断不会留下半个可以误用的包。
+    let staging = root.join(format!("{version}.incomplete-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&staging);
+    fs::create_dir_all(&staging)?;
+    let start = fs::metadata(exe)?.len() - SFX_FOOTER_LEN as u64 - payload_len;
+    let mut file = fs::File::open(exe)?;
+    file.seek(SeekFrom::Start(start))?;
+    let mut archive = flate2::read::ZlibDecoder::new(file.take(payload_len));
+    // 条目流：[u32 路径长度][路径][u64 内容长度][u8 标志][内容]，路径用正斜杠且相对包根。
+    // 标志位 0 表示可执行：fs::write 默认不带可执行位，不恢复的话 node 这类文件会起不来。
+    loop {
+        let mut header = [0u8; 4];
+        match archive.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(e) => return Err(e.into()),
+        }
+        let mut name = vec![0u8; u32::from_le_bytes(header) as usize];
+        archive.read_exact(&mut name)?;
+        let name = String::from_utf8(name)?;
+        if name.is_empty()
+            || name.starts_with('/')
+            || name.split('/').any(|part| part.is_empty() || part == "..")
+        {
+            return Err("自解压包条目路径非法".into());
+        }
+        let mut size = [0u8; 8];
+        archive.read_exact(&mut size)?;
+        let mut flags = [0u8; 1];
+        archive.read_exact(&mut flags)?;
+        let path = staging.join(name.replace('/', std::path::MAIN_SEPARATOR_STR));
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut content = vec![0u8; u64::from_le_bytes(size) as usize];
+        archive.read_exact(&mut content)?;
+        fs::write(&path, &content)?;
+        #[cfg(unix)]
+        if flags[0] & 1 == 1 {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    if !staging.join("resources").join("portable.json").is_file() {
+        return Err("自解压内容不完整，请重新下载".into());
+    }
+    match fs::rename(&staging, &target) {
+        Ok(()) => Ok(target),
+        // 另一个实例可能先完成落盘，直接复用它已经写好的结果。
+        Err(_) if marker.is_file() => {
+            let _ = fs::remove_dir_all(&staging);
+            Ok(target)
+        }
+        Err(e) => Err(e.into()),
+    }
+}
 fn runtime() -> Result<Runtime, Box<dyn std::error::Error>> {
     // Explicit options let Windows login startup preserve a custom local deployment.
     for arg in std::env::args().skip(1) {
@@ -80,11 +187,25 @@ fn runtime() -> Result<Runtime, Box<dyn std::error::Error>> {
         }
     }
     let exe = dunce::canonicalize(std::env::current_exe()?)?;
-    let parent = exe.parent().ok_or("找不到程序目录")?;
+    // 自解压包先把资源落盘再按落盘目录解析；ZIP/文件夹形态仍用可执行文件所在目录。
+    let extracted = match embedded_archive(&exe) {
+        Some((version, payload_len)) => Some(materialize_package(&exe, &version, payload_len)?),
+        None => None,
+    };
     #[cfg(target_os = "macos")]
-    let resources = parent.parent().ok_or("应用目录不完整")?.join("Resources");
+    let resources = match &extracted {
+        Some(root) => root.join("resources"),
+        None => exe
+            .parent()
+            .and_then(Path::parent)
+            .ok_or("应用目录不完整")?
+            .join("Resources"),
+    };
     #[cfg(target_os = "windows")]
-    let resources = parent.join("resources");
+    let resources = match &extracted {
+        Some(root) => root.join("resources"),
+        None => exe.parent().ok_or("找不到程序目录")?.join("resources"),
+    };
     let app = resources.join("app");
     let node = resources
         .join("runtime")
@@ -223,15 +344,22 @@ fn main() {
         return;
     }
     let about_only = std::env::args().any(|a| a == "--about");
+    let smoke = std::env::args().any(|a| a == "--smoke");
     let runtime = match runtime() {
         Ok(r) => r,
         Err(e) => {
+            // 构建期的 smoke 不能弹窗：解压失败时要立刻以非零码结束并说明原因，
+            // 否则自动化验证会卡在这个模态对话框上直到超时。
+            if smoke {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
             error(&e.to_string());
             return;
         }
     };
     // A native smoke command uses the exact packaged runtime without displaying a tray.
-    if std::env::args().any(|a| a == "--smoke") {
+    if smoke {
         let result = Command::new(&runtime.node).arg("--version").output();
         std::process::exit(if result.map(|o| o.status.success()).unwrap_or(false) {
             0

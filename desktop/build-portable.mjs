@@ -1,10 +1,12 @@
 import { spawn } from 'node:child_process';
 import { openSync, closeSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { cp, mkdir, readFile, readdir, rm, writeFile, chmod, stat } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, readlink, rm, writeFile, chmod, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { syncVersion } from '../scripts/sync-version.mjs';
+import { pruneUnusedProviders } from './prune-runtime.mjs';
+import { buildSelfExtractingExe } from './build-sfx.mjs';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 await syncVersion(root);
@@ -75,18 +77,11 @@ if (JSON.parse(await readFile(join(braceDirectory, 'package.json'), 'utf8')).ver
 }
 await npmRun(['audit', '--omit=dev', '--audit-level=high', '--registry=https://registry.npmjs.org'], { cwd: app });
 await rm(join(app, 'package-lock.json'));
-// The SDK's published shrinkwrap includes every esbuild platform. Keep this target only.
 const moduleRoot = join(app, 'node_modules');
-async function pruneEsbuild(directory) {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const path = join(directory, entry.name);
-    if (entry.name === '@esbuild') {
-      for (const target of await readdir(path)) if (target !== `${platform}-${arch}`) await rm(join(path, target), { recursive: true, force: true });
-    } else await pruneEsbuild(path);
-  }
-}
-await pruneEsbuild(moduleRoot);
+// 移除进程内永远不会加载的 provider SDK 及其传递依赖，判定依据见 desktop/prune-runtime.mjs。
+// 审计保持在上一步、按 package-lock 的生产依赖集合执行，裁剪后不再单独复算。
+const pruned = await pruneUnusedProviders(app);
+console.log(`Pruned ${pruned.packages} unused provider packages (${(pruned.bytes / 1048576).toFixed(1)} MiB).`);
 // Maps and TypeScript declarations are unused at runtime; preserve JS, data, WASM and notices.
 await files(moduleRoot, async (path, file) => {
   if (/\.map$|\.d\.(?:ts|mts|cts)$/.test(file)) await rm(path);
@@ -140,9 +135,9 @@ const rustDocs = join((await readFile(sysrootPath, 'utf8')).trim(), 'share/doc/r
 await cp(join(rustDocs, 'COPYRIGHT-library.html'), join(resources, 'licenses/Rust-standard-library.html'));
 await cp(join(rustDocs, 'licenses'), join(resources, 'licenses/rust'), { recursive: true });
 await writeFile(join(resources, 'portable.json'), JSON.stringify({ version: pkg.version, node: nodeVersion, platform, arch, nodeArchiveSha256: expected }, null, 2));
+const identity = process.env.WPS_MCP_CODESIGN_IDENTITY ?? '-';
 if (platform === 'darwin') {
   await writeFile(join(bundle, 'Contents/Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleName</key><string>WPS Assistant</string><key>CFBundleDisplayName</key><string>WPS 助手</string><key>CFBundleIdentifier</key><string>com.local.wps-assistant</string><key>CFBundleExecutable</key><string>wps-assistant</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>${pkg.version}</string><key>CFBundleVersion</key><string>${pkg.version}</string><key>LSUIElement</key><true/><key>LSMinimumSystemVersion</key><string>13.5</string></dict></plist>\n`);
-  const identity = process.env.WPS_MCP_CODESIGN_IDENTITY ?? '-';
   if (identity !== '-') {
     // Notarization scans nested Mach-O files too. Preserve Node's JIT entitlements.
     await run('codesign', ['--force', '--sign', identity, '--options', 'runtime', '--timestamp', '--preserve-metadata=entitlements', node]);
@@ -175,4 +170,54 @@ else await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', '
 await run(process.execPath, ['desktop/smoke-portable.mjs', join(extracted, platform === 'darwin' ? 'WPS Assistant.app' : 'WPS Assistant')]);
 const digest = createHash('sha256').update(await readFile(output)).digest('hex');
 await writeFile(`${output}.sha256`, `${digest}  ${name}.zip\n`);
-console.log(`Portable bundle: ${bundle}\nArchive: ${output} (${((await stat(output)).size / 1024 / 1024).toFixed(1)} MiB)`);
+let diskImage;
+if (platform === 'darwin') {
+  // macOS 的常规分发形态：用户把 .app 拖进 Applications，不必先解压。
+  // HFS+ 配 zlib-level=9 时与 ZIP 体积基本持平；hdiutil 默认的 APFS 容器会大出四成以上。
+  diskImage = join(release, `${name}.dmg`); await rm(diskImage, { force: true });
+  const staging = join(build, 'dmg-staging'); await rm(staging, { recursive: true, force: true }); await mkdir(staging, { recursive: true });
+  // 用 ditto 而不是 cp：保留扩展属性，避免破坏 .app 的代码签名。
+  await run('ditto', [bundle, join(staging, 'WPS Assistant.app')]);
+  // 只放软链，不把目标机的 Applications 打进去。
+  await run('ln', ['-s', '/Applications', join(staging, 'Applications')]);
+  await run('hdiutil', ['create', '-volname', 'WPS Assistant', '-srcfolder', staging, '-ov', '-fs', 'HFS+', '-imagekey', 'zlib-level=9', '-format', 'UDZO', diskImage]);
+  // 默认构建是 ad-hoc 签名，给镜像本身签名没有意义，只在有正式身份时执行。
+  if (identity !== '-') await run('codesign', ['--force', '--sign', identity, '--options', 'runtime', '--timestamp', diskImage]);
+  if (process.env.WPS_MCP_NOTARY_PROFILE) {
+    await run('xcrun', ['notarytool', 'submit', diskImage, '--keychain-profile', process.env.WPS_MCP_NOTARY_PROFILE, '--wait']);
+    await run('xcrun', ['stapler', 'staple', diskImage]);
+  }
+  // 按用户实际看到的结构复核，并在只读挂载卷上再跑一次隔离 smoke。
+  const mounted = join(build, 'dmg-check'); await rm(mounted, { recursive: true, force: true }); await mkdir(mounted, { recursive: true });
+  await run('hdiutil', ['attach', diskImage, '-nobrowse', '-readonly', '-mountpoint', mounted]);
+  try {
+    if (await readlink(join(mounted, 'Applications')) !== '/Applications') throw new Error('Disk image Applications shortcut must be a link to /Applications');
+    await run(process.execPath, ['desktop/smoke-portable.mjs', join(mounted, 'WPS Assistant.app')]);
+  } finally {
+    try { await run('hdiutil', ['detach', mounted]); } catch { await run('hdiutil', ['detach', mounted, '-force']); }
+  }
+  const imageDigest = createHash('sha256').update(await readFile(diskImage)).digest('hex');
+  await writeFile(`${diskImage}.sha256`, `${imageDigest}  ${name}.dmg\n`);
+}
+let singleFile;
+let singleEntries = 0;
+if (platform === 'win32') {
+  // 自解压单文件：用户只拿到一个 exe，首次运行把载荷落盘到用户目录（WPS_MCP_EXTRACT_DIR 可覆盖）。
+  // ZIP 形态继续保留，便于对照排查与回退。
+  singleFile = join(release, `${name}.exe`); await rm(singleFile, { force: true });
+  const built = await buildSelfExtractingExe({ tray: binary, bundle, version: pkg.version, output: singleFile });
+  singleEntries = built.entries;
+  // 用打包出来的 exe 自己解压一次，再对解压结果跑同一套 smoke，确认载荷完整且可运行。
+  const expandRoot = join(build, 'sfx-check'); await rm(expandRoot, { recursive: true, force: true }); await mkdir(expandRoot, { recursive: true });
+  await run(singleFile, ['--smoke'], { env: { ...process.env, WPS_MCP_EXTRACT_DIR: expandRoot } });
+  await run(process.execPath, ['desktop/smoke-portable.mjs', join(expandRoot, pkg.version)]);
+  const singleDigest = createHash('sha256').update(await readFile(singleFile)).digest('hex');
+  await writeFile(`${singleFile}.sha256`, `${singleDigest}  ${name}.exe\n`);
+}
+const megabytes = async path => ((await stat(path)).size / 1024 / 1024).toFixed(1);
+console.log([
+  `Portable bundle: ${bundle}`,
+  `Archive: ${output} (${await megabytes(output)} MiB)`,
+  diskImage ? `Disk image: ${diskImage} (${await megabytes(diskImage)} MiB)` : null,
+  singleFile ? `Single file: ${singleFile} (${await megabytes(singleFile)} MiB, ${singleEntries} entries)` : null,
+].filter(Boolean).join('\n'));

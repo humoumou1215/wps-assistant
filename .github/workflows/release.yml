@@ -1,0 +1,110 @@
+name: Release
+
+# 标签推送即发布：先复用 Portable desktop 构建三个平台的产物，再把它们作为资产挂到 Release 上。
+# 手动触发用于重发或补发，标签由 workflow_dispatch 的输入指定。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布或重发的标签，例如 v0.1.4
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  portable:
+    name: Build portable packages
+    uses: ./.github/workflows/portable.yml
+
+  publish:
+    name: Publish release
+    needs: portable
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # 发布是唯一需要写权限的步骤，其余工作流仍只有 contents: read。
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: portable-*
+          path: assets
+          merge-multiple: true
+      - name: Collect and verify assets
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version package.json)
+          test "$TAG" = "v$version" || { echo "标签 $TAG 与 package.json 的 v$version 不一致"; exit 1; }
+          mkdir -p release
+          find assets -type f \( -name '*.zip' -o -name '*.dmg' -o -name '*.exe' -o -name '*.sha256' \) -exec mv {} release/ \;
+          count=$(find release -type f | wc -l)
+          test "$count" -ge 6 || { echo "资产只有 $count 个，缺少平台产物"; exit 1; }
+          for file in release/*.zip release/*.dmg release/*.exe; do
+            [ -e "$file" ] || continue
+            name=$(basename "$file")
+            expected=$(cut -d' ' -f1 "release/$name.sha256")
+            actual=$(sha256sum "$file" | cut -d' ' -f1)
+            test "$expected" = "$actual" || { echo "$name 的 SHA-256 与记录不一致"; exit 1; }
+          done
+          ls -l release
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Build release notes
+        run: |
+          set -euo pipefail
+          {
+            echo "免安装包，目标机器无需安装 Node、npm 或 Rust。"
+            echo
+            echo "## 下载哪个"
+            echo
+            echo "| 平台 | 文件 | 用法 |"
+            echo "| --- | --- | --- |"
+            echo "| macOS | \`wps-assistant-$VERSION-darwin-arm64.dmg\` | 打开后把 WPS Assistant.app 拖进 Applications |"
+            echo "| macOS | \`wps-assistant-$VERSION-darwin-x64.dmg\` | 同上，Intel 机型 |"
+            echo "| Windows | \`wps-assistant-$VERSION-win32-x64.exe\` | 双击即用，首次运行把整包落盘到 %LOCALAPPDATA%\\WPS Assistant |"
+            echo "| Windows | \`wps-assistant-$VERSION-win32-x64.zip\` | 解压后须保留整个文件夹，双击其中的 wps-assistant.exe |"
+            echo
+            echo "每个产物都附带同名 \`.sha256\`，下载后请先校验。"
+            echo
+            echo "## 运行要求"
+            echo
+            echo "- macOS 13.5 及以上，或 Windows 10 及以上。"
+            echo "- 需要预先安装 WPS Office，并支持 JS 加载项。"
+            echo "- 首次启动前请完全退出 WPS（含托盘进程），安装包会自动注册三个宿主的加载项。"
+            echo
+            echo "## 签名状态"
+            echo
+            echo "本发布由默认流水线构建，**未使用正式发布签名**：macOS 为 ad-hoc 签名、未做公证，"
+            echo "外部分发时可能受 Gatekeeper 限制；Windows 未做 Authenticode 签名。"
+            echo "维护者配置 \`WPS_MCP_CODESIGN_IDENTITY\`、\`WPS_MCP_NOTARY_PROFILE\`、"
+            echo "\`WPS_MCP_SIGNTOOL_CERT_SHA1\` 后，同一条流水线会产出签名并公证的资产。"
+          } > notes.md
+          cat notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          extra=""
+          case "$VERSION" in *-*) extra="--prerelease" ;; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file notes.md $extra
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* --title "$TAG" --notes-file notes.md $extra
+          fi
+          gh release view "$TAG" --json tagName,isPrerelease,assets \
+            --jq '"发布完成：\(.tagName)（预发布：\(.isPrerelease)）", ("资产：" + ([.assets[].name] | join(", ")))'

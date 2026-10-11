@@ -1501,7 +1501,7 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 
 状态：已采纳。
 
-任务窗格的会话页需要一个能把「思考 / 工具调用 / 答复」流式吐出来的 Agent 引擎。决定把 pi 作为库嵌进 `wps-mcp` 进程：用 `@earendil-works/pi-coding-agent@0.87.1`（MIT）的 `createAgentSession()` 起会话，`session.subscribe()` 的事件直接转成 SSE 推给任务窗格；pi 要用的工具用 `customTools` **直挂** `src/tools.ts` 里同一批函数，**不**让内嵌的 pi 反过来通过 HTTP 连自己的 `/mcp`。
+任务窗格的会话页需要一个能把「思考 / 工具调用 / 答复」流式吐出来的 Agent 引擎。决定把 pi 作为库嵌进 `wps-mcp` 进程：用 `@earendil-works/pi-coding-agent@0.99.2`（MIT）的 `createAgentSession()` 起会话，`session.subscribe()` 的事件直接转成 SSE 推给任务窗格；pi 要用的工具用 `customTools` **直挂** `src/tools.ts` 里同一批函数，**不**让内嵌的 pi 反过来通过 HTTP 连自己的 `/mcp`。
 
 ### 24.1.1 方案比较
 
@@ -1522,7 +1522,7 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 
 ### 24.1.2 影响与约束
 
-- **多一组重依赖。** `@earendil-works/pi-coding-agent` 直连 20 个包，经 `pi-ai` 传递引入 `@anthropic-ai/sdk` / `openai` / `@google/genai` / `@aws-sdk/client-bedrock-runtime`，以及原生模块 `@silvia-odwyer/photon-node`。这是本项目为「简洁」开的最大一次例外，已知并接受。
+- **多一组重依赖。** `@earendil-works/pi-coding-agent` 经 `pi-ai` 传递引入 `@anthropic-ai/sdk` / `openai` / `@google/genai` / `@aws-sdk/client-bedrock-runtime`，以及原生模块 `@silvia-odwyer/photon-node`；0.99.2 还引入 `pi-codemode`、`pi-mcp` 与 `quickjs-wasi`。依赖存在不代表启用其内置工具或外部 MCP，内嵌 Agent 的工具与资源边界仍按第 27.3 节配置。这是本项目为「简洁」开的最大一次例外，已知并接受。
   - 附带好处：`pi-ai` 自带 `http-proxy-agent` / `https-proxy-agent`，出站代理（`127.0.0.1:7890`）有官方支持，不用自己塞。
 - **必须显式关掉 pi 的默认工具。** pi 默认给模型 `read / write / edit / bash`。用 `createAgentSession({ noTools: "builtin" })` 关掉它们 —— 这个开关的语义是「禁用内置工具，**保留** extension / customTools」，实测确认（见 [ADR-0004 的实测证据](#adr-0004)）。**不要**写成 `tools: []`：`tools` 是白名单语义（只启用列出的名字），空数组会把自定义工具一起关掉。
 - **共用工具实现集中在 `src/tools.ts`，当前为 10 个。** MCP 注册、内嵌 pi 的 `customTools`、UI 的规则执行入口都调用同一批函数，保持只读守卫与规则生命周期一致。
@@ -1616,12 +1616,13 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 | 工作流 | 触发 | 检查或产物 |
 | --- | --- | --- |
 | CI | main 推送、PR、手动、复用调用 | Linux/Windows/macOS × Node 22.19.0/24，类型与 JS 语法检查、Windows 部署脚本语法检查、模拟测试和 JUnit 报告 |
-| Portable desktop | 相关 PR、手动 | macOS ARM64/Intel 与 Windows x64 原生构建、随包运行时隔离验证、ZIP 和 SHA-256；不自动创建 Release |
+| Portable desktop | 相关 PR、手动、复用调用 | macOS ARM64/Intel 与 Windows x64 原生构建、随包运行时隔离验证、ZIP、macOS DMG、Windows 自解压单文件与 SHA-256 |
+| Release | `v*` 标签推送、手动 | 复用 Portable desktop 构建，校验标签与 `package.json` 版本一致、逐个校验资产 SHA-256，把 ZIP/DMG/EXE 与 `.sha256` 挂到同名 GitHub Release；版本带预发布后缀时标为 pre-release |
 | CI 审计 | 同上 | macOS 部署脚本 Shell 语法检查、生产依赖高危审计 |
 | Security | main 推送、PR、每周一 10:23（北京时间）、手动 | CodeQL；PR 检查新增依赖高危漏洞；定时及手动进行生产依赖审计 |
 | Dependabot | 每周一 03:00（北京时间） | npm 和 Actions 更新 PR；小版本/补丁分组，保留人工审查 |
 
-GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默认只有 `contents: read`；CodeQL 上传在对应任务中单独授权。PR 使用 `pull_request`，无外部密钥，也不连接个人电脑或真实 WPS。
+GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默认只有 `contents: read`；CodeQL 上传与 Release 发布在各自任务中单独授权。PR 使用 `pull_request`，无外部密钥，也不连接个人电脑或真实 WPS。
 
 CI 的 JUnit 报告和 Portable desktop 的 ZIP/SHA-256 在 PR 运行中保留 3 天；其他触发方式保留 14 天，便于手动构建后下载和排查主分支失败。保留期按新上传的产物生效，已有产物仍遵循上传时的保留期。
 
@@ -1669,7 +1670,9 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。涉及 Add-in、�
 
 ## 25.4 发布状态
 
-支持源码开发部署和第 25.6 节的原生托盘免安装包。`Portable desktop` 工作流通过 PR 或手动运行生成平台 ZIP 与 SHA-256，PR 产物保留 3 天，手动构建产物保留 14 天；推送版本标签不会自动创建 GitHub Release。默认构建没有正式发布签名；公开分发前由维护者配置平台签名和 macOS 公证。
+支持源码开发部署和第 25.6 节的原生托盘免安装包。`Portable desktop` 工作流通过 PR 或手动运行生成平台 ZIP、macOS DMG、Windows 自解压单文件与 SHA-256，PR 产物保留 3 天，手动构建产物保留 14 天。
+
+发布走 `Release` 工作流：推送 `v*` 标签即复用同一套 Portable desktop 构建，校验标签与 `package.json.version` 一致、逐个核对资产 SHA-256 后，把 ZIP/DMG/EXE 与 `.sha256` 挂到同名 GitHub Release；版本号带预发布后缀（如 `0.2.0-rc.1`）时自动标为 pre-release，重发同一标签会覆盖已有资产而不重建标签。**发布顺序是先把版本变更合并到 main，再在该提交上打标签**，避免标签落在未合并的提交上。默认构建没有正式发布签名，Release 说明会明确写出签名状态；公开分发前由维护者配置平台签名和 macOS 公证。
 
 应用版本的唯一手工来源是根目录 `package.json.version`。服务 MCP `serverInfo`、`/health`、管理状态和任务窗格版本从它读取；本地 MCP 页面从生成的 `addon/version.js` 读取；Rust 构建脚本从同一文件嵌入版本，并校验 Cargo 包版本。`scripts/sync-version.mjs` 自动同步 npm 根锁、Cargo 清单/根包锁和浏览器版本模块；`npm run build` 与 `npm run build:portable` 前自动同步，`npm run check` 拒绝漂移。用 `npm version patch --no-git-tag-version`（或指定版本）更新并运行同步 hook，再在同一提交纳入生成文件；不单独修改各处版本。Node、第三方依赖、WPS 宿主及 MCP 协议版本各自独立，不是应用版本。
 
@@ -1726,18 +1729,19 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。涉及 Add-in、�
 
 **用户使用与离线边界：**
 
-- macOS ZIP 中是 `WPS Assistant.app`，解压后放在稳定目录并双击；Windows ZIP 中是 `WPS Assistant` 文件夹，须保留整个文件夹，双击 `wps-assistant.exe`，不能仅复制 EXE。目标机器无需安装 Node、npm、Rust 或执行安装脚本。默认基于官方 Node 24.21.0：macOS 13.5+，Windows 10+（[Node 平台支持](https://github.com/nodejs/node/blob/v24.21.0/BUILDING.md#platform-list)）；WPS 仍须预先安装且支持 JS Add-in。macOS 默认是 ad-hoc 签名，外部分发可能受 Gatekeeper 限制；正式公证签名与 Windows Authenticode 由维护者的证书提供。
+- macOS 可用 DMG 打开后把 `WPS Assistant.app` 拖进 Applications，也可用 ZIP 解压后放在稳定目录并双击；Windows 有单文件与文件夹两种形态，单文件 `wps-assistant-<版本>-win32-<架构>.exe` 双击即用，ZIP 中是 `WPS Assistant` 文件夹，须保留整个文件夹，双击 `wps-assistant.exe`，不能仅复制 EXE。目标机器无需安装 Node、npm、Rust 或执行安装脚本。默认基于官方 Node 24.21.0：macOS 13.5+，Windows 10+（[Node 平台支持](https://github.com/nodejs/node/blob/v24.21.0/BUILDING.md#platform-list)）；WPS 仍须预先安装且支持 JS Add-in。macOS 默认是 ad-hoc 签名，外部分发可能受 Gatekeeper 限制；正式公证签名与 Windows Authenticode 由维护者的证书提供。
+- **Windows 单文件形态：** 托盘可执行文件尾部追加一段 zlib 载荷和固定长度页脚；打包侧在 `desktop/build-sfx.mjs`，解压侧在 `desktop/native/src/main.rs`，两边格式必须成对修改。首次运行把载荷落盘到 `%LOCALAPPDATA%\WPS Assistant\<版本>` 后再按该目录解析资源，`WPS_MCP_EXTRACT_DIR` 可覆盖落盘位置；同版本已存在时直接复用，不重复解压。解压先写到同目录的临时目录再整体改名，中断不会留下可用的半个包，同版本并发启动时后到者复用先到者的结果。载荷用 zlib 而不是裸 deflate，解压自带的 adler32 就能发现损坏并由托盘明确报错，不另存校验和；条目记录可执行标志，解压时恢复权限。程序目录随版本变化，但可执行文件位置稳定，单实例锁、`desktop-service.json` 的路径校验与登录启动条目仍按可执行文件路径工作；更换版本不自动删除旧版本目录。
 - 第一次双击自动注册三个宿主的加载项并启动服务，须事先完全退出 WPS；若仍运行则保留托盘并提示，关闭 WPS 后选择启动或修复注册。注册逻辑由 `src/addin-registration.ts` 统一实现，源码部署脚本也调用它，沿用第 25.2 节的首次备份和保留其他加载项规则。已有注册标记且端口/目录相同的后续启动不要求退出 WPS。
-- 包内携带原生托盘、Node 二进制、编译后的服务、生产依赖、Add-in HTML/CSS/JS、内置技能及许可证；不携带 npm、开发工具、用户配置、会话、变量或日志。构建时移除非目标平台 esbuild、源码映射、类型声明及 pi 的 CLI bundle/示例/文档，保留 SDK、运行资源、WASM 和依赖许可证。目标机启动、注册、MCP 调试和规则执行无需外网；内嵌助手或外部 Agent 的模型需配置为隔离网络可达的服务，不能据此宣称远程模型可离线运行。
+- 包内携带原生托盘、Node 二进制、编译后的服务、生产依赖、Add-in HTML/CSS/JS、内置技能及许可证；不携带 npm、开发工具、用户配置、会话、变量或日志。构建时按 `package.json` 依赖求可达闭包，移除闭包外的 provider SDK（`@anthropic-ai`、`@google`、`@aws-sdk`、`@smithy`、`@mistralai`、`esbuild` 及其独占传递依赖）——它们的实现只在 `pi-ai` 的 `() => import(...)` 之后可达，而模型 `api` 只允许 `openai-completions` 和 `openai-responses`，进程内不会加载；同时移除源码映射、类型声明及 pi 的 CLI bundle/示例/文档，保留 SDK、运行资源、WASM 和依赖许可证。目标机启动、注册、MCP 调试和规则执行无需外网；内嵌助手或外部 Agent 的模型需配置为隔离网络可达的服务，不能据此宣称远程模型可离线运行。
 - 数据沿用 `~/Library/Application Support/wps-mcp` 或 `%APPDATA%\wps-mcp`；重复启动和替换应用不删除模型、会话、变量或技能。状态保存使用同目录临时文件原子替换；Windows 的 EPERM/EACCES/EBUSY 短暂读取锁每 50ms 重试，最多 1 秒；失败保留原文件并清理临时文件，不阻塞后续保存。升级前停止服务并退出托盘，再替换原路径的程序/文件夹。可用 `WPS_MCP_PORT`、`WPS_MCP_DATA_DIR`、`WPS_MCP_ADDINS_DIR`、`WPS_MCP_ADDIN_ENABLE` 覆盖默认值；Windows 托盘也支持相应 `--port=...`、`--data-dir=...`、`--addins-dir=...`、`--addin-enable=...` 参数，登录启动保留这些值。
 - 原生文件锁保证每个数据目录只出现一个托盘；短时操作锁串行化启停和注册。`desktop-service.json` 保存服务 PID、实例 ID、运行路径、端口和随机控制凭据，文件权限为当前用户，控制凭据不返回给浏览器或写入日志。托盘/控制程序通过 `/api/desktop/status` 验证实例和路径后操作；源码服务无这些管理接口。`/api/desktop/stop` 还要求随机 Bearer token 和本机同源条件，存在聊天、配置/会话变更、HTTP 工作、工具执行、WPS RPC、后台状态保存或排队变量修改时返回 409；接受停止后拒绝新请求并刷新日志退出。不会通过进程名或仅凭 PID 强杀服务。
 - 若端口属于源码 LaunchAgent、其他目录的免安装程序或不明进程，提示先从原入口停止，不会接管；移动程序后应从原托盘停止旧服务再打开新路径。服务记录保存所属托盘 PID；已启动的服务只有同一托盘可复用，旧版本未绑定托盘的服务须先停止再启动新版。删除程序不清除用户数据或 WPS 注册。关闭登录启动后该托盘在当前登录期间继续运行，但下次登录不再自动启动。
 
-**维护者构建：** 在对应平台与架构准备 Node/npm、Rust 1.90+ 和本机编译工具（macOS Xcode Command Line Tools；Windows MSVC Build Tools/SDK），执行 `npm ci` 后 `npm run build:portable`。构建下载官方 Node 24.21.0 并用官方 `SHASUMS256.txt` 验证，构建机器需要外网和 curl；用户运行不下载资源。`Cargo.lock` 和 npm lock 固定依赖；部分 npm 版本会用 SDK 自带 shrinkwrap 覆盖根锁中的 `brace-expansion` 安全补丁，打包显式核对实际版本，必要时按根锁中 5.0.12 的 tarball 与 SHA-512 还原，再对暂存生产依赖执行 high 级审计，解压 smoke 再核对实际版本。输出忽略目录 `release/wps-assistant-<版本>-<darwin|win32>-<架构>.zip` 及 `.sha256`。原生菜单版本必须与 `package.json` 同步。
+**维护者构建：** 在对应平台与架构准备 Node/npm、Rust 1.90+ 和本机编译工具（macOS Xcode Command Line Tools；Windows MSVC Build Tools/SDK），执行 `npm ci` 后 `npm run build:portable`。构建下载官方 Node 24.21.0 并用官方 `SHASUMS256.txt` 验证，构建机器需要外网和 curl；用户运行不下载资源。`Cargo.lock` 和 npm lock 固定依赖；部分 npm 版本会用 SDK 自带 shrinkwrap 覆盖根锁中的 `brace-expansion` 安全补丁，打包显式核对实际版本，必要时按根锁中 5.0.12 的 tarball 与 SHA-512 还原，再对暂存生产依赖执行 high 级审计。生产依赖安装完成后由 `desktop/prune-runtime.mjs` 裁剪：先声明被阻断的 provider，再按 `package.json` 依赖求可达闭包，闭包外的包与它们的 bin shim、空作用域目录一并删除；构建不维护删除清单，SDK 升版新增的传递依赖会自动被带走。被阻断的 provider 若在生产依赖中缺失，构建直接失败而不是静默少删，提示重新评估裁剪决策。审计按 `package-lock` 的生产依赖集合执行，早于裁剪，因此覆盖范围不随裁剪收缩。解压 smoke 再核对实际版本。macOS 在该 smoke 通过后构建 DMG：用 `ditto` 复制 `.app`（保留扩展属性，避免破坏代码签名）并加一条指向 `/Applications` 的软链，`hdiutil create` 采用 HFS+ 配 zlib-level=9，因为 `hdiutil` 默认的 APFS 容器会让镜像大出四成以上；有正式身份时给镜像本身签名，配置了公证 profile 时提交公证并 staple，随后只读挂载镜像、复核布局，并在挂载卷上重跑一次同一 smoke。Windows 在 ZIP 之后另产出同名 `.exe` 单文件，由托盘可执行文件拼接 zlib 载荷与页脚而成；随后用该 exe 自己跑一次 `--smoke`（配合 `WPS_MCP_EXTRACT_DIR` 落到构建目录），再对解压结果跑同一套 smoke，确认载荷完整且可运行。构建期 smoke 不弹窗：解压失败时打印原因并以非零码结束，避免自动化验证卡在对话框上。输出忽略目录 `release/wps-assistant-<版本>-<darwin|win32>-<架构>.zip` 及 `.sha256`，macOS 另有同名 `.dmg` 及 `.sha256`，Windows 另有同名 `.exe` 及 `.sha256`。原生菜单版本必须与 `package.json` 同步。
 
 构建包含原生可执行程序、随包 Node 与 `PATH` 清空的隔离验证：临时目录注册、服务启动、重复启动复用、静态页面、MCP 初始化/工具发现、技能与工具加载、loopback 模拟模型响应、停止凭据、重启及会话保留；不修改构建机器的真实 WPS 注册、不连接外部模型。平台交互仍需实机验证；CI 的 Windows 构建和 smoke 不等于真实 WPS Writer 授权验收。
 
-macOS 可设置 `WPS_MCP_CODESIGN_IDENTITY` 为 Developer ID，设置 `WPS_MCP_NOTARY_PROFILE` 为已配置的 notarytool keychain profile，完成公证、staple 后重新归档；Windows 可设置 `WPS_MCP_SIGNTOOL_CERT_SHA1` 使用本机证书和 signtool 签名。证书/凭据不入仓库，也不要求用户安装；默认 PR 构建不读取签名秘密、不发布 Release。
+macOS 可设置 `WPS_MCP_CODESIGN_IDENTITY` 为 Developer ID，设置 `WPS_MCP_NOTARY_PROFILE` 为已配置的 notarytool keychain profile，完成公证、staple 后重新归档；Windows 可设置 `WPS_MCP_SIGNTOOL_CERT_SHA1` 使用本机证书和 signtool 签名。证书/凭据不入仓库，也不要求用户安装；PR 构建不读取签名秘密。签名是否生效由 Release 说明按构建结果写明，维护者未配置证书时发布的就是未签名构建。
 
 ---
 
@@ -2022,8 +2026,8 @@ tail -n 30 -f "$HOME/Library/Application Support/wps-mcp/logs/wps-mcp.log"
 | `src/location.ts` / `src/selection.ts` / `src/references.ts` | 明确位置解析、选区边界与引用快照 |
 | `src/logger.ts` | 日志、异步写盘、轮转、脱敏和链路关联 |
 | `addon/` | WPS 宿主桥接、Ribbon、静态任务窗格与 MCP guide/debug 页面 |
-| `desktop/` | Rust 原生托盘、免安装构建/smoke及应用形象参考资料 |
+| `desktop/` | Rust 原生托盘、免安装构建/smoke、自解压单文件、运行时依赖裁剪及应用形象参考资料 |
 | `skills/wps-api/` | WPS API 技能、宿主参考、报告绑定流程和历史验收资料 |
 | `scripts/` | 两个平台源码部署、版本同步与 JS 检查 |
 | `test/` | 模拟测试、UI harness 和 `test/samples/` 固定报告绑定素材 |
-| `.github/` | CI/Portable/Security 工作流、Dependabot 与贡献模板 |
+| `.github/` | CI/Portable/Release/Security 工作流、Dependabot 与贡献模板 |

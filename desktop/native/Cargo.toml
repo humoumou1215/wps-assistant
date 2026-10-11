@@ -1,6 +1,6 @@
 [package]
 name = "wps-assistant-tray"
-version = "0.1.2"
+version = "0.1.4"
 edition = "2021"
 rust-version = "1.90"
 license = "MIT"
@@ -12,6 +12,8 @@ serde_json = "1"
 tray-icon = { version = "=0.26.0", default-features = false }
 tao = { version = "=0.37.1", default-features = false }
 serde_json = "1"
+# 自解压单文件只做解压，用纯 Rust 后端，避免依赖系统 zlib 或 C 工具链。
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 ureq = { version = "2.12", default-features = false, features = ["json"] }
 fs2 = "0.4"
 dirs = "6"

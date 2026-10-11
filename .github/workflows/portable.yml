@@ -2,6 +2,7 @@ name: Portable desktop
 
 on:
   workflow_dispatch:
+  workflow_call:
   pull_request:
     branches: [main]
     paths: ['desktop/**', 'src/**', 'addon/**', 'skills/**', 'package*.json', '.github/workflows/portable.yml']
@@ -42,6 +43,8 @@ jobs:
           name: portable-${{ matrix.os }}
           path: |
             release/*.zip
+            release/*.dmg
+            release/*.exe
             release/*.sha256
           if-no-files-found: error
           retention-days: ${{ github.event_name == 'pull_request' && 3 || 14 }}

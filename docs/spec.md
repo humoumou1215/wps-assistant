@@ -1501,7 +1501,7 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 
 状态：已采纳。
 
-任务窗格的会话页需要一个能把「思考 / 工具调用 / 答复」流式吐出来的 Agent 引擎。决定把 pi 作为库嵌进 `wps-mcp` 进程：用 `@earendil-works/pi-coding-agent@0.87.1`（MIT）的 `createAgentSession()` 起会话，`session.subscribe()` 的事件直接转成 SSE 推给任务窗格；pi 要用的工具用 `customTools` **直挂** `src/tools.ts` 里同一批函数，**不**让内嵌的 pi 反过来通过 HTTP 连自己的 `/mcp`。
+任务窗格的会话页需要一个能把「思考 / 工具调用 / 答复」流式吐出来的 Agent 引擎。决定把 pi 作为库嵌进 `wps-mcp` 进程：用 `@earendil-works/pi-coding-agent@0.99.2`（MIT）的 `createAgentSession()` 起会话，`session.subscribe()` 的事件直接转成 SSE 推给任务窗格；pi 要用的工具用 `customTools` **直挂** `src/tools.ts` 里同一批函数，**不**让内嵌的 pi 反过来通过 HTTP 连自己的 `/mcp`。
 
 ### 24.1.1 方案比较
 
@@ -1522,7 +1522,7 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 
 ### 24.1.2 影响与约束
 
-- **多一组重依赖。** `@earendil-works/pi-coding-agent` 直连 20 个包，经 `pi-ai` 传递引入 `@anthropic-ai/sdk` / `openai` / `@google/genai` / `@aws-sdk/client-bedrock-runtime`，以及原生模块 `@silvia-odwyer/photon-node`。这是本项目为「简洁」开的最大一次例外，已知并接受。
+- **多一组重依赖。** `@earendil-works/pi-coding-agent` 经 `pi-ai` 传递引入 `@anthropic-ai/sdk` / `openai` / `@google/genai` / `@aws-sdk/client-bedrock-runtime`，以及原生模块 `@silvia-odwyer/photon-node`；0.99.2 还引入 `pi-codemode`、`pi-mcp` 与 `quickjs-wasi`。依赖存在不代表启用其内置工具或外部 MCP，内嵌 Agent 的工具与资源边界仍按第 27.3 节配置。这是本项目为「简洁」开的最大一次例外，已知并接受。
   - 附带好处：`pi-ai` 自带 `http-proxy-agent` / `https-proxy-agent`，出站代理（`127.0.0.1:7890`）有官方支持，不用自己塞。
 - **必须显式关掉 pi 的默认工具。** pi 默认给模型 `read / write / edit / bash`。用 `createAgentSession({ noTools: "builtin" })` 关掉它们 —— 这个开关的语义是「禁用内置工具，**保留** extension / customTools」，实测确认（见 [ADR-0004 的实测证据](#adr-0004)）。**不要**写成 `tools: []`：`tools` 是白名单语义（只启用列出的名字），空数组会把自定义工具一起关掉。
 - **共用工具实现集中在 `src/tools.ts`，当前为 10 个。** MCP 注册、内嵌 pi 的 `customTools`、UI 的规则执行入口都调用同一批函数，保持只读守卫与规则生命周期一致。

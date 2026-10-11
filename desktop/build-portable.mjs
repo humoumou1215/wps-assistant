@@ -87,6 +87,8 @@ await files(moduleRoot, async (path, file) => {
   if (/\.map$|\.d\.(?:ts|mts|cts)$/.test(file)) await rm(path);
 });
 await rm(join(moduleRoot, '@earendil-works/pi-coding-agent/dist/bundle'), { recursive: true, force: true });
+// The retired CLI leaves unusable npm launchers, including Windows shims.
+for (const launcher of ['pi', 'pi.cmd', 'pi.ps1']) await rm(join(moduleRoot, '.bin', launcher), { force: true });
 for (const directory of ['docs', 'examples']) await rm(join(moduleRoot, '@earendil-works/pi-coding-agent', directory), { recursive: true, force: true });
 const distribution = `node-v${nodeVersion}-${platform === 'darwin' ? 'darwin' : 'win'}-${arch}`;
 const archive = `${distribution}.${platform === 'darwin' ? 'tar.gz' : 'zip'}`;
@@ -137,7 +139,8 @@ await cp(join(rustDocs, 'licenses'), join(resources, 'licenses/rust'), { recursi
 await writeFile(join(resources, 'portable.json'), JSON.stringify({ version: pkg.version, node: nodeVersion, platform, arch, nodeArchiveSha256: expected }, null, 2));
 const identity = process.env.WPS_MCP_CODESIGN_IDENTITY ?? '-';
 if (platform === 'darwin') {
-  await writeFile(join(bundle, 'Contents/Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleName</key><string>WPS Assistant</string><key>CFBundleDisplayName</key><string>WPS 助手</string><key>CFBundleIdentifier</key><string>com.local.wps-assistant</string><key>CFBundleExecutable</key><string>wps-assistant</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>${pkg.version}</string><key>CFBundleVersion</key><string>${pkg.version}</string><key>LSUIElement</key><true/><key>LSMinimumSystemVersion</key><string>13.5</string></dict></plist>\n`);
+  await cp(join(root, 'desktop/icons/app.icns'), join(resources, 'app.icns'));
+  await writeFile(join(bundle, 'Contents/Info.plist'), `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>CFBundleName</key><string>WPS Assistant</string><key>CFBundleDisplayName</key><string>WPS 助手</string><key>CFBundleIdentifier</key><string>com.local.wps-assistant</string><key>CFBundleExecutable</key><string>wps-assistant</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleShortVersionString</key><string>${pkg.version}</string><key>CFBundleVersion</key><string>${pkg.version}</string><key>CFBundleIconFile</key><string>app.icns</string><key>LSUIElement</key><true/><key>LSMinimumSystemVersion</key><string>13.5</string></dict></plist>\n`);
   if (identity !== '-') {
     // Notarization scans nested Mach-O files too. Preserve Node's JIT entitlements.
     await run('codesign', ['--force', '--sign', identity, '--options', 'runtime', '--timestamp', '--preserve-metadata=entitlements', node]);

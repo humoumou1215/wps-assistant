@@ -109,7 +109,11 @@ fn materialize_package(
     // 用户目录一定可写；程序放在 exe 旁边会在只读位置或 U 盘上失败。
     let root = std::env::var_os("WPS_MCP_EXTRACT_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| dirs::data_local_dir().expect("用户目录不可用").join("WPS Assistant"));
+        .unwrap_or_else(|| {
+            dirs::data_local_dir()
+                .expect("用户目录不可用")
+                .join("WPS Assistant")
+        });
     let target = root.join(version);
     let marker = target.join("resources").join("portable.json");
     if marker.is_file() {
@@ -320,23 +324,13 @@ impl Runtime {
     }
 }
 fn icon() -> Icon {
-    // Small monochrome W: macOS renders it as a template, Windows as a tray bitmap.
-    let mut rgba = vec![0; 24 * 24 * 4];
-    for y in 4usize..20 {
-        for x in 3usize..21 {
-            let left = 3 + (y - 4) / 4;
-            let right = 20 - (y - 4) / 4;
-            let inner = 12 - (y - 4) / 4;
-            if x.abs_diff(left) <= 1
-                || x.abs_diff(right) <= 1
-                || (y >= 10 && (x.abs_diff(inner) <= 1 || x.abs_diff(24 - inner) <= 1))
-            {
-                let offset = (y * 24 + x) * 4;
-                rgba[offset..offset + 4].copy_from_slice(&[72, 92, 210, 255]);
-            }
-        }
-    }
-    Icon::from_rgba(rgba, 24, 24).expect("内置图标")
+    // Exported from the same bear artwork as the web and application icons.
+    // macOS uses a 22pt monochrome template at 2x; Windows uses a color bitmap.
+    #[cfg(target_os = "macos")]
+    let (rgba, size) = (include_bytes!("../../icons/tray-macos.rgba").to_vec(), 44);
+    #[cfg(not(target_os = "macos"))]
+    let (rgba, size) = (include_bytes!("../../icons/tray-windows.rgba").to_vec(), 32);
+    Icon::from_rgba(rgba, size, size).expect("内置小熊图标")
 }
 fn main() {
     if std::env::args().any(|a| a == "--version") {

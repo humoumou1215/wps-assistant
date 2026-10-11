@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
-import { mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, rm, lstat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -38,6 +38,10 @@ const model = createServer(async (req, res) => {
 await new Promise(r => model.listen(0, '127.0.0.1', r));
 let started = false;
 try {
+  for (const launcher of ['pi', 'pi.cmd', 'pi.ps1']) {
+    await assert.rejects(lstat(join(app, 'node_modules/.bin', launcher)), { code: 'ENOENT' }, 'Retired Pi CLI launchers must not be shipped');
+  }
+  if (process.platform === 'darwin') await run('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle]);
   if (process.platform === 'win32') {
     // A CI runner has VC redistributables installed, so execution alone cannot prove portability.
     for (const executable of [binary, node]) {
@@ -51,6 +55,15 @@ try {
         }
         throw new Error('Invalid PE import address');
       }
+      if (executable === binary) {
+        const rva = bytes.readUInt32LE(directories + 2 * 8);
+        assert.ok(rva, 'Application must embed Windows icon resources');
+        const resource = offset(rva);
+        const named = bytes.readUInt16LE(resource + 12), ids = bytes.readUInt16LE(resource + 14);
+        const types = [];
+        for (let index = named; index < named + ids; index++) types.push(bytes.readUInt32LE(resource + 16 + index * 8));
+        assert.ok(types.includes(3) && types.includes(14), 'Application must embed RT_ICON and RT_GROUP_ICON');
+      }
       for (const [directory, step, nameField] of [[1, 20, 12], [13, 32, 4]]) {
         const rva = bytes.readUInt32LE(directories + directory * 8); if (!rva) continue;
         for (let cursor = offset(rva); bytes.readUInt32LE(cursor + nameField); cursor += step) {
@@ -60,6 +73,12 @@ try {
         }
       }
     }
+  } else {
+    const plist = await readFile(join(bundle, 'Contents/Info.plist'), 'utf8');
+    assert.match(plist, /<key>CFBundleIconFile<\/key><string>app\.icns<\/string>/);
+    const icon = await readFile(join(resources, 'app.icns'));
+    assert.equal(icon.subarray(0, 4).toString(), 'icns');
+    assert.equal(icon.readUInt32BE(4), icon.length);
   }
   await run(binary, ['--smoke']);
   const version = JSON.parse(await readFile(join(app, 'package.json'), 'utf8')).version;
@@ -76,7 +95,7 @@ try {
   assert.equal(JSON.parse(await readFile(join(data, 'desktop-service.json'), 'utf8')).pid, metadata.pid, 'start reuses the service');
   assert.equal((await get('/health')).desktopManaged, true);
   assert.equal((await get('/health')).version, version);
-  for (const asset of ['taskpane.html', 'mcp-debug.html', 'mcp-guide.html', 'mcp-client.js', 'mcp-pages.css']) assert.equal((await fetch(`${base}/addon/${asset}`)).status, 200);
+  for (const asset of ['taskpane.html', 'mcp-debug.html', 'mcp-guide.html', 'mcp-client.js', 'mcp-pages.css', 'brand-mark.png', 'favicon.ico', 'favicon-16.png', 'favicon-32.png', 'ribbon-assistant.png', 'ribbon-variables.png', 'ribbon-status.png']) assert.equal((await fetch(`${base}/addon/${asset}`)).status, 200);
   const headers = { accept: 'application/json, text/event-stream' };
   const init = await (await post('/mcp', { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'portable-smoke', version: '1' } } }, headers)).text();
   assert.match(init, /protocolVersion/);

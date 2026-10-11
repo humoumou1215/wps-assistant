@@ -2,6 +2,7 @@ name: Portable desktop
 
 on:
   workflow_dispatch:
+  workflow_call:
   pull_request:
     branches: [main]
     paths: ['desktop/**', 'src/**', 'addon/**', 'skills/**', 'package*.json', '.github/workflows/portable.yml']

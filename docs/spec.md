@@ -1616,12 +1616,13 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 | 工作流 | 触发 | 检查或产物 |
 | --- | --- | --- |
 | CI | main 推送、PR、手动、复用调用 | Linux/Windows/macOS × Node 22.19.0/24，类型与 JS 语法检查、Windows 部署脚本语法检查、模拟测试和 JUnit 报告 |
-| Portable desktop | 相关 PR、手动 | macOS ARM64/Intel 与 Windows x64 原生构建、随包运行时隔离验证、ZIP、macOS DMG、Windows 自解压单文件与 SHA-256；不自动创建 Release |
+| Portable desktop | 相关 PR、手动、复用调用 | macOS ARM64/Intel 与 Windows x64 原生构建、随包运行时隔离验证、ZIP、macOS DMG、Windows 自解压单文件与 SHA-256 |
+| Release | `v*` 标签推送、手动 | 复用 Portable desktop 构建，校验标签与 `package.json` 版本一致、逐个校验资产 SHA-256，把 ZIP/DMG/EXE 与 `.sha256` 挂到同名 GitHub Release；版本带预发布后缀时标为 pre-release |
 | CI 审计 | 同上 | macOS 部署脚本 Shell 语法检查、生产依赖高危审计 |
 | Security | main 推送、PR、每周一 10:23（北京时间）、手动 | CodeQL；PR 检查新增依赖高危漏洞；定时及手动进行生产依赖审计 |
 | Dependabot | 每周一 03:00（北京时间） | npm 和 Actions 更新 PR；小版本/补丁分组，保留人工审查 |
 
-GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默认只有 `contents: read`；CodeQL 上传在对应任务中单独授权。PR 使用 `pull_request`，无外部密钥，也不连接个人电脑或真实 WPS。
+GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默认只有 `contents: read`；CodeQL 上传与 Release 发布在各自任务中单独授权。PR 使用 `pull_request`，无外部密钥，也不连接个人电脑或真实 WPS。
 
 CI 的 JUnit 报告和 Portable desktop 的 ZIP/SHA-256 在 PR 运行中保留 3 天；其他触发方式保留 14 天，便于手动构建后下载和排查主分支失败。保留期按新上传的产物生效，已有产物仍遵循上传时的保留期。
 
@@ -1669,7 +1670,9 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。涉及 Add-in、�
 
 ## 25.4 发布状态
 
-支持源码开发部署和第 25.6 节的原生托盘免安装包。`Portable desktop` 工作流通过 PR 或手动运行生成平台 ZIP、macOS DMG、Windows 自解压单文件与 SHA-256，PR 产物保留 3 天，手动构建产物保留 14 天；推送版本标签不会自动创建 GitHub Release。默认构建没有正式发布签名；公开分发前由维护者配置平台签名和 macOS 公证。
+支持源码开发部署和第 25.6 节的原生托盘免安装包。`Portable desktop` 工作流通过 PR 或手动运行生成平台 ZIP、macOS DMG、Windows 自解压单文件与 SHA-256，PR 产物保留 3 天，手动构建产物保留 14 天。
+
+发布走 `Release` 工作流：推送 `v*` 标签即复用同一套 Portable desktop 构建，校验标签与 `package.json.version` 一致、逐个核对资产 SHA-256 后，把 ZIP/DMG/EXE 与 `.sha256` 挂到同名 GitHub Release；版本号带预发布后缀（如 `0.2.0-rc.1`）时自动标为 pre-release，重发同一标签会覆盖已有资产而不重建标签。**发布顺序是先把版本变更合并到 main，再在该提交上打标签**，避免标签落在未合并的提交上。默认构建没有正式发布签名，Release 说明会明确写出签名状态；公开分发前由维护者配置平台签名和 macOS 公证。
 
 应用版本的唯一手工来源是根目录 `package.json.version`。服务 MCP `serverInfo`、`/health`、管理状态和任务窗格版本从它读取；本地 MCP 页面从生成的 `addon/version.js` 读取；Rust 构建脚本从同一文件嵌入版本，并校验 Cargo 包版本。`scripts/sync-version.mjs` 自动同步 npm 根锁、Cargo 清单/根包锁和浏览器版本模块；`npm run build` 与 `npm run build:portable` 前自动同步，`npm run check` 拒绝漂移。用 `npm version patch --no-git-tag-version`（或指定版本）更新并运行同步 hook，再在同一提交纳入生成文件；不单独修改各处版本。Node、第三方依赖、WPS 宿主及 MCP 协议版本各自独立，不是应用版本。
 
@@ -1738,7 +1741,7 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。涉及 Add-in、�
 
 构建包含原生可执行程序、随包 Node 与 `PATH` 清空的隔离验证：临时目录注册、服务启动、重复启动复用、静态页面、MCP 初始化/工具发现、技能与工具加载、loopback 模拟模型响应、停止凭据、重启及会话保留；不修改构建机器的真实 WPS 注册、不连接外部模型。平台交互仍需实机验证；CI 的 Windows 构建和 smoke 不等于真实 WPS Writer 授权验收。
 
-macOS 可设置 `WPS_MCP_CODESIGN_IDENTITY` 为 Developer ID，设置 `WPS_MCP_NOTARY_PROFILE` 为已配置的 notarytool keychain profile，完成公证、staple 后重新归档；Windows 可设置 `WPS_MCP_SIGNTOOL_CERT_SHA1` 使用本机证书和 signtool 签名。证书/凭据不入仓库，也不要求用户安装；默认 PR 构建不读取签名秘密、不发布 Release。
+macOS 可设置 `WPS_MCP_CODESIGN_IDENTITY` 为 Developer ID，设置 `WPS_MCP_NOTARY_PROFILE` 为已配置的 notarytool keychain profile，完成公证、staple 后重新归档；Windows 可设置 `WPS_MCP_SIGNTOOL_CERT_SHA1` 使用本机证书和 signtool 签名。证书/凭据不入仓库，也不要求用户安装；PR 构建不读取签名秘密。签名是否生效由 Release 说明按构建结果写明，维护者未配置证书时发布的就是未签名构建。
 
 ---
 
@@ -2027,4 +2030,4 @@ tail -n 30 -f "$HOME/Library/Application Support/wps-mcp/logs/wps-mcp.log"
 | `skills/wps-api/` | WPS API 技能、宿主参考、报告绑定流程和历史验收资料 |
 | `scripts/` | 两个平台源码部署、版本同步与 JS 检查 |
 | `test/` | 模拟测试、UI harness 和 `test/samples/` 固定报告绑定素材 |
-| `.github/` | CI/Portable/Security 工作流、Dependabot 与贡献模板 |
+| `.github/` | CI/Portable/Release/Security 工作流、Dependabot 与贡献模板 |

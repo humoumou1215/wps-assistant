@@ -1,6 +1,6 @@
 {
   "name": "wps-mcp",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -24,7 +24,8 @@
     "test:ci": "npm run build && node --test --test-timeout=120000 --test-reporter=spec --test-reporter=junit --test-reporter-destination=stdout --test-reporter-destination=test-results.xml test/*.test.mjs",
     "install:macos": "bash scripts/install-macos.sh",
     "install:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows.ps1",
-    "build:portable": "node desktop/build-portable.mjs"
+    "build:portable": "node desktop/build-portable.mjs",
+    "icons:export": "node desktop/export-icons.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.99.2",
@@ -39,7 +40,8 @@
     "@types/ws": "^8.18.2",
     "linkedom": "^0.18.13",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "sharp": "0.35.5"
   },
   "engines": {
     "node": ">=22.19.0"

@@ -65,6 +65,24 @@ test('local pages call the real MCP endpoint, expose tool failures and preserve 
       const response = await fetch(`${h.base}/addon/${name}`);
       assert.equal(response.status, 200, name);
     }
+    for (const prefix of ['addon', 'addins/et', 'addins/wpp', 'addins/wps']) {
+      for (const name of ['brand-mark.png', 'favicon-16.png', 'favicon-32.png', 'favicon.ico']) {
+        const response = await fetch(`${h.base}/${prefix}/${name}`);
+        assert.equal(response.status, 200, `${prefix}/${name}`);
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (name.endsWith('.ico')) {
+          assert.equal(response.headers.get('content-type'), 'image/x-icon');
+          assert.equal(bytes.readUInt16LE(2), 1);
+          assert.equal(bytes.readUInt16LE(4), 3);
+        } else {
+          assert.equal(response.headers.get('content-type'), 'image/png');
+          assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+          const size = name === 'brand-mark.png' ? 64 : name === 'favicon-16.png' ? 16 : 32;
+          assert.equal(bytes.readUInt32BE(16), size);
+          assert.equal(bytes.readUInt32BE(20), size);
+        }
+      }
+    }
     assert.equal((await fetch(h.base + '/addon/not-allowed.html')).status, 404);
     const client = new LocalMcpClient(h.base + '/mcp');
     const init = rpcResult(await client.initialize());

@@ -1,4 +1,7 @@
 fn main() {
+    println!("cargo:rerun-if-changed=../icons/tray-macos.rgba");
+    println!("cargo:rerun-if-changed=../icons/tray-windows.rgba");
+    println!("cargo:rerun-if-changed=../icons/app.ico");
     let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../package.json");
     println!("cargo:rerun-if-changed={}", package.display());
     let value: serde_json::Value =
@@ -11,4 +14,11 @@ fn main() {
         "Run npm run version:sync before building the tray"
     );
     println!("cargo:rustc-env=WPS_ASSISTANT_VERSION={version}");
+    #[cfg(target_os = "windows")]
+    winresource::WindowsResource::new()
+        .set_icon("../icons/app.ico")
+        .set("ProductName", "WPS Assistant")
+        .set("FileDescription", "WPS Assistant")
+        .compile()
+        .expect("compile Windows application icon");
 }

@@ -153,6 +153,74 @@
     const expectedName = onlyDocumentPath.split(/[\\/]/).pop();
     return documents.filter((doc) => (doc.path && normalizePath(doc.path) === expectedPath) || doc.name === expectedName);
   }
+  function spreadsheetViewport(win) {
+    // Window.VisibleRange can span frozen panes and include the invisible gap.
+    // The last pane is the scrolling bottom/right pane in a frozen window.
+    const frozen = Boolean(getProp(win, "FreezePanes"));
+    const panes = getProp(win, "Panes");
+    const pane = frozen ? itemAt(panes, getCount(panes)) : getProp(win, "ActivePane");
+    const scroll = pane || win;
+    const visible = getProp(scroll, "VisibleRange");
+    const row = Number(getProp(visible, "Row")), col = Number(getProp(visible, "Column"));
+    const rows = getCount(getProp(visible, "Rows")), cols = getCount(getProp(visible, "Columns"));
+    const scrollRow = Number(getProp(scroll, "ScrollRow")), scrollColumn = Number(getProp(scroll, "ScrollColumn"));
+    if (![row, col, rows, cols, scrollRow, scrollColumn].every(n => Number.isInteger(n) && n > 0)) return null;
+    return { scroll, row, col, rows, cols, scrollRow, scrollColumn,
+      frozenRows: frozen ? Number(getProp(win, "SplitRow")) || 0 : 0,
+      frozenCols: frozen ? Number(getProp(win, "SplitColumn")) || 0 : 0 };
+  }
+  function scrollSpreadsheetRange(app, win, range, r1, c1, r2, c2) {
+    const before = spreadsheetViewport(win);
+    const axes = [
+      { first: r1, last: r2, start: "row", count: "rows", frozen: "frozenRows", prop: "ScrollRow", saved: "scrollRow" },
+      { first: c1, last: c2, start: "col", count: "cols", frozen: "frozenCols", prop: "ScrollColumn", saved: "scrollColumn" },
+    ];
+    const isVisible = (view, axis) => {
+      if (axis.last <= view[axis.frozen]) return true;
+      const first = Math.max(axis.first, view[axis.frozen] + 1);
+      const end = view[axis.start] + view[axis.count] - 1;
+      // Oversized selections only need their starting portion in view.
+      return first >= view[axis.start] && first <= end &&
+        (axis.last <= end || axis.last - first + 1 > view[axis.count]);
+    };
+    const alreadyVisible = before && axes.every(axis => isVisible(before, axis));
+    range.Select();
+    if (alreadyVisible) {
+      // Some hosts scroll on Select even when the start of a large range is visible.
+      for (const axis of axes) {
+        if (Number(getProp(before.scroll, axis.prop)) !== before[axis.saved]) before.scroll[axis.prop] = before[axis.saved];
+      }
+      return;
+    }
+    if (!before) {
+      // Older hosts may expose Goto/scrolling without exposing VisibleRange.
+      if (typeof app.Goto === "function") app.Goto(range, true);
+      if (win) {
+        safe(() => { win.ScrollRow = Math.max(1, r1 - 3); });
+        safe(() => { win.ScrollColumn = Math.max(1, c1 - 3); });
+      }
+      return;
+    }
+    for (const axis of axes) {
+      if (axis.last <= before[axis.frozen]) continue;
+      const first = Math.max(axis.first, before[axis.frozen] + 1);
+      const origin = Math.max(before[axis.frozen] + 1, first - 3);
+      before.scroll[axis.prop] = origin;
+      // Re-read after each adjustment: column widths, row heights, hidden cells
+      // and zoom make the old viewport's cell count an unreliable capacity.
+      let view = spreadsheetViewport(win);
+      while (view && axis.last >= view[axis.start] + view[axis.count] &&
+        Number(getProp(before.scroll, axis.prop)) < first) {
+        const previous = Number(getProp(before.scroll, axis.prop));
+        before.scroll[axis.prop] = previous + 1;
+        if (Number(getProp(before.scroll, axis.prop)) <= previous) break;
+        view = spreadsheetViewport(win);
+      }
+      // If it cannot fit even without context, preserve the starting portion
+      // with the requested three-cell margin instead of chasing the far end.
+      if (view && axis.last >= view[axis.start] + view[axis.count]) before.scroll[axis.prop] = origin;
+    }
+  }
   function navigateToRange(app, documentKey, location) {
     if (appType(app) !== "spreadsheet") throw new Error("目前仅支持表格区域定位");
     const sheetName = location?.sheet, address = location?.address;
@@ -172,13 +240,7 @@
     const range = sheet.Range(address);
     workbook.Activate();
     sheet.Activate();
-    range.Select();
-    // Goto scrolls off-screen destinations into view. Older hosts expose only Select.
-    if (typeof app.Goto === "function") app.Goto(range, true);
-    else {
-      const win = getProp(app, "ActiveWindow");
-      if (win) { win.ScrollRow = r1; win.ScrollColumn = c1; }
-    }
+    scrollSpreadsheetRange(app, getProp(app, "ActiveWindow"), range, r1, c1, r2, c2);
     return { sheet: sheetName, address };
   }
   function boundDocument(app, type, documentKey) {

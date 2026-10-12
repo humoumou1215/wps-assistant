@@ -29,8 +29,8 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.99.2",
-    "@modelcontextprotocol/sdk": "^1.31.0",
-    "acorn": "^8.18.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "acorn": "^8.19.0",
     "saxes": "6.0.0",
     "ws": "^8.22.0",
     "zod": "^4.6.5"

@@ -7,7 +7,7 @@ import { getConfig, type ModelConfig } from "./config.js";
 import { createGuardBudget, GUARD_RETRY_LIMIT } from "./guard-budget.js";
 import { randomUUID } from "node:crypto";
 import { logger } from "./logger.js";
-import { AGENT_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, createSkillReadTool, readSkillContent } from "./agent-skills.js";
+import { AGENT_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, createSkillReadTool, listSkillReferences, readSkillContent } from "./agent-skills.js";
 import { resolveSelectionReference } from "./references.js";
 import { chatSessionManager, listChatSessions, changeChatSession, autoCompactionEnabled, setAutoCompaction } from "./chat-sessions.js";
 import { normalizeToolMessages } from "./tool-names.js";
@@ -166,10 +166,16 @@ export async function agentResources() {
   return {
     systemPrompt: active.systemPrompt,
     skillDirectory: INSTALLED_SKILLS_DIR,
-    skills: await Promise.all(skills.map(async skill => ({ name: skill.name, description: skill.description, filePath: skill.filePath, disableModelInvocation: skill.disableModelInvocation, content: (await readSkillContent(skills, skill.filePath)).content }))),
+    skills: await Promise.all(skills.map(async skill => ({ name: skill.name, description: skill.description, filePath: skill.filePath, baseDir: skill.baseDir, disableModelInvocation: skill.disableModelInvocation, content: (await readSkillContent(skills, skill.filePath)).content, references: await listSkillReferences(skill) }))),
     diagnostics,
     tools: active.getAllTools().filter(tool => enabled.has(tool.name)).map(tool => ({ name: tool.name, description: tool.description, parameters: tool.parameters })),
   };
+}
+// Read one reference of an installed skill for the pane; the same path guard as the Agent `read` tool applies.
+export async function agentSkillFile(path: string) {
+  const active = await ensureSession();
+  const { skills } = active.resourceLoader.getSkills();
+  return readSkillContent(skills, path);
 }
 function sessionStatistics(active: AgentSession) {
   // The SDK counts the full session log, including usage before compaction.

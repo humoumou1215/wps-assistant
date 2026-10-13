@@ -6,7 +6,7 @@ import { dirname, join, resolve } from 'node:path';
 
 const dir = await mkdtemp(join(tmpdir(), 'wps-skills-test-'));
 process.env.WPS_MCP_DATA_DIR = dir;
-const { BUNDLED_SKILLS_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, readSkillContent, readSkillFile, createSkillReadTool } = await import('../dist/src/agent-skills.js');
+const { BUNDLED_SKILLS_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, listSkillReferences, readSkillContent, readSkillFile, createSkillReadTool } = await import('../dist/src/agent-skills.js');
 test.after(() => rm(dir, { recursive: true, force: true }));
 
 test('bundled skills and references install, refresh, and preserve additional installed skills', async () => {
@@ -59,6 +59,27 @@ test('bundled WPS workflow is self-contained and its reference links are readabl
     const reference = await readSkillContent(skills, resolve(dirname(skill.filePath), link));
     assert.ok(reference.content.length > 0, link);
   }
+});
+
+test('skill references list every shipped file except the entry point and skip escaping links', async () => {
+  const { skills } = await installBundledSkills();
+  const skill = skills.find(s => s.name === 'wps-api');
+  const references = await listSkillReferences(skill);
+  assert.deepEqual(references.map(r => r.path).sort(), [
+    'references/api-catalog.md', 'references/common.md', 'references/macos-validation.md', 'references/presentation.md',
+    'references/report-sync.md', 'references/spreadsheet.md', 'references/validation.md', 'references/writer.md',
+  ]);
+  assert.ok(references.every(r => r.size > 0 && r.name === r.path.split('/').pop() && r.filePath.startsWith(skill.baseDir)), 'every reference keeps a readable size and its absolute path');
+  const linked = join(INSTALLED_SKILLS_DIR, 'link-skill');
+  await mkdir(join(linked, 'docs'), { recursive: true });
+  await writeFile(join(linked, 'SKILL.md'), '---\nname: link-skill\ndescription: Linked\ntest\n---\nBody');
+  await writeFile(join(linked, 'docs/guide.md'), 'inner guide');
+  await mkdir(join(dir, 'outside'), { recursive: true });
+  await writeFile(join(dir, 'outside/secret.md'), 'outside skill root');
+  await symlink(join(dir, 'outside'), join(linked, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  const listed = await listSkillReferences({ baseDir: linked });
+  assert.deepEqual(listed.map(r => r.path), ['docs/guide.md'], 'the entry point, links leaving the directory and nested files outside the skill stay hidden');
+  assert.ok(!listed.some(r => /escape|SKILL/.test(r.path)));
 });
 
 test('upgrades remove retired bundled skills and references while preserving user files', async () => {

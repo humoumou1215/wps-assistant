@@ -22,7 +22,7 @@
     }
     return html + esc(String(code).slice(end));
   }
-  function inline(text) {
+  function inline(text, resolveLink) {
     let html = '', end = 0;
     const pattern = /`([^`]+)`|\[([^\]\n]+)\]\(([^\s)]+)\)|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*/g;
     for (const m of String(text).matchAll(pattern)) {
@@ -30,14 +30,15 @@
       if (m[1]) html += `<code>${esc(m[1])}</code>`;
       else if (m[2]) {
         const safe = /^https?:\/\//i.test(m[3]);
-        html += safe ? `<a href="${esc(m[3])}" target="_blank" rel="noopener noreferrer">${esc(m[2])}</a>` : esc(m[0]);
+        const reference = safe || !resolveLink ? null : resolveLink(m[3]);
+        html += safe ? `<a href="${esc(m[3])}" target="_blank" rel="noopener noreferrer">${esc(m[2])}</a>` : reference ? `<a href="#" class="skill-ref-link" data-skill-ref="${esc(reference)}">${esc(m[2])}</a>` : esc(m[0]);
       } else html += m[4] ? `<strong>${esc(m[4])}</strong>` : `<em>${esc(m[5])}</em>`;
       end = m.index + m[0].length;
     }
     return html + esc(String(text).slice(end));
   }
   const cells = line => line.trim().replace(/^\|/, '').replace(/\|$/, '').split(/(?<!\\)\|/).map(c => c.trim().replace(/\\\|/g, '|'));
-  function markdown(text) {
+  function markdown(text, resolveLink) {
     const lines = String(text).replace(/\r/g, '').split('\n'); let html = '', i = 0;
     while (i < lines.length) {
       const line = lines[i];
@@ -49,19 +50,19 @@
       }
       if (line.includes('|') && lines[i + 1] && cells(lines[i + 1]).every(c => /^:?-{3,}:?$/.test(c))) {
         const head = cells(line); i += 2; let body = '';
-        while (i < lines.length && lines[i].includes('|') && lines[i].trim()) { const row = cells(lines[i++]); body += '<tr>' + head.map((_, n) => `<td>${inline(row[n] || '')}</td>`).join('') + '</tr>'; }
-        html += `<div class="table-scroll"><table class="mdtable"><thead><tr>${head.map(c => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`; continue;
+        while (i < lines.length && lines[i].includes('|') && lines[i].trim()) { const row = cells(lines[i++]); body += '<tr>' + head.map((_, n) => `<td>${inline(row[n] || '', resolveLink)}</td>`).join('') + '</tr>'; }
+        html += `<div class="table-scroll"><table class="mdtable"><thead><tr>${head.map(c => `<th>${inline(c, resolveLink)}</th>`).join('')}</tr></thead><tbody>${body}</tbody></table></div>`; continue;
       }
       const list = /^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(line);
       if (list) {
         const ordered = /^\s*\d/.test(line), tag = ordered ? 'ol' : 'ul'; const items = [];
         const re = ordered ? /^\s*\d+[.)]\s+/ : /^\s*[-*+]\s+/;
-        while (i < lines.length && re.test(lines[i])) items.push(`<li>${inline(lines[i++].replace(re, ''))}</li>`);
+        while (i < lines.length && re.test(lines[i])) items.push(`<li>${inline(lines[i++].replace(re, ''), resolveLink)}</li>`);
         html += `<${tag}>${items.join('')}</${tag}>`; continue;
       }
-      if (/^#{1,6}\s/.test(line)) { const n = line.match(/^#+/)[0].length; html += `<h${n}>${inline(line.replace(/^#+\s+/, ''))}</h${n}>`; }
-      else if (/^>\s?/.test(line)) html += `<blockquote>${inline(line.replace(/^>\s?/, ''))}</blockquote>`;
-      else if (line.trim()) html += `<p>${inline(line)}</p>`;
+      if (/^#{1,6}\s/.test(line)) { const n = line.match(/^#+/)[0].length; html += `<h${n}>${inline(line.replace(/^#+\s+/, ''), resolveLink)}</h${n}>`; }
+      else if (/^>\s?/.test(line)) html += `<blockquote>${inline(line.replace(/^>\s?/, ''), resolveLink)}</blockquote>`;
+      else if (line.trim()) html += `<p>${inline(line, resolveLink)}</p>`;
       i++;
     }
     return html;
@@ -96,9 +97,18 @@
     const nested = properties.some(([, property]) => property.properties || property.items?.properties || property.anyOf || property.oneOf || property.$ref);
     return '<section><h3>描述</h3><p class="agent-description">' + esc(tool.description) + '</p></section><section><div class="agent-section-head"><h3>参数</h3><span>' + properties.length + ' 个参数</span></div>' + (rows ? '<table class="agent-parameters" aria-label="工具参数"><tbody>' + rows + '</tbody></table>' : '<p class="agent-description">无需参数。</p>') + (nested || !schema.properties && Object.keys(schema).length ? '<details><summary>完整参数定义</summary><pre>' + esc(JSON.stringify(schema, null, 2)) + '</pre></details>' : '') + '</section>';
   }
+  const fileSize = bytes => !Number.isFinite(bytes) ? '' : bytes < 1024 ? bytes + ' B' : (bytes / 1024).toFixed(bytes < 10240 ? 1 : 0) + ' KB';
   function agentSkillHTML(skill, directory, diagnostics = []) {
     const content = String(skill.content || '').replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, '');
-    return '<section><h3>描述</h3><p class="agent-description">' + esc(skill.description) + '</p></section><section><h3>调用方式</h3><p class="agent-description">' + (skill.disableModelInvocation ? '仅手动调用' : '助手按任务需要读取') + '</p></section><section><h3>技能来源</h3><div class="agent-path">' + esc(skill.filePath) + '</div><div class="agent-path">技能目录：' + esc(directory) + '</div></section><section><h3>技能正文</h3><div class="body-text">' + markdown(content) + '</div></section>' + (diagnostics.length ? '<section><details><summary>技能加载提示</summary><pre>' + esc(JSON.stringify(diagnostics, null, 2)) + '</pre></details></section>' : '');
+    const baseDir = String(skill.baseDir || '').replace(/[\\/]+$/, '');
+    const references = Array.isArray(skill.references) ? skill.references : [];
+    // Relative .md links inside the skill body open the matching reference in the pane instead of navigating away.
+    const resolveLink = href => {
+      const target = String(href).split('#')[0];
+      return baseDir && /\.md$/i.test(target) && !/^[a-z][a-z0-9+.-]*:/i.test(target) && !target.startsWith('/') ? baseDir + '/' + target : null;
+    };
+    const refsHTML = references.length ? '<section><div class="agent-section-head"><h3>参考资料</h3><span>' + references.length + ' 个文件</span></div><div class="skill-refs">' + references.map(ref => '<button type="button" class="skill-ref" aria-pressed="false" data-skill-ref="' + esc(ref.filePath || ref.path) + '">' + esc(ref.path || ref.name) + (Number.isFinite(ref.size) ? '<small>' + esc(fileSize(ref.size)) + '</small>' : '') + '</button>').join('') + '</div><div class="skill-ref-view" id="skillRefView" hidden></div></section>' : '';
+    return '<section><h3>描述</h3><p class="agent-description">' + esc(skill.description) + '</p></section><section><h3>调用方式</h3><p class="agent-description">' + (skill.disableModelInvocation ? '仅手动调用' : '助手按任务需要读取') + '</p></section><section><h3>技能来源</h3><div class="agent-path">' + esc(skill.filePath) + '</div><div class="agent-path">技能目录：' + esc(directory) + '</div></section>' + refsHTML + '<section><h3>技能正文</h3><div class="body-text">' + markdown(content, resolveLink) + '</div></section>' + (diagnostics.length ? '<section><details><summary>技能加载提示</summary><pre>' + esc(JSON.stringify(diagnostics, null, 2)) + '</pre></details></section>' : '');
   }
   function tableOf(value) {
     if (!Array.isArray(value) || !value.length) return null;

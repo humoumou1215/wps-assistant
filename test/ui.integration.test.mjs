@@ -18,6 +18,21 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
     assert.match(resources.systemPrompt, /wps-api/);
     assert.equal(resources.skills.find(s => s.name === 'wps-api').content, await readFile(new URL('../skills/wps-api/SKILL.md', import.meta.url), 'utf8'));
     assert.match(await readFile(h.dir + '/pi/skills/wps-api/references/spreadsheet.md', 'utf8'), /Range/);
+    const wpsApi = resources.skills.find(s => s.name === 'wps-api');
+    assert.ok(wpsApi.baseDir.endsWith(join('pi', 'skills', 'wps-api')));
+    assert.deepEqual(wpsApi.references.map(r => r.path).sort(), ['references/api-catalog.md', 'references/common.md', 'references/macos-validation.md', 'references/presentation.md', 'references/report-sync.md', 'references/spreadsheet.md', 'references/validation.md', 'references/writer.md']);
+    const writerRef = wpsApi.references.find(r => r.name === 'writer.md');
+    const writerFile = await get('/api/skill-file?path=' + encodeURIComponent(writerRef.filePath));
+    assert.match(writerFile.path, /writer\.md$/);
+    assert.match(writerFile.content, /Writer|Paragraph|Bookmark/);
+    assert.equal((await fetch(h.base + '/api/skill-file')).status, 400, 'a missing path is rejected');
+    assert.equal((await fetch(h.base + '/api/skill-file?path=' + encodeURIComponent('../../config.json'))).status, 400, 'only installed skill files are readable');
+    assert.equal((await fetch(h.base + '/api/skill-file?path=' + encodeURIComponent(wpsApi.filePath))).status, 200, 'the skill entry point is readable too');
+    // The pane joins the skill base directory with a forward slash, so mixed separators must resolve on Windows too.
+    const joined = await get('/api/skill-file?path=' + encodeURIComponent(wpsApi.baseDir + '/' + writerRef.path));
+    assert.match(joined.path, /writer\.md$/);
+    assert.equal(joined.content, writerFile.content);
+    assert.equal((await fetch(h.base + '/api/skill-file?path=x', { headers: { Origin: 'https://evil.example' } })).status, 403);
     assert.equal(resources.tools.length, 12);
     assert.ok(resources.tools.filter(t => t.name !== 'read').every(t => /^wps_[a-z]+(?:_[a-z]+)*$/.test(t.name)));
     assert.ok(resources.tools.some(t => t.name === 'read' && t.parameters.properties.path));

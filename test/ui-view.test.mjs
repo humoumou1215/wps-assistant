@@ -294,6 +294,29 @@ test('skill inspector renders its body, source, manual invocation and diagnostic
   assert.doesNotMatch(html, /name: test|<script>|<b>unsafe/);
   assert.match(html, /技能加载提示/);
   assert.match(html, /&lt;unsafe&gt;/);
+  assert.doesNotMatch(html, /参考资料/, 'a skill without references never claims any');
+  assert.match(V.agentSkillHTML({ description: 'd', filePath: '/skills/test/SKILL.md', content: '读 [指南](references/guide.md)' }, '/skills'), /\[指南\]\(references\/guide\.md\)/, 'links stay inert when the skill base directory is unknown');
+});
+
+test('skill inspector lists references with sizes and turns body links into pane actions', () => {
+  const skill = {
+    name: 'wps-api', description: 'd', filePath: '/skills/wps-api/SKILL.md', baseDir: '/skills/wps-api',
+    content: '# 标题\n\n读 [表格](references/spreadsheet.md) 与 [外部](https://example.com/x.md)。\n\n[说明](other.md#片段)\n\n![图](references/big.png)',
+    references: [
+      { name: 'spreadsheet.md', path: 'references/spreadsheet.md', filePath: '/skills/wps-api/references/spreadsheet.md', size: 2048 },
+      { name: 'big.png', path: 'references/big.png', filePath: '/skills/wps-api/references/big.png', size: 300 },
+    ],
+  };
+  const html = V.agentSkillHTML(skill, '/skills');
+  assert.match(html, /<h3>参考资料<\/h3><span>2 个文件<\/span>/);
+  assert.match(html, /data-skill-ref="\/skills\/wps-api\/references\/spreadsheet\.md">references\/spreadsheet\.md<small>2\.0 KB<\/small>/);
+  assert.match(html, /references\/big\.png<small>300 B<\/small>/);
+  assert.match(html, /id="skillRefView" hidden/);
+  assert.match(html, /<a href="#" class="skill-ref-link" data-skill-ref="\/skills\/wps-api\/references\/spreadsheet\.md">表格<\/a>/);
+  assert.match(html, /<a href="#" class="skill-ref-link" data-skill-ref="\/skills\/wps-api\/other\.md">说明<\/a>/, 'fragment links resolve to their file');
+  assert.match(html, /<a href="https:\/\/example\.com\/x\.md" target="_blank" rel="noopener noreferrer">外部<\/a>/, 'external links stay ordinary links');
+  const unsafe = V.agentSkillHTML({ ...skill, baseDir: '/skills/wps-api', content: '读 [绝对](/etc/passwd.md) 与 [协议](javascript:evil)' }, '/skills');
+  assert.doesNotMatch(unsafe, /data-skill-ref="\/etc|data-skill-ref="javascript/, 'absolute and protocol links are never turned into pane actions');
 });
 
 test('session information shows separate caches, weighted hit rate and unknown pricing', () => {

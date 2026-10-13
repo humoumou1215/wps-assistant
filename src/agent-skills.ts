@@ -62,6 +62,31 @@ function isWithin(root: string, path: string) {
   return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(".." + sep));
 }
 
+export type SkillReference = { name: string; path: string; filePath: string; size: number };
+
+// List the readable files shipped with a skill, excluding its SKILL.md entry point.
+// Symlinks are skipped so the pane can only surface real files inside the skill directory.
+export async function listSkillReferences(skill: { baseDir: string }) {
+  const root = await realpath(skill.baseDir);
+  const entries: SkillReference[] = [];
+  async function walk(dir: string, prefix: string): Promise<void> {
+    for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = prefix ? `${prefix}/${entry.name}` : entry.name;
+      let resolved: string;
+      try { resolved = await realpath(join(dir, entry.name)); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
+      // Resolving first keeps links and junctions that escape the skill directory out of the list.
+      if (!isWithin(root, resolved)) continue;
+      if (entry.isDirectory()) { await walk(resolved, path); continue; }
+      if (path === "SKILL.md") continue;
+      const info = await stat(resolved);
+      if (!info.isFile()) continue;
+      entries.push({ name: entry.name, path, filePath: resolved, size: info.size });
+    }
+  }
+  await walk(root, "");
+  return entries;
+}
+
 export async function readSkillContent(skills: Skill[], path: string) {
   const candidate = resolve(INSTALLED_SKILLS_DIR, path);
   if (!skills.some(skill => isWithin(skill.baseDir, candidate))) throw new Error("只能读取已安装技能目录中的文件");

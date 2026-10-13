@@ -123,6 +123,13 @@ button{font-family:inherit}
 .agent-description{margin:0;color:var(--text-muted);font-size:12px;white-space:pre-wrap}
 .agent-path{font:11px/1.7 var(--font-mono);color:var(--text-dim);overflow-wrap:anywhere}
 .agent-section-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;color:var(--text-dim);font-size:11px}
+.skill-refs{display:flex;flex-wrap:wrap;gap:6px}
+.skill-ref{display:inline-flex;align-items:baseline;gap:6px;padding:5px 9px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--text-muted);font:11px/1.5 var(--font-mono);overflow-wrap:anywhere;cursor:pointer}
+.skill-ref:hover{background:var(--bg-hover);color:var(--text)}
+.skill-ref[aria-pressed=true]{border-color:var(--accent);color:var(--text)}
+.skill-ref small{color:var(--text-dim);font-size:10px}
+.skill-ref-view{margin-top:10px;padding:10px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg-hover)}
+.skill-ref-view .agent-section-head{margin-bottom:8px}
 .agent-parameters{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12px}
 .agent-parameters td{vertical-align:top;padding:10px 0;border-top:1px solid var(--border)}
 .agent-parameters td:first-child{width:34%;padding-right:12px}

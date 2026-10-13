@@ -106,7 +106,15 @@ test('add-in repair and removal report a running WPS so the tray can offer to cl
     child.once('error', reject); child.once('exit', () => { try { resolveCommand(JSON.parse(output)); } catch { reject(new Error(error || output)); } });
   });
   try {
+    // 免安装控制程序只支持 macOS 与 Windows；其他平台在任何注册动作之前就拒绝，不存在确认框分支。
+    const portable = process.platform === 'darwin' || process.platform === 'win32';
     const registered = await command('register');
+    if (!portable) {
+      assert.match(registered.message, /只支持 macOS 和 Windows/);
+      assert.equal((await command('close-wps')).ok, false);
+      await assert.rejects(readFile(join(data, 'desktop-registration.json')), { code: 'ENOENT' });
+      return;
+    }
     if (!registered.ok) {
       // 真实 WPS 正在运行：必须带上标记和可照做的提示，托盘才能把报错换成确认框；失败的操作不写标记。
       assert.equal(registered.reason, 'wps-running', registered.message);

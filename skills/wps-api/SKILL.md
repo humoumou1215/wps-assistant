@@ -16,7 +16,7 @@ description: 通过 WPS 工具读取或修改已连接的表格、演示和文�
 | 表格取数、计算或写入 | [表格](references/spreadsheet.md) |
 | PPT 文本、表格或图表 | [演示](references/presentation.md) |
 | Writer 段落、表格或书签 | [文字](references/writer.md) |
-| 数据绑定到既定报告模板、动态行列或图表 | [报告绑定](references/report-sync.md)，全文 |
+| PPT 表格写入（包括首次写入）、数据绑定到既定报告模板、动态行列或图表 | [报告绑定](references/report-sync.md)，全文；PPT 表格必读续表章节 |
 | 用户引用选区、通用枚举或依赖选区的宿主命令 | [选区与通用 API](references/common.md)，前 30 行 |
 | 平台差异、兼容性结论 | [验证范围](references/validation.md)及其中相关链接 |
 | 常用指引缺少具体成员 | [历史成员目录](references/api-catalog.md)，按宿主、对象、成员查阅，避免通读 |
@@ -36,6 +36,7 @@ description: 通过 WPS 工具读取或修改已连接的表格、演示和文�
 - Variable.description 写来源、筛选、口径和单位；值用职责内的具名字段，如“风险项目”的 `{月份, 项目明细, 高风险项目数}`，明细用具名对象或明确 `{表头, 行}`。数值保留数值，格式化放在 Render；缺失值与零分别处理。
 - Render.description 写“第 3 页 · 重点项目表 · 展示项目进展”。代码用业务变量名、短函数、正常换行、分段注释及集中目标映射；每行表达一个步骤，便于人工修改。节省上下文靠按需读取和精简工具结果，代码保持可读。每份脚本只保留实际调用的函数，避免复制无关格式化函数或预置兼容框架。兼容分支服务于已观察到或用户明确要求的数据形态，未知形态给可读错误后再补充。
 - 一条 Render 默认只负责一处可独立定位、更新和验收的目标，如一个文本框、表格、图表或连续区域。同一页的指标文本、项目表、趋势图分别建 Render；共享变量不意味着合并 Render。只有目标必须联动、拆开无法完成同一处更新时才允许一条 Render 写多处，例如表格溢出必须维护模板续表；description 写明合并原因，targetRef 列全位置，执行后逐处读回验收。
+- PPT 表格 Render 默认包含容量判断和续表维护，每次重写都按当前记录与实际行高重新分页：放不下就新增模板续页，放得下就复用原页，数据减少时回收本规则生成且已不需要的续页。用户无需再次要求“续表”；用户明确限制页数或禁止增删页时遵循其限制。原表及其自动续表由同一 Render 联动维护，归属标记、分页、回收与验收见 [PPT 续表](references/report-sync.md#ppt-table-continuation)。
 - `sourceRef` / `targetRef` 供人工定位，不自动限制代码范围或决定取数口径。表格用 `工作表!A1:B13`；表名含空格/单引号时用单引号包围，内部单引号双写。PPT 用实际稳定 ID `SlideID:257!ShapeID:4`，也支持 `Slide:2!Shape:对象名`、`Slide:2`。Writer 用 `Paragraph:4`、`Table:1`、`Range:0:20`、`Bookmark:名称` 或 `Heading:标题!Paragraph` / `!Table`。多个 Word/PPT 目标用 `+` 连接，每段为完整位置。
 - 按已核实 ID 查找目标，缺失时抛出含页/对象含义的错误。Render 重复运行更新原对象并处理自己管理的过期内容，避免重复追加或影响未绑定对象。
 - update 省略字段保留原值，description/sourceRef/targetRef 可用 null 清除；只改变量名称或描述保留值。先检查定义再更新，保留 ID。

@@ -26,7 +26,7 @@ return slides;
 
 只在 Render 改 `shape.TextFrame.TextRange.Text`、`shape.Table.Cell(r,c).Shape.TextFrame.TextRange.Text` 或图表数据。保留原对象、位置尺寸和样式，按实际稳定 ID 查找并核实存在。图表读取 `shape.Chart` 的可用系列/数据路径，再写后读回；写方法的存在性检查也仅放在 Render。
 
-表格动态增减行列、原生图表、模板样式和防溢出按 [报告绑定](report-sync.md) 操作。创建对象或探测未知写 API 前保留恢复依据，失败后先检查当前状态，不重复追加。
+写入 PPT 表格前必读 [PPT 续表](report-sync.md#ppt-table-continuation)：Render 每次按页面安全区域、实际行高和换行重新分页，超容量默认新增模板续页，数据减少时回收本规则生成且不再需要的续页，不等用户另提续表要求。表格动态行列、原生图表与样式见同一报告绑定指引。创建对象或探测未知写 API 前保留恢复依据，失败后先检查当前状态，不重复追加。
 
 ## 历史诊断的查阅边界
 

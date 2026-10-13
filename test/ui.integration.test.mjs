@@ -18,7 +18,7 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
     assert.match(resources.systemPrompt, /wps-api/);
     assert.equal(resources.skills.find(s => s.name === 'wps-api').content, await readFile(new URL('../skills/wps-api/SKILL.md', import.meta.url), 'utf8'));
     assert.match(await readFile(h.dir + '/pi/skills/wps-api/references/spreadsheet.md', 'utf8'), /Range/);
-    assert.equal(resources.tools.length, 11);
+    assert.equal(resources.tools.length, 12);
     assert.ok(resources.tools.filter(t => t.name !== 'read').every(t => /^wps_[a-z]+(?:_[a-z]+)*$/.test(t.name)));
     assert.ok(resources.tools.some(t => t.name === 'read' && t.parameters.properties.path));
     assert.equal((await fetch(h.base + '/api/agent', { headers: { Origin: 'https://evil.example' } })).status, 403);
@@ -50,7 +50,7 @@ test('task pane API, isolated pi session, full tool loop, errors, cancellation a
     assert.equal(state.variables[0].transform.sourceRef, '销售数据!A1:B3');
     assert.ok(state.variables[0].transform.lastRun); assert.ok(state.variables[0].renders[0].lastRun);
     const chatRequest = h.requests.find(r => r.body.tools?.length);
-    assert.equal(chatRequest.body.tools.length, 11);
+    assert.equal(chatRequest.body.tools.length, 12);
     assert.ok(chatRequest.body.tools.every(t => !['write', 'edit', 'bash', 'powershell'].includes(t.function.name)));
     assert.match(JSON.stringify(chatRequest.body.messages), /引用快照/);
     const currentResources = await get('/api/agent');

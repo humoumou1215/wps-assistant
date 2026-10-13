@@ -277,6 +277,35 @@ function cleanDocument(doc: DocumentRecord) {
     connected: doc.connected,
   };
 }
+// A listing needs identity, bindings and freshness only. The saved `code` and `value`
+// are deliberately omitted: a full list of them would crowd the model context, and
+// wps_get_variable returns any one definition in full. Definitions stay listed while
+// their documents are disconnected, so leftover rules remain visible.
+function cleanVariable(variable: Variable) {
+  const source = documents.get(variable.transform.sourceDocumentId);
+  return {
+    variableId: variable.variableId,
+    name: variable.name,
+    ...(variable.description ? { description: variable.description } : {}),
+    hasValue: !!variable.hasValue,
+    ...(variable.transform.lastRun ? { lastRunAt: variable.transform.lastRun.at } : {}),
+    sourceDocumentId: variable.transform.sourceDocumentId,
+    ...(source ? { sourceDocumentName: source.name } : {}),
+    sourceConnected: source?.connected === true,
+    ...(variable.transform.sourceRef ? { sourceRef: variable.transform.sourceRef } : {}),
+    renderCount: variable.renders.length,
+    renders: variable.renders.map(render => {
+      const target = documents.get(render.targetDocumentId);
+      return {
+        renderId: render.renderId,
+        targetDocumentId: render.targetDocumentId,
+        ...(target ? { targetDocumentName: target.name } : {}),
+        targetConnected: target?.connected === true,
+        ...(render.targetRef ? { targetRef: render.targetRef } : {}),
+      };
+    }),
+  };
+}
 async function sendRpc(doc: DocumentRecord, method: string, params: Record<string, unknown>) {
   const connection = connections.get(doc.connectionId);
   if (!connection || connection.socket.readyState !== WebSocket.OPEN) throw new ToolError("DOCUMENT_DISCONNECTED", `Document '${doc.documentId}' is disconnected`);
@@ -563,6 +592,13 @@ defineTool("wps_update_render", {
     return toolResult({ success: true, variableId, renderId, targetDocumentId: updated.targetDocumentId, ...(updated.description !== undefined ? { description: updated.description } : {}) });
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
 });
+
+defineTool("wps_list_variables", {
+  title: "List Variables",
+  description: "List every saved Variable definition with its Transform source and Render targets. Returns summaries only; read wps_get_variable for one definition's complete code. Definitions whose documents are disconnected stay listed, so use this to find stale or leftover rules before creating new ones.",
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  inputSchema: {},
+}, async () => toolResult({ variables: state.variables.map(cleanVariable) }));
 
 defineTool("wps_get_variable", {
   title: "Get Variable",

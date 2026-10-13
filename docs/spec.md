@@ -177,7 +177,7 @@ MCP Server 必须维护当前可操作文档列表。
 
 # 4. MCP Tools
 
-当前提供 10 个工具：
+当前提供 11 个工具：
 
 ```text
 Workspace
@@ -194,6 +194,7 @@ Definition
 └── wps_update_render
 
 Variable
+├── wps_list_variables
 ├── wps_get_variable
 ├── wps_run_transform
 └── wps_run_render
@@ -225,7 +226,13 @@ Transform 的代码、来源文档或源区域变化会清除旧值（`hasValue=
 - 所有变量定义创建、更新、重算、重写和 UI 删除共用服务级队列串行执行，状态文件写入另有串行队列。普通查询不进入变量修改队列；不能把它描述为全服务请求均串行。
 - 停止生成阻止未开始的工具执行；已经开始的 WPS 操作可能继续完成，已写入内容不回滚。RPC 默认等待最多 45 秒，超时或断开不代表宿主写入已撤销。
 
-工具统一使用 `wps_` 前缀的小写 snake_case。MCP 和 pi 启用相同的十个 WPS 工具；内嵌 Agent 另有技能专用 `read`。历史会话中的旧工具名在恢复显示和发送模型上下文时转换，原始记录保留。升级后重启服务并让外部客户端重新发现工具。
+工具统一使用 `wps_` 前缀的小写 snake_case。MCP 和 pi 启用相同的十一个 WPS 工具；内嵌 Agent 另有技能专用 `read`。历史会话中的旧工具名在恢复显示和发送模型上下文时转换，原始记录保留。升级后重启服务并让外部客户端重新发现工具。
+
+## 4.3 变量定义的枚举
+
+`wps_list_variables` 无参数，返回全部已保存变量定义的摘要，用于执行任务前核对已有规则、发现遗留或过期定义。每项包含 `variableId`、`name`、可选 `description`、`hasValue`、可选 `lastRunAt`、Transform 来源（`sourceDocumentId`、可选 `sourceDocumentName`、`sourceConnected`、可选 `sourceRef`），以及 `renderCount` 和每条 Render 的摘要（`renderId`、`targetDocumentId`、可选 `targetDocumentName`、`targetConnected`、可选 `targetRef`）。
+
+摘要不含 `code` 和 `value`：完整定义与值按需通过 `wps_get_variable` 读取。变量定义持久保存，来源或目标文档断开时仍会列出，此时 `sourceConnected` / `targetConnected` 为 `false`。只读查询不进入变量修改队列，无变量时返回空列表。
 
 ---
 
@@ -1381,7 +1388,7 @@ Render 能正确执行
 
 # 22. 当前 MCP Tool 定义
 
-当前固定提供以下十个工具；`?` 表示可省略，清除可选字段的 `null` 语义见第 4.1 节：
+当前固定提供以下十一个工具；`?` 表示可省略，清除可选字段的 `null` 语义见第 4.1 节：
 
 ```text
 wps_list_documents()
@@ -1428,6 +1435,8 @@ wps_update_render(
     description?,
     code?
 )
+
+wps_list_variables()
 
 wps_get_variable(
     variableId
@@ -1892,7 +1901,7 @@ API Key 和自定义 Header 值仍以普通 JSON 存在本机 `config.json`，�
 
 ## 27.3 Agent 技能、会话与命令
 
-内嵌 Agent 使用 `@earendil-works/pi-coding-agent`，十个 WPS 工具直接挂载为 custom tools，并禁用默认 bash、write、edit 和通用 read。另提供一个只允许读取已安装技能文本及参考资料的 `read`；路径和真实路径均须在对应技能目录内，拒绝逃逸符号链接、二进制或过大的文件。扩展、提示模板、主题及外部上下文自动发现关闭，不依赖用户安装 pi CLI。
+内嵌 Agent 使用 `@earendil-works/pi-coding-agent`，十一个 WPS 工具直接挂载为 custom tools，并禁用默认 bash、write、edit 和通用 read。另提供一个只允许读取已安装技能文本及参考资料的 `read`；路径和真实路径均须在对应技能目录内，拒绝逃逸符号链接、二进制或过大的文件。扩展、提示模板、主题及外部上下文自动发现关闭，不依赖用户安装 pi CLI。
 
 服务启动时将项目 `skills/`（含参考资料）安装到 `<数据目录>/pi/skills/`。`.wps-bundled-files.json` 清单用于更新随项目文件并清理撤下的内置文件，保留其他已安装技能和用户新增资料；清单建立前的遗留文件不推断为内置文件后删除。WPS API 知识按任务读取表格、演示、Writer、通用/选区、平台验收与报告绑定参考，不一次塞入完整目录。
 
@@ -2023,7 +2032,7 @@ tail -n 30 -f "$HOME/Library/Application Support/wps-mcp/logs/wps-mcp.log"
 | 路径 | 职责 |
 | --- | --- |
 | `src/server.ts` | MCP、HTTP、WebSocket 和服务生命周期 |
-| `src/tools.ts` | 十个 WPS 工具、文档路由、RPC、变量与规则持久化 |
+| `src/tools.ts` | 十一个 WPS 工具、文档路由、RPC、变量与规则持久化 |
 | `src/api.ts` | 面板 HTTP API、配置、会话、引用、导航、UI 删除及桌面管理入口 |
 | `src/agent.ts` | pi Agent、系统提示词、流式事件、工具挂载与会话资源 |
 | `src/agent-skills.ts` | 内置技能安装与技能专用 read 隔离 |

@@ -95,6 +95,39 @@ test('portable runtime refuses foreign listeners and stale or altered ownership,
   }
 });
 
+// 注册与移除加载项都要求完全退出 WPS。控制程序把这一情形标记为 wps-running，托盘据此弹确认框
+// 并代用户关闭 WPS；这里只锁定该标记与「WPS 未运行」时的结果，绝不结束构建机器上真实运行的 WPS。
+test('add-in repair and removal report a running WPS so the tray can offer to close it', { timeout: 60000 }, async () => {
+  const data = await mkdtemp(join(tmpdir(), 'wps-register-'));
+  const env = { ...process.env, WPS_MCP_DATA_DIR: data, WPS_MCP_ADDINS_DIR: join(data, 'addins') };
+  const command = action => new Promise((resolveCommand, reject) => {
+    const child = spawn(process.execPath, ['dist/src/desktop-runtime.js', action], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '', error = ''; child.stdout.on('data', b => { output += b; }); child.stderr.on('data', b => { error += b; });
+    child.once('error', reject); child.once('exit', () => { try { resolveCommand(JSON.parse(output)); } catch { reject(new Error(error || output)); } });
+  });
+  try {
+    const registered = await command('register');
+    if (!registered.ok) {
+      // 真实 WPS 正在运行：必须带上标记和可照做的提示，托盘才能把报错换成确认框；失败的操作不写标记。
+      assert.equal(registered.reason, 'wps-running', registered.message);
+      assert.match(registered.message, /完全退出 WPS/);
+      const unregistered = await command('unregister');
+      assert.equal(unregistered.reason, 'wps-running', unregistered.message);
+      assert.match(unregistered.message, /完全退出 WPS/);
+      await assert.rejects(readFile(join(data, 'desktop-registration.json')), { code: 'ENOENT' });
+      return;
+    }
+    // WPS 未运行：关闭指令此时无事可做；移除只删本项目条目，并记住这次决定。
+    assert.equal((await command('close-wps')).message, 'WPS 未在运行');
+    const removed = await command('unregister');
+    assert.equal(removed.ok, true, removed.message);
+    assert.match(removed.message, /已移除/);
+    assert.ok(!(await readFile(join(env.WPS_MCP_ADDINS_DIR, 'publish.xml'), 'utf8')).includes('WpsMcp'));
+    const marker = JSON.parse(await readFile(join(data, 'desktop-registration.json'), 'utf8'));
+    assert.deepEqual(marker, { port: 18766, addinsDir: env.WPS_MCP_ADDINS_DIR, removed: true });
+  } finally { await rm(data, { recursive: true, force: true }); }
+});
+
 test('portable service exits when its tray owner disappears and flushes the shutdown log', { timeout: 30000 }, async () => {
   const owner = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
   await new Promise((resolveOwner, reject) => { owner.once('spawn', resolveOwner); owner.once('error', reject); });

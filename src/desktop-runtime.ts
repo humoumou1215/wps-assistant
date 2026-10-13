@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { createConnection } from "node:net";
 import { DATA_DIR } from "./paths.js";
-import { registerAddins } from "./addin-registration.js";
+import { registerAddins, removeAddins } from "./addin-registration.js";
 
 const execute = promisify(execFile);
 const appDir = await realpath(fileURLToPath(new URL("../../", import.meta.url)));
@@ -18,6 +18,8 @@ if (!Number.isInteger(port) || port < 1025 || port > 65535) throw new Error("无
 const base = `http://127.0.0.1:${port}`;
 const metaPath = join(DATA_DIR, "desktop-service.json");
 const markerPath = join(DATA_DIR, "desktop-registration.json");
+/// 标记已按哪个端口/目录注册过；removed 记录用户主动移除的决定，启动服务据此不再自动补注册。
+type RegistrationMarker = { port: number; addinsDir: string; removed?: boolean };
 const addinsDir = resolve(process.env.WPS_MCP_ADDINS_DIR ?? (process.platform === "darwin"
   ? join(homedir(), "Library/Containers/com.kingsoft.wpsoffice.mac/Data/.kingsoft/wps/jsaddons")
   : join(process.env.APPDATA ?? join(homedir(), "AppData/Roaming"), "kingsoft/wps/jsaddons")));
@@ -51,23 +53,71 @@ async function ownedStatus(meta: Metadata) {
   }
   return status;
 }
-export async function assertWpsClosed() {
+/// 注册和启动都要求完全退出 WPS：文档宿主加上常驻的后台/CEF 宿主进程。
+function wpsProcessNames() {
+  if (process.platform === "darwin") return ["wpsoffice", "promecefpluginhost"];
+  if (process.platform === "win32") return ["wps", "et", "wpp", "wpscenter", "promecefpluginhost"];
+  throw new Error("免安装桌面程序只支持 macOS 和 Windows");
+}
+/// 正在运行的 WPS 进程数。macOS 逐个用 pgrep 精确匹配，Windows 一次查询进程名列表。
+async function wpsProcessCount() {
+  const names = wpsProcessNames();
   if (process.platform === "darwin") {
-    for (const name of ["wpsoffice", "promecefpluginhost"]) {
-      try { await execute("/usr/bin/pgrep", ["-x", name]); }
+    let count = 0;
+    for (const name of names) {
+      try { count += (await execute("/usr/bin/pgrep", ["-x", name])).stdout.split("\n").filter(Boolean).length; }
       catch (error) { if ((error as { code?: number }).code === 1) continue; throw new Error("无法检查 WPS 是否已退出"); }
-      throw new Error("请完全退出 WPS（包括后台进程），再选择「修复 WPS 加载项注册」或「启动服务」");
     }
-  } else if (process.platform === "win32") {
-    const result = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "@(Get-Process -Name wps,et,wpp,wpscenter,promecefpluginhost -ErrorAction SilentlyContinue).Count"], { windowsHide: true });
-    if (Number(result.stdout.trim()) !== 0) throw new Error("请完全退出 WPS（包括右下角托盘进程），再重试注册");
-  } else throw new Error("免安装桌面程序只支持 macOS 和 Windows");
+    return count;
+  }
+  const result = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `@(Get-Process -Name ${names.join(",")} -ErrorAction SilentlyContinue).Count`], { windowsHide: true });
+  return Number(result.stdout.trim());
+}
+/// 注册前必须先退出 WPS。reason 让托盘能识别这一情形，改为弹确认框并代用户关闭。
+export async function assertWpsClosed() {
+  if ((await wpsProcessCount()) === 0) return;
+  throw Object.assign(
+    new Error(process.platform === "darwin"
+      ? "请完全退出 WPS（包括后台进程），再选择「修复 WPS 加载项注册」或「启动服务」"
+      : "请完全退出 WPS（包括右下角托盘进程），再重试注册"),
+    { reason: "wps-running" },
+  );
+}
+/// 等待 WPS 进程全部消失。按截止时间控制，探测本身的耗时也算在内，不做无条件强杀。
+async function waitForWpsExit(seconds: number) {
+  const deadline = Date.now() + seconds * 1000;
+  while (Date.now() < deadline) {
+    if ((await wpsProcessCount()) === 0) return true;
+    await pause(250);
+  }
+  return (await wpsProcessCount()) === 0;
+}
+/// 用户确认后关闭 WPS。文档宿主先走正常关闭，让 WPS 有机会提示保存；无窗口的后台进程再强制结束。
+async function closeWps() {
+  if ((await wpsProcessCount()) === 0) return "WPS 未在运行";
+  if (process.platform === "win32") {
+    await execute("taskkill.exe", ["/IM", "wps.exe", "/IM", "et.exe", "/IM", "wpp.exe"], { windowsHide: true }).catch(() => undefined);
+    await execute("taskkill.exe", ["/IM", "wpscenter.exe", "/IM", "promecefpluginhost.exe", "/F"], { windowsHide: true }).catch(() => undefined);
+  } else {
+    await execute("/usr/bin/osascript", ["-e", 'tell application id "com.kingsoft.wpsoffice.mac" to quit']).catch(() => undefined);
+    await execute("/usr/bin/pkill", ["-x", "promecefpluginhost"]).catch(() => undefined);
+  }
+  // 留出时间让用户处理 WPS 自己的保存提示；超时只报错，不做无条件强杀。
+  if (!await waitForWpsExit(15)) throw new Error("WPS 未能完全退出，可能仍在提示保存文档；请在 WPS 中保存并关闭后重试");
+  return "WPS 已关闭";
 }
 async function register() {
   await assertWpsClosed();
   registerAddins(addinsDir, String(port), process.env.WPS_MCP_ADDIN_ENABLE ?? "enable_dev", process.platform);
   await writeFile(markerPath, JSON.stringify({ port, addinsDir }), { mode: 0o600 });
-  return "WPS 加载项已注册，可以重新打开 WPS";
+  return "WPS 加载项已注册，可以重新打开 WPS。";
+}
+/// 移除注册也要完全退出 WPS；标记保留端口/目录并把 removed 置位，避免下次启动服务又补注册。
+async function unregister() {
+  await assertWpsClosed();
+  const message = removeAddins(addinsDir, process.platform);
+  await writeFile(markerPath, JSON.stringify({ port, addinsDir, removed: true }), { mode: 0o600 });
+  return message;
 }
 async function start(firstRun: boolean) {
   const meta = await readObject<Metadata>(metaPath);
@@ -80,7 +130,8 @@ async function start(firstRun: boolean) {
   }
   if (meta && alive(meta.pid)) throw new Error("已有服务进程尚未就绪或正在退出，请稍后重试；不会启动第二个服务");
   if (firstRun) {
-    const marker = await readObject<{ port: number; addinsDir: string }>(markerPath);
+    const marker = await readObject<RegistrationMarker>(markerPath);
+    // 端口/目录一致就视为已处理过：主动移除（removed）同样跳过，否则移除会被下次启动悄悄撤销。
     if (marker?.port !== port || marker?.addinsDir !== addinsDir) await register();
   }
   const logs = join(DATA_DIR, "logs"); await mkdir(logs, { recursive: true });
@@ -181,6 +232,8 @@ export async function desktopCommand(command: string, tray = "") {
       }
       case "restart": await stop(); return start(true);
       case "register": return register();
+      case "unregister": return unregister();
+      case "close-wps": return closeWps();
       case "login-on": return login(true, tray);
       case "login-off": return login(false, tray);
       default: throw new Error("未知托盘操作");
@@ -189,5 +242,10 @@ export async function desktopCommand(command: string, tray = "") {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try { console.log(JSON.stringify({ ok: true, message: await desktopCommand(process.argv[2] ?? "initialize", process.argv[3]) })); }
-  catch (error) { console.log(JSON.stringify({ ok: false, message: (error as Error).message })); process.exitCode = 1; }
+  catch (error) {
+    // reason 只由本文件的显式标记产生，ErrnoException 的 code 不会串到这里。
+    const failure = error as { message?: string; reason?: string };
+    console.log(JSON.stringify({ ok: false, message: failure.message ?? "操作失败", ...(failure.reason ? { reason: failure.reason } : {}) }));
+    process.exitCode = 1;
+  }
 }

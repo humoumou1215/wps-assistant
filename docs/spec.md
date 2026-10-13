@@ -1729,7 +1729,8 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。涉及 Add-in、�
 | 打开助手 / 打开变量管理 / 模型设置 | 系统浏览器打开现有 `taskpane.html#chat/#vars/#settings` |
 | MCP 接口调试 / MCP 配置引导 | 系统浏览器打开第 25.5 节的两页；WPS 中不新增这些页面 |
 | 启动 / 停止 / 重启服务 | 操作随包 Node 服务；忙碌时禁用停止和重启，服务端再次校验 |
-| 修复 WPS 加载项注册 | 更新 ET/WPP/Writer 注册，macOS 同步 Writer 授权；须完全退出 WPS |
+| 修复 WPS 加载项注册 | 更新 ET/WPP/Writer 注册，macOS 同步 Writer 授权；须完全退出 WPS。检测到 WPS 仍在运行时改为弹出确认框，确认后由托盘关闭 WPS 再自动重试注册，取消则不执行注册、不做任何更改 |
+| 移除 WPS 加载项注册 | 删除本项目的 ET/WPP/Writer 注册条目，macOS 同步移除 Writer 授权；同样要求完全退出 WPS，确认框与关闭流程与修复注册一致。只移除本项目条目，保留其他加载项、注释与首次注册留下的原始备份；不卸载服务、不删除用户数据 |
 | 打开日志目录 | 系统文件管理器打开用户数据目录的 `logs/` |
 | 登录时启动 | 默认关闭；macOS 用户 LaunchAgent，Windows 当前用户 Run 条目；不创建管理员级服务 |
 | 关于 WPS 助手 | 明确处理点击事件并弹出原生对话框，显示应用名称与统一版本；macOS 使用应用所属的 NSAlert 并激活窗口 |
@@ -1739,7 +1740,9 @@ CI 使用模拟宿主，不能证明真实 WPS API 兼容性。涉及 Add-in、�
 
 - macOS 可用 DMG 打开后把 `WPS Assistant.app` 拖进 Applications，也可用 ZIP 解压后放在稳定目录并双击；Windows 有单文件与文件夹两种形态，单文件 `wps-assistant-<版本>-win32-<架构>.exe` 双击即用，ZIP 中是 `WPS Assistant` 文件夹，须保留整个文件夹，双击 `wps-assistant.exe`，不能仅复制 EXE。目标机器无需安装 Node、npm、Rust 或执行安装脚本。默认基于官方 Node 24.21.0：macOS 13.5+，Windows 10+（[Node 平台支持](https://github.com/nodejs/node/blob/v24.21.0/BUILDING.md#platform-list)）；WPS 仍须预先安装且支持 JS Add-in。macOS 默认是 ad-hoc 签名，外部分发可能受 Gatekeeper 限制；正式公证签名与 Windows Authenticode 由维护者的证书提供。
 - **Windows 单文件形态：** 托盘可执行文件尾部追加一段 zlib 载荷和固定长度页脚；打包侧在 `desktop/build-sfx.mjs`，解压侧在 `desktop/native/src/main.rs`，两边格式必须成对修改。首次运行把载荷落盘到 `%LOCALAPPDATA%\WPS Assistant\<版本>` 后再按该目录解析资源，`WPS_MCP_EXTRACT_DIR` 可覆盖落盘位置；同版本已存在时直接复用，不重复解压。解压先写到同目录的临时目录再整体改名，中断不会留下可用的半个包，同版本并发启动时后到者复用先到者的结果。载荷用 zlib 而不是裸 deflate，解压自带的 adler32 就能发现损坏并由托盘明确报错，不另存校验和；条目记录可执行标志，解压时恢复权限。程序目录随版本变化，但可执行文件位置稳定，单实例锁、`desktop-service.json` 的路径校验与登录启动条目仍按可执行文件路径工作；更换版本不自动删除旧版本目录。
-- 第一次双击自动注册三个宿主的加载项并启动服务，须事先完全退出 WPS；若仍运行则保留托盘并提示，关闭 WPS 后选择启动或修复注册。注册逻辑由 `src/addin-registration.ts` 统一实现，源码部署脚本也调用它，沿用第 25.2 节的首次备份和保留其他加载项规则。已有注册标记且端口/目录相同的后续启动不要求退出 WPS。
+- 第一次双击自动注册三个宿主的加载项并启动服务，须事先完全退出 WPS；若仍运行则保留托盘并提示，关闭 WPS 后选择启动或修复注册。注册与移除都由 `src/addin-registration.ts` 实现，源码部署脚本也调用它，沿用第 25.2 节的首次备份和保留其他加载项规则；移除只删本项目的三个条目与 macOS Writer 授权，保留其他加载项、注释与首次注册留下的原始备份，不动用户数据，也不卸载服务。
+- 注册和移除都要求完全退出 WPS，且都不再只报错：托盘弹出确认框说明需要完全退出 WPS，确认后由控制程序先正常关闭文档宿主（保留 WPS 自身的保存提示）、再强制结束后台与 CEF 宿主进程，等待进程消失后自动重试一次，并提示未保存文档应先取消、保存后重试；等待超时只提示手动处理，不无条件强杀，也不提示丢弃未保存内容。关闭后 WPS 又被拉起时给出人工处理提示，不再反复追问。确认框返回「否」时不执行、不报错。
+- `desktop-registration.json` 记录已按哪个端口和加载项目录处理过。标记只匹配端口与目录：用户主动移除时保留该标记并把 `removed` 置位，因此后续启动服务不会把移除掉的注册悄悄补回来；再次修复注册会清掉该位。端口或目录变化时仍按首次注册处理。
 - 包内携带原生托盘、Node 二进制、编译后的服务、生产依赖、Add-in HTML/CSS/JS、内置技能及许可证；不携带 npm、开发工具、用户配置、会话、变量或日志。构建时按 `package.json` 依赖求可达闭包，移除闭包外的 provider SDK（`@anthropic-ai`、`@google`、`@aws-sdk`、`@smithy`、`@mistralai`、`esbuild` 及其独占传递依赖）——它们的实现只在 `pi-ai` 的 `() => import(...)` 之后可达，而模型 `api` 只允许 `openai-completions` 和 `openai-responses`，进程内不会加载；同时移除源码映射、类型声明及 pi 的 CLI bundle/示例/文档，并清理该 CLI 遗留的 npm 启动入口（`.bin/pi`、`pi.cmd`、`pi.ps1`），保留 SDK、运行资源、WASM 和依赖许可证。目标机启动、注册、MCP 调试和规则执行无需外网；内嵌助手或外部 Agent 的模型需配置为隔离网络可达的服务，不能据此宣称远程模型可离线运行。
 - 数据沿用 `~/Library/Application Support/wps-mcp` 或 `%APPDATA%\wps-mcp`；重复启动和替换应用不删除模型、会话、变量或技能。状态保存使用同目录临时文件原子替换；Windows 的 EPERM/EACCES/EBUSY 短暂读取锁每 50ms 重试，最多 1 秒；失败保留原文件并清理临时文件，不阻塞后续保存。升级前停止服务并退出托盘，再替换原路径的程序/文件夹。可用 `WPS_MCP_PORT`、`WPS_MCP_DATA_DIR`、`WPS_MCP_ADDINS_DIR`、`WPS_MCP_ADDIN_ENABLE` 覆盖默认值；Windows 托盘也支持相应 `--port=...`、`--data-dir=...`、`--addins-dir=...`、`--addin-enable=...` 参数，登录启动保留这些值。
 - 原生文件锁保证每个数据目录只出现一个托盘；短时操作锁串行化启停和注册。`desktop-service.json` 保存服务 PID、实例 ID、运行路径、端口和随机控制凭据，文件权限为当前用户，控制凭据不返回给浏览器或写入日志。托盘/控制程序通过 `/api/desktop/status` 验证实例和路径后操作；源码服务无这些管理接口。`/api/desktop/stop` 还要求随机 Bearer token 和本机同源条件，存在聊天、配置/会话变更、HTTP 工作、工具执行、WPS RPC、后台状态保存或排队变量修改时返回 409；接受停止后拒绝新请求并刷新日志退出。不会通过进程名或仅凭 PID 强杀服务。
@@ -1975,7 +1978,7 @@ Variable 和每条 Render 都可原位点击「删除」再点「确认」，点
 | `pi/skills/` | 已安装技能与内置文件清单 |
 | `logs/wps-mcp.log` | 结构化运行日志及轮转文件 |
 | `desktop-service.json` | 免安装服务实例、路径、PID、所属托盘 PID、端口、数据目录和控制凭据 |
-| `desktop-registration.json` | 免安装最近注册的端口和加载项目录 |
+| `desktop-registration.json` | 免安装最近注册的端口和加载项目录；`removed` 表示用户已主动移除注册 |
 | `logs/desktop.stdout.log` / `logs/desktop.stderr.log` | 免安装后台服务输出捕获，用于启动诊断 |
 
 连接、活动工作表/页及最近选区只在内存中；但发送到会话的引用快照会随会话历史持久化。重启恢复离线文档元数据，WPS 重新连接后上报实时状态。`state.json` 使用同目录临时文件原子替换，Windows 短暂读取锁重试边界见第 25.6 节；更新定义时写盘失败保留原定义。

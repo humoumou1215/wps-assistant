@@ -19,6 +19,137 @@ function inspectHost(app, host, eventRoot = 'app') {
   return { sent, callbacks, handlers };
 }
 
+function navigationHost({ row = 1, col = 1, rows = 20, cols = 10, frozenRows = 0, frozenCols = 0,
+  visible = true, capacity, selectScrolls = false, splitOnly = false } = {}) {
+  const writes = [], selections = [], gotos = [];
+  const pane = {
+    get ScrollRow() { return row; }, set ScrollRow(value) { row = value; writes.push(['row', value]); },
+    get ScrollColumn() { return col; }, set ScrollColumn(value) { col = value; writes.push(['col', value]); },
+    get VisibleRange() {
+      if (!visible) return undefined;
+      const size = capacity?.(row, col) || { rows, cols };
+      return { Row: row, Column: col, Rows: { Count: size.rows }, Columns: { Count: size.cols } };
+    },
+  };
+  const win = frozenRows || frozenCols || splitOnly ? {
+    FreezePanes: !splitOnly, SplitRow: frozenRows, SplitColumn: frozenCols,
+    Panes: { Count: 2, Item: i => i === 2 ? pane : {} }, ActivePane: pane,
+    // This bounding rectangle includes the invisible gap below frozen rows.
+    VisibleRange: { Row: 1, Column: 1, Rows: { Count: row + rows - 1 }, Columns: { Count: col + cols - 1 } },
+  } : pane;
+  const sheet = { Name: 'Sales', Activate() {}, Range(address) {
+    return { Select() {
+      selections.push(address);
+      if (selectScrolls) {
+        const match = /^([A-Z]+)(\d+)/.exec(address);
+        row = Number(match[2]); col = [...match[1]].reduce((n, c) => n * 26 + c.charCodeAt(0) - 64, 0);
+      }
+    } };
+  } };
+  const book = { Name: '经营.xlsx', FullName: '/经营.xlsx', Activate() {}, Worksheets: { Item: () => sheet } };
+  const app = { ActiveWorkbook: book, ActiveSheet: sheet, Workbooks: { Count: 1, Item: () => book }, ActiveWindow: win,
+    Goto(range, scroll) { gotos.push(scroll); } };
+  const h = inspectHost(app, 'et');
+  return { writes, selections, gotos, pane, async navigate(address) {
+    await h.handlers.message({ data: JSON.stringify({ type: 'request', method: 'navigate', id: 'nav', documentKey: '/经营.xlsx', location: { sheet: 'Sales', address } }) });
+    const response = h.sent.findLast(message => message.type === 'response');
+    assert.equal(response.payload.success, true, response.payload.error);
+  } };
+}
+
+test('spreadsheet navigation leaves a fully visible selection in place and avoids Goto', async () => {
+  const h = navigationHost({ row: 10, col: 5 });
+  await h.navigate('F12:H15');
+  assert.deepEqual(h.selections, ['F12:H15']);
+  assert.deepEqual(h.writes, []);
+  assert.deepEqual(h.gotos, []);
+});
+
+test('spreadsheet navigation shows three rows/columns of context and clamps at sheet edges', async () => {
+  for (const [address, row, col] of [['K2', 1, 8], ['T50:V55', 47, 17], ['A1:B2', 1, 1]]) {
+    const h = navigationHost({ row: 100, col: 30, selectScrolls: true });
+    await h.navigate(address);
+    assert.equal(h.pane.ScrollRow, row);
+    assert.equal(h.pane.ScrollColumn, col);
+    assert.deepEqual(h.gotos, []);
+  }
+});
+
+test('partially visible small selections scroll, reducing context to fit their far edge', async () => {
+  const h = navigationHost({ row: 1, col: 1, rows: 10, cols: 10 });
+  await h.navigate('H8:P16');
+  assert.equal(h.pane.ScrollRow, 7);
+  assert.equal(h.pane.ScrollColumn, 7);
+  assert.equal(h.pane.VisibleRange.Row + h.pane.VisibleRange.Rows.Count - 1, 16);
+  assert.equal(h.pane.VisibleRange.Column + h.pane.VisibleRange.Columns.Count - 1, 16);
+});
+
+test('oversized ranges retain starting context, and repeated clicks do not scroll', async () => {
+  const h = navigationHost({ rows: 10, cols: 10 });
+  await h.navigate('T50:AZ200');
+  assert.equal(h.pane.ScrollRow, 47);
+  assert.equal(h.pane.ScrollColumn, 17);
+  h.writes.length = 0;
+  await h.navigate('T50:AZ200');
+  assert.deepEqual(h.writes, []);
+});
+
+test('mixed-size ranges fit their small axis while retaining context on the oversized axis', async () => {
+  const h = navigationHost({ rows: 10, cols: 10 });
+  await h.navigate('H50:P200');
+  assert.equal(h.pane.ScrollRow, 47);
+  assert.equal(h.pane.ScrollColumn, 7);
+});
+
+test('navigation re-reads viewport capacity as column widths change', async () => {
+  const h = navigationHost({ capacity: (row, col) => ({ rows: 10, cols: col < 8 ? 4 : 6 }) });
+  await h.navigate('J20:N24');
+  assert.equal(h.pane.ScrollRow, 17);
+  assert.equal(h.pane.ScrollColumn, 9);
+  assert.equal(h.pane.VisibleRange.Column + h.pane.VisibleRange.Columns.Count - 1, 14);
+});
+
+test('visible oversized selections restore any scroll caused by Select', async () => {
+  const h = navigationHost({ row: 47, col: 17, rows: 10, cols: 10, selectScrolls: true });
+  await h.navigate('T50:AZ200');
+  assert.equal(h.pane.ScrollRow, 47);
+  assert.equal(h.pane.ScrollColumn, 17);
+  assert.deepEqual(h.gotos, []);
+});
+
+test('frozen panes do not turn their invisible gap into visible cells', async () => {
+  const h = navigationHost({ row: 20, col: 10, frozenRows: 2, frozenCols: 2 });
+  await h.navigate('C10:D12');
+  assert.equal(h.pane.ScrollRow, 7);
+  assert.equal(h.pane.ScrollColumn, 3);
+  h.writes.length = 0;
+  await h.navigate('A1:B2');
+  assert.deepEqual(h.writes, []);
+});
+
+test('frozen rows stay in place when only a target column needs scrolling', async () => {
+  const h = navigationHost({ row: 20, col: 20, frozenRows: 2, frozenCols: 2 });
+  await h.navigate('J1:K2');
+  assert.equal(h.pane.ScrollRow, 20);
+  assert.equal(h.pane.ScrollColumn, 7);
+  assert.deepEqual(h.writes, [['col', 7]]);
+});
+
+test('non-frozen split windows use the active pane without treating splits as frozen cells', async () => {
+  const h = navigationHost({ row: 20, col: 20, frozenRows: 2, frozenCols: 2, splitOnly: true });
+  await h.navigate('A1:B2');
+  assert.equal(h.pane.ScrollRow, 1);
+  assert.equal(h.pane.ScrollColumn, 1);
+});
+
+test('hosts without viewport APIs use Goto and the three-cell context fallback', async () => {
+  const h = navigationHost({ visible: false });
+  await h.navigate('K100:M104');
+  assert.deepEqual(h.gotos, [true]);
+  assert.equal(h.pane.ScrollRow, 97);
+  assert.equal(h.pane.ScrollColumn, 8);
+});
+
 test('PPT captures exact text and identity; inspect and events read fresh selection without activation', async () => {
   const active = { Name: '汇报.pptx', FullName: '/汇报.pptx' };
   const selection = { Type: 3, TextRange: { Text: '经营', Start: 3, Length: 2 }, TextRange2: { Text: 'default' }, ShapeRange: { Count: 1, Item: () => ({ Name: 'TextBox 1', Id: 42 }) } };

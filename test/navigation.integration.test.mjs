@@ -50,8 +50,8 @@ test('pane navigation routes by document identity through the actual Add-in hand
     assert.equal(app.ActiveWorkbook, first); assert.equal(app.ActiveSheet.Name, 'Sales'); assert.equal(app.Selection.Address, 'A1:D4');
     result = await post('/api/navigate', { ...request, renderId: explicit.renderId }); assert.equal(result.status, 200);
     assert.equal(app.ActiveWorkbook, second); assert.equal(app.ActiveSheet.Name, "Team's Sales"); assert.equal(app.Selection.Address, 'B100:D104');
-    assert.equal(app.ActiveWindow.ScrollRow, 100); assert.equal(app.ActiveWindow.ScrollColumn, 2);
-    // Hosts exposing Goto use its scroll flag instead of the window fallback.
+    assert.equal(app.ActiveWindow.ScrollRow, 97); assert.equal(app.ActiveWindow.ScrollColumn, 1);
+    // Hosts without VisibleRange retain the Goto compatibility path.
     app.Goto = (range, scroll) => { assert.equal(scroll, true); calls.push(['goto']); };
     result = await post('/api/navigate', { ...request, renderId: legacy.renderId }); assert.equal(result.status, 200);
     assert.equal(app.ActiveWorkbook, first); assert.equal(app.Selection.Address, 'A1:B4'); assert.deepEqual(calls.at(-1), ['goto']);

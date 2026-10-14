@@ -1620,13 +1620,15 @@ WPS 的具体文档操作能力继续由 WPS JS API 提供。
 | 工作流 | 触发 | 检查或产物 |
 | --- | --- | --- |
 | CI | main 推送、PR、手动、复用调用 | Linux/Windows/macOS × Node 22.19.0/24，类型与 JS 语法检查、Windows 部署脚本语法检查、模拟测试和 JUnit 报告 |
-| Portable desktop | 相关 PR、手动、复用调用 | macOS ARM64/Intel 与 Windows x64 原生构建、随包运行时隔离验证、ZIP、macOS DMG、Windows 自解压单文件与 SHA-256 |
+| Portable desktop | 相关 PR、手动、复用调用 | macOS ARM64/Intel 与 Windows x64 原生构建、随包运行时隔离验证、ZIP、macOS DMG、Windows 自解压单文件与 SHA-256；PR 在构建上传后验证产物下载与校验和 |
 | Release | `v*` 标签推送、手动 | 复用 Portable desktop 构建，校验标签与 `package.json` 版本一致、逐个校验资产 SHA-256，把 ZIP/DMG/EXE 与 `.sha256` 挂到同名 GitHub Release；版本带预发布后缀时标为 pre-release |
 | CI 审计 | 同上 | macOS 部署脚本 Shell 语法检查、生产依赖高危审计 |
 | Security | main 推送、PR、每周一 10:23（北京时间）、手动 | CodeQL；PR 检查新增依赖高危漏洞；定时及手动进行生产依赖审计 |
 | Dependabot | 每周一 03:00（北京时间） | npm 和 Actions 更新 PR；小版本/补丁分组，保留人工审查 |
 
 GitHub Actions 固定到完整 commit SHA，由 Dependabot 更新。工作流默认只有 `contents: read`；CodeQL 上传与 Release 发布在各自任务中单独授权。PR 使用 `pull_request`，无外部密钥，也不连接个人电脑或真实 WPS。
+
+Portable desktop 的 PR 下载验证在三平台构建成功后运行，使用与 Release 相同的 `download-artifact` SHA、`pattern: portable-*`、`path: assets` 和 `merge-multiple: true` 下载本轮产物。下载摘要不匹配直接失败；要求当前应用版本的 3 个 ZIP、2 个 DMG、1 个 EXE 及各自 `.sha256` 共 12 个非空文件，逐个核对 SHA-256。校验只下载与读取文件，不运行安装包、不发布 Release；`release.yml` 的修改也触发 Portable desktop，确保发布下载配置更新时执行验证。
 
 CI 的 JUnit 报告和 Portable desktop 的 ZIP/SHA-256 在 PR 运行中保留 3 天；其他触发方式保留 14 天，便于手动构建后下载和排查主分支失败。保留期按新上传的产物生效，已有产物仍遵循上传时的保留期。
 

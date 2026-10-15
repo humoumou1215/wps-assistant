@@ -60,18 +60,24 @@ function wpsProcessNames() {
   throw new Error("免安装桌面程序只支持 macOS 和 Windows");
 }
 /// 正在运行的 WPS 进程数。macOS 逐个用 pgrep 精确匹配，Windows 一次查询进程名列表。
-async function wpsProcessCount() {
-  const names = wpsProcessNames();
+async function wpsProcessCount(names = wpsProcessNames(), deadline?: number) {
+  const options = () => ({ windowsHide: true, ...(deadline === undefined ? {} : { timeout: remainingCloseTime(deadline) }) });
   if (process.platform === "darwin") {
     let count = 0;
     for (const name of names) {
-      try { count += (await execute("/usr/bin/pgrep", ["-x", name])).stdout.split("\n").filter(Boolean).length; }
-      catch (error) { if ((error as { code?: number }).code === 1) continue; throw new Error("无法检查 WPS 是否已退出"); }
+      try { count += (await execute("/usr/bin/pgrep", ["-x", name], options())).stdout.split("\n").filter(Boolean).length; }
+      catch (error) {
+        if (deadline !== undefined) remainingCloseTime(deadline);
+        if ((error as { code?: number }).code === 1) continue;
+        throw new Error("无法检查 WPS 是否已退出");
+      }
     }
     return count;
   }
-  const result = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `@(Get-Process -Name ${names.join(",")} -ErrorAction SilentlyContinue).Count`], { windowsHide: true });
-  return Number(result.stdout.trim());
+  const result = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `@(Get-Process -Name ${names.join(",")} -ErrorAction SilentlyContinue).Count`], options());
+  const count = Number(result.stdout.trim());
+  if (!Number.isInteger(count) || count < 0) throw new Error("无法检查 WPS 是否已退出");
+  return count;
 }
 /// 注册前必须先退出 WPS。reason 让托盘能识别这一情形，改为弹确认框并代用户关闭。
 export async function assertWpsClosed() {
@@ -83,28 +89,74 @@ export async function assertWpsClosed() {
     { reason: "wps-running" },
   );
 }
-/// 等待 WPS 进程全部消失。按截止时间控制，探测本身的耗时也算在内，不做无条件强杀。
-async function waitForWpsExit(seconds: number) {
-  const deadline = Date.now() + seconds * 1000;
-  while (Date.now() < deadline) {
-    if ((await wpsProcessCount()) === 0) return true;
-    await pause(250);
-  }
-  return (await wpsProcessCount()) === 0;
+const CLOSE_TIMEOUT = "WPS 未能在 15 秒内完全退出；请在 WPS 中保存并关闭后重试";
+function remainingCloseTime(deadline: number) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error(CLOSE_TIMEOUT);
+  return remaining;
 }
-/// 用户确认后关闭 WPS。文档宿主先走正常关闭，让 WPS 有机会提示保存；无窗口的后台进程再强制结束。
-async function closeWps() {
-  if ((await wpsProcessCount()) === 0) return "WPS 未在运行";
-  if (process.platform === "win32") {
-    await execute("taskkill.exe", ["/IM", "wps.exe", "/IM", "et.exe", "/IM", "wpp.exe"], { windowsHide: true }).catch(() => undefined);
-    await execute("taskkill.exe", ["/IM", "wpscenter.exe", "/IM", "promecefpluginhost.exe", "/F"], { windowsHide: true }).catch(() => undefined);
-  } else {
-    await execute("/usr/bin/osascript", ["-e", 'tell application id "com.kingsoft.wpsoffice.mac" to quit']).catch(() => undefined);
-    await execute("/usr/bin/pkill", ["-x", "promecefpluginhost"]).catch(() => undefined);
+async function waitForWpsExit(names: string[], deadline: number) {
+  while (true) {
+    remainingCloseTime(deadline);
+    const count = await wpsProcessCount(names, deadline);
+    remainingCloseTime(deadline);
+    if (count === 0) return;
+    await pause(Math.min(250, remainingCloseTime(deadline)));
   }
-  // 留出时间让用户处理 WPS 自己的保存提示；超时只报错，不做无条件强杀。
-  if (!await waitForWpsExit(15)) throw new Error("WPS 未能完全退出，可能仍在提示保存文档；请在 WPS 中保存并关闭后重试");
+}
+/// Only terminate background hosts after every document host has exited normally.
+async function closeWps() {
+  const deadline = Date.now() + 15_000;
+  const names = wpsProcessNames();
+  const run = async (file: string, args: string[]) => {
+    try { await execute(file, args, { windowsHide: true, timeout: remainingCloseTime(deadline) }); }
+    catch (error) {
+      if (Date.now() >= deadline || (error as { killed?: boolean }).killed) throw new Error(CLOSE_TIMEOUT);
+      throw new Error("WPS 关闭已取消或失败；请在 WPS 中保存并关闭后重试", { cause: error });
+    }
+    remainingCloseTime(deadline);
+  };
+  const count = await wpsProcessCount(names, deadline);
+  remainingCloseTime(deadline);
+  if (count === 0) return "WPS 未在运行";
+  if (process.platform === "win32") {
+    for (const name of ["wps", "et", "wpp"]) {
+      if (await wpsProcessCount([name], deadline)) await run("taskkill.exe", ["/IM", `${name}.exe`]);
+    }
+    await waitForWpsExit(["wps", "et", "wpp"], deadline);
+    for (const name of ["wpscenter", "promecefpluginhost"]) {
+      if (await wpsProcessCount([name], deadline)) await run("taskkill.exe", ["/IM", `${name}.exe`, "/F"]);
+    }
+  } else {
+    if (await wpsProcessCount(["wpsoffice"], deadline)) {
+      await run("/usr/bin/osascript", ["-e", 'tell application id "com.kingsoft.wpsoffice.mac" to quit']);
+      await waitForWpsExit(["wpsoffice"], deadline);
+    }
+    if (await wpsProcessCount(["promecefpluginhost"], deadline)) await run("/usr/bin/pkill", ["-x", "promecefpluginhost"]);
+  }
+  await waitForWpsExit(names, deadline);
   return "WPS 已关闭";
+}
+// Stopping through the authenticated endpoint both checks busy and gates new work.
+// Keep the operation lock until registration and service recovery are complete.
+async function withClosedWps(action: () => Promise<string> = closeWps) {
+  const running = await listening();
+  if (running) await stop();
+  else {
+    const meta = await readObject<Metadata>(metaPath);
+    if (meta && alive(meta.pid)) throw new Error("服务正在启动或退出，请稍后重试；不会关闭 WPS");
+  }
+  let result: string | undefined, failure: unknown;
+  try { result = await action(); } catch (error) { failure = error; }
+  if (running) {
+    try { await start(false); }
+    catch (error) {
+      const detail = failure instanceof Error ? failure.message + "；" : "";
+      throw new Error(`${detail}服务恢复失败：${(error as Error).message}`);
+    }
+  }
+  if (failure) throw failure;
+  return result!;
 }
 async function register() {
   await assertWpsClosed();
@@ -233,7 +285,11 @@ export async function desktopCommand(command: string, tray = "") {
       case "restart": await stop(); return start(true);
       case "register": return register();
       case "unregister": return unregister();
-      case "close-wps": return closeWps();
+      case "close-wps": return withClosedWps();
+      case "register-close-wps": case "unregister-close-wps": return withClosedWps(async () => {
+        await closeWps();
+        return command === "register-close-wps" ? register() : unregister();
+      });
       case "login-on": return login(true, tray);
       case "login-off": return login(false, tray);
       default: throw new Error("未知托盘操作");

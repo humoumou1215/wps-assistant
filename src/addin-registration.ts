@@ -64,7 +64,9 @@ export function registerAddins(directory: string, port: string, enable: string, 
   if (root.selfClosing) {
     parts.push(publish.slice(cursor, root.start), publish.slice(root.start, root.end - 2), '>', eol, additions, eol, `</${root.name}>`, publish.slice(root.end));
   } else {
-    parts.push(publish.slice(cursor, rootClose), ...(missing.length ? [additions, eol] : []), publish.slice(rootClose));
+    const lineStart = publish.lastIndexOf('\n', rootClose - 1) + 1;
+    const insertion = /^[\t ]*$/.test(publish.slice(lineStart, rootClose)) ? lineStart : rootClose;
+    parts.push(publish.slice(cursor, insertion), ...(missing.length ? [additions, eol] : []), publish.slice(insertion));
   }
   publish = parts.join('');
   new SaxesParser().write(publish).close();
@@ -96,13 +98,14 @@ export function removeAddins(directory: string, platform: string) {
   if (existsSync(publishPath)) {
     const original = readFileSync(publishPath, 'utf8');
     const { spans } = scanPublish(original);
-    const eol = original.includes('\r\n') ? '\r\n' : '\n';
     let publish = original;
     // 从后往前删，前面条目的跨度才不会被后面的改动打乱；条目连同它的缩进和行尾换行一起去掉。
     for (const span of [...spans].reverse()) {
-      let start = span.start;
-      while (start > 0 && (publish[start - 1] === ' ' || publish[start - 1] === '\t')) start--;
-      const end = publish.startsWith(eol, span.end) ? span.end + eol.length : span.end;
+      const lineStart = publish.lastIndexOf('\n', span.start - 1) + 1;
+      const tail = publish.slice(span.end).match(/^[\t ]*(?:\r?\n|$)/);
+      const ownLine = /^[\t ]*$/.test(publish.slice(lineStart, span.start)) && tail;
+      const start = ownLine ? lineStart : span.start;
+      const end = ownLine ? span.end + tail[0].length : span.end;
       publish = publish.slice(0, start) + publish.slice(end);
     }
     new SaxesParser().write(publish).close();

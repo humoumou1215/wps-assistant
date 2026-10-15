@@ -1,6 +1,6 @@
 {
   "name": "wps-mcp",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "private": true,
   "license": "MIT",
   "repository": {
@@ -29,14 +29,14 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "0.99.2",
-    "@modelcontextprotocol/sdk": "^1.31.0",
-    "acorn": "^8.18.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "acorn": "^8.19.0",
     "saxes": "6.0.0",
     "ws": "^8.22.0",
     "zod": "^4.6.5"
   },
   "devDependencies": {
-    "@types/node": "^26.6.3",
+    "@types/node": "^26.6.5",
     "@types/ws": "^8.18.2",
     "linkedom": "^0.18.13",
     "tsx": "^4.21.0",

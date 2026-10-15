@@ -86,8 +86,8 @@ fn confirm(_message: &str) -> bool {
 }
 const APP_VERSION: &str = env!("WPS_ASSISTANT_VERSION");
 /// 注册/移除加载项前都必须完全退出 WPS；确认后由托盘代劳，不再让用户自己去托盘里找进程。
-const REGISTER_PROMPT: &str = "检测到 WPS 正在运行，修复加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在关闭 WPS 并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
-const REMOVE_PROMPT: &str = "检测到 WPS 正在运行，移除加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在关闭 WPS 并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
+const REGISTER_PROMPT: &str = "检测到 WPS 正在运行，修复加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在请求 WPS 正常退出并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n若后台进程仍未退出，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
+const REMOVE_PROMPT: &str = "检测到 WPS 正在运行，移除加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在请求 WPS 正常退出并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n若后台进程仍未退出，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
 #[cfg(target_os = "macos")]
 fn show_about() {
     use objc2::MainThreadMarker;

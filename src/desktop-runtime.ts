@@ -97,7 +97,7 @@ export async function assertWpsClosed(deadline = Date.now() + 15_000) {
     { reason: "wps-running" },
   );
 }
-const CLOSE_TIMEOUT = "WPS 未能在 15 秒内完全退出；请在 WPS 中保存并关闭后重试";
+const CLOSE_TIMEOUT = "WPS 未能在 15 秒内完全退出；请在 WPS 中保存并手动退出（包括后台进程）后重试";
 function remainingCloseTime(deadline: number) {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new Error(CLOSE_TIMEOUT);
@@ -112,7 +112,8 @@ async function waitForWpsExit(names: string[], deadline: number) {
     await pause(Math.min(250, remainingCloseTime(deadline)));
   }
 }
-/// Only terminate background hosts after every document host has exited normally.
+/// Only request a normal application quit. A process can relaunch between any
+/// probe and termination, so background hosts must exit on their own.
 async function closeWps(deadline = Date.now() + 15_000) {
   const names = wpsProcessNames();
   const run = async (file: string, args: string[]) => {
@@ -130,16 +131,10 @@ async function closeWps(deadline = Date.now() + 15_000) {
     for (const name of ["wps", "et", "wpp"]) {
       if (await wpsProcessCount([name], deadline)) await run("taskkill.exe", ["/IM", `${name}.exe`]);
     }
-    await waitForWpsExit(["wps", "et", "wpp"], deadline);
-    for (const name of ["wpscenter", "promecefpluginhost"]) {
-      if (await wpsProcessCount([name], deadline)) await run("taskkill.exe", ["/IM", `${name}.exe`, "/F"]);
-    }
   } else {
     if (await wpsProcessCount(["wpsoffice"], deadline)) {
       await run("/usr/bin/osascript", ["-e", 'tell application id "com.kingsoft.wpsoffice.mac" to quit']);
-      await waitForWpsExit(["wpsoffice"], deadline);
     }
-    if (await wpsProcessCount(["promecefpluginhost"], deadline)) await run("/usr/bin/pkill", ["-x", "promecefpluginhost"]);
   }
   await waitForWpsExit(names, deadline);
   return "WPS 已关闭";

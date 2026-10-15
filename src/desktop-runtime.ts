@@ -53,6 +53,12 @@ async function ownedStatus(meta: Metadata) {
   }
   return status;
 }
+function assertTrayOwner(meta: Metadata, status: Metadata) {
+  const parentPid = process.env.WPS_MCP_DESKTOP_PARENT_PID ? Number(process.env.WPS_MCP_DESKTOP_PARENT_PID) : undefined;
+  if (meta.parentPid !== parentPid || status.parentPid !== parentPid) {
+    throw new Error("当前服务绑定其他托盘或旧版本，请先停止旧服务后重试");
+  }
+}
 /// 注册和启动都要求完全退出 WPS：文档宿主加上常驻的后台/CEF 宿主进程。
 function wpsProcessNames() {
   if (process.platform === "darwin") return ["wpsoffice", "promecefpluginhost"];
@@ -80,8 +86,10 @@ async function wpsProcessCount(names = wpsProcessNames(), deadline?: number) {
   return count;
 }
 /// 注册前必须先退出 WPS。reason 让托盘能识别这一情形，改为弹确认框并代用户关闭。
-export async function assertWpsClosed() {
-  if ((await wpsProcessCount()) === 0) return;
+export async function assertWpsClosed(deadline = Date.now() + 15_000) {
+  const count = await wpsProcessCount(undefined, deadline);
+  remainingCloseTime(deadline);
+  if (count === 0) return;
   throw Object.assign(
     new Error(process.platform === "darwin"
       ? "请完全退出 WPS（包括后台进程），再选择「修复 WPS 加载项注册」或「启动服务」"
@@ -105,8 +113,7 @@ async function waitForWpsExit(names: string[], deadline: number) {
   }
 }
 /// Only terminate background hosts after every document host has exited normally.
-async function closeWps() {
-  const deadline = Date.now() + 15_000;
+async function closeWps(deadline = Date.now() + 15_000) {
   const names = wpsProcessNames();
   const run = async (file: string, args: string[]) => {
     try { await execute(file, args, { windowsHide: true, timeout: remainingCloseTime(deadline) }); }
@@ -141,7 +148,7 @@ async function closeWps() {
 // Keep the operation lock until registration and service recovery are complete.
 async function withClosedWps(action: () => Promise<string> = closeWps) {
   const running = await listening();
-  if (running) await stop();
+  if (running) await stop(true);
   else {
     const meta = await readObject<Metadata>(metaPath);
     if (meta && alive(meta.pid)) throw new Error("服务正在启动或退出，请稍后重试；不会关闭 WPS");
@@ -158,15 +165,15 @@ async function withClosedWps(action: () => Promise<string> = closeWps) {
   if (failure) throw failure;
   return result!;
 }
-async function register() {
-  await assertWpsClosed();
+async function register(deadline?: number) {
+  await assertWpsClosed(deadline);
   registerAddins(addinsDir, String(port), process.env.WPS_MCP_ADDIN_ENABLE ?? "enable_dev", process.platform);
   await writeFile(markerPath, JSON.stringify({ port, addinsDir }), { mode: 0o600 });
   return "WPS 加载项已注册，可以重新打开 WPS。";
 }
 /// 移除注册也要完全退出 WPS；标记保留端口/目录并把 removed 置位，避免下次启动服务又补注册。
-async function unregister() {
-  await assertWpsClosed();
+async function unregister(deadline?: number) {
+  await assertWpsClosed(deadline);
   const message = removeAddins(addinsDir, process.platform);
   await writeFile(markerPath, JSON.stringify({ port, addinsDir, removed: true }), { mode: 0o600 });
   return message;
@@ -175,9 +182,8 @@ async function start(firstRun: boolean) {
   const meta = await readObject<Metadata>(metaPath);
   if (await listening()) {
     if (!meta) throw new Error(`端口 ${port} 已被其他服务占用。请先停止原来的源码部署服务，再启动免安装版`);
-    await ownedStatus(meta);
-    const parentPid = Number(process.env.WPS_MCP_DESKTOP_PARENT_PID);
-    if (parentPid && meta.parentPid !== parentPid) throw new Error("当前服务绑定其他托盘或旧版本，请先停止旧服务后重试");
+    const status = await ownedStatus(meta);
+    if (process.env.WPS_MCP_DESKTOP_PARENT_PID) assertTrayOwner(meta, status);
     return "服务已在运行";
   }
   if (meta && alive(meta.pid)) throw new Error("已有服务进程尚未就绪或正在退出，请稍后重试；不会启动第二个服务");
@@ -211,7 +217,7 @@ async function start(firstRun: boolean) {
   }
   throw new Error(`服务启动超时，进程仍保留，请查看 ${logs}，稍后通过托盘重试`);
 }
-async function stop() {
+async function stop(requireTrayOwner = false) {
   const meta = await readObject<Metadata>(metaPath);
   if (!(await listening())) {
     if (meta && alive(meta.pid)) throw new Error("服务进程尚未就绪或正在退出，请稍后重试");
@@ -219,7 +225,8 @@ async function stop() {
     return "服务已停止";
   }
   if (!meta) throw new Error("当前服务不由免安装程序管理，请从原启动方式停止");
-  await ownedStatus(meta);
+  const status = await ownedStatus(meta);
+  if (requireTrayOwner) assertTrayOwner(meta, status);
   const response = await fetch(`${base}/api/desktop/stop`, {
     method: "POST", headers: { authorization: `Bearer ${meta.token}`, "content-type": "application/json" }, body: "{}", signal: AbortSignal.timeout(3000),
   });
@@ -287,8 +294,9 @@ export async function desktopCommand(command: string, tray = "") {
       case "unregister": return unregister();
       case "close-wps": return withClosedWps();
       case "register-close-wps": case "unregister-close-wps": return withClosedWps(async () => {
-        await closeWps();
-        return command === "register-close-wps" ? register() : unregister();
+        const deadline = Date.now() + 15_000;
+        await closeWps(deadline);
+        return command === "register-close-wps" ? register(deadline) : unregister(deadline);
       });
       case "login-on": return login(true, tray);
       case "login-off": return login(false, tray);

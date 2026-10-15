@@ -19,12 +19,18 @@ process.env.WPS_MCP_PORT = String(port);
 const platform = Object.getOwnPropertyDescriptor(process, 'platform');
 const realExec = childProcess.execFile;
 const realNow = Date.now;
-let calls, running, scenario, clock;
+let calls, running, scenario, clock, emptyProbes;
 const missing = () => Object.assign(new Error('No process'), { code: 1 });
 const fakeExec = () => { throw new Error('Unexpected callback invocation'); };
 fakeExec[promisify.custom] = async (file, args, options) => {
   calls.push({ file, args, options });
   if (options.timeout !== undefined) assert.ok(options.timeout > 0 && options.timeout <= 15_000);
+  // The close phase has one empty full-process probe before registration checks again.
+  if (running.size === 0 && (file.endsWith('/pgrep') || file === 'powershell.exe')) {
+    emptyProbes++;
+    const closeProbes = process.platform === 'darwin' ? 2 : 1;
+    if (scenario === 'slow-final-probe' && emptyProbes > closeProbes) clock += 2_000;
+  }
   if (file.endsWith('/pgrep')) {
     if (scenario === 'slow-probe') clock += 16_000;
     if (!running.has(args[1])) throw missing();
@@ -38,12 +44,14 @@ fakeExec[promisify.custom] = async (file, args, options) => {
   if (file.endsWith('/osascript')) {
     if (scenario === 'cancel') throw new Error('User canceled (-128)');
     if (scenario === 'slow-quit') clock += 60_000;
+    if (scenario === 'slow-final-probe') clock += 14_000;
     running.delete('wpsoffice');
   } else if (file.endsWith('/pkill')) {
     assert.ok(!running.has('wpsoffice'), 'never end CEF while documents remain open');
     running.delete('promecefpluginhost');
   } else if (file === 'taskkill.exe') {
     const name = args[1].replace(/\.exe$/, '');
+    if (scenario === 'slow-final-probe' && name === 'wps') clock += 14_000;
     if (args.includes('/F')) assert.ok(!['wps', 'et', 'wpp'].some(name => running.has(name)), 'documents must exit before background termination');
     else assert.ok(!args.includes('/F'));
     if (scenario !== 'save-prompt') running.delete(name);
@@ -55,7 +63,7 @@ syncBuiltinESMExports();
 const { desktopCommand } = await import('../dist/src/desktop-runtime.js');
 function reset(target = 'darwin', mode = '') {
   Object.defineProperty(process, 'platform', { ...platform, value: target });
-  calls = []; scenario = mode; clock = 0;
+  calls = []; scenario = mode; clock = 0; emptyProbes = 0;
   Date.now = () => clock;
   running = new Set(target === 'darwin' ? ['wpsoffice', 'promecefpluginhost'] : ['wps', 'wpscenter', 'promecefpluginhost']);
 }
@@ -104,6 +112,59 @@ test('combined close and removal holds the operation through registration', asyn
   assert.equal(JSON.parse(await readFile(join(data, 'desktop-registration.json'), 'utf8')).removed, true);
   assert.ok(!(await readFile(join(data, 'addins/publish.xml'), 'utf8')).includes('WpsMcp'));
 });
+for (const target of ['darwin', 'win32']) {
+  for (const command of ['register-close-wps', 'unregister-close-wps']) {
+    test(`${target} ${command} bounds the final probe and leaves registration unchanged on timeout`, async () => {
+      reset(target);
+      await desktopCommand('register-close-wps');
+      reset(target, 'slow-final-probe');
+      const publishPath = join(data, 'addins/publish.xml');
+      const markerPath = join(data, 'desktop-registration.json');
+      const before = await readFile(publishPath, 'utf8');
+      const marker = await readFile(markerPath, 'utf8');
+      await assert.rejects(desktopCommand(command), /15 秒/);
+      assert.equal(running.size, 0, 'the timeout occurs after closing WPS');
+      assert.ok(calls.every(c => c.options.timeout > 0), 'final probes must also have a timeout');
+      assert.ok(calls.at(-1).options.timeout <= 1_000, 'the final probe only gets the unused close budget');
+      assert.equal(await readFile(publishPath, 'utf8'), before);
+      assert.equal(await readFile(markerPath, 'utf8'), marker);
+      // The failed operation releases its lock so a later operation can complete.
+      reset(target);
+      await desktopCommand('register-close-wps');
+    });
+  }
+}
+test('closing refuses another tray owner even when the local metadata is changed to match', { timeout: 15000 }, async () => {
+  Date.now = realNow;
+  const previousParent = process.env.WPS_MCP_DESKTOP_PARENT_PID;
+  process.env.WPS_MCP_DESKTOP_PARENT_PID = String(process.pid);
+  await desktopCommand('initialize');
+  const path = join(data, 'desktop-service.json');
+  const original = await readFile(path, 'utf8');
+  const meta = JSON.parse(original);
+  try {
+    process.env.WPS_MCP_DESKTOP_PARENT_PID = String(process.ppid);
+    for (const record of [meta, { ...meta, parentPid: process.ppid }, { ...meta, parentPid: undefined }]) {
+      const content = JSON.stringify(record);
+      await writeFile(path, content);
+      for (const command of ['close-wps', 'register-close-wps', 'unregister-close-wps']) {
+        calls = [];
+        await assert.rejects(desktopCommand(command), /绑定其他托盘/);
+        assert.equal(calls.length, 0, 'ownership rejection happens before any WPS command');
+        assert.equal(await readFile(path, 'utf8'), content);
+        const status = await (await fetch(`http://127.0.0.1:${port}/health`)).json();
+        assert.equal(status.ok, true, 'the original service remains running');
+        assert.doesNotThrow(() => process.kill(meta.pid, 0));
+      }
+    }
+  } finally {
+    const current = JSON.parse(await readFile(path, 'utf8'));
+    if (current.pid === meta.pid) await writeFile(path, original);
+    await desktopCommand('stop');
+    if (previousParent === undefined) delete process.env.WPS_MCP_DESKTOP_PARENT_PID;
+    else process.env.WPS_MCP_DESKTOP_PARENT_PID = previousParent;
+  }
+});
 test('busy work blocks closing; idle and failed closes restore the owned service', { timeout: 45000 }, async () => {
   Date.now = realNow;
   Object.defineProperty(process, 'platform', platform);
@@ -129,11 +190,18 @@ test('busy work blocks closing; idle and failed closes restore the owned service
     assert.equal(calls.length, 0, 'busy rejection happens before any WPS command');
     held.destroy(); held = undefined;
     await waitIdle();
-    for (const mode of ['', 'cancel']) {
+    for (const [target, mode, command] of [
+      ['darwin', '', 'close-wps'],
+      ['darwin', 'cancel', 'close-wps'],
+      ['darwin', 'slow-final-probe', 'register-close-wps'],
+      ['win32', 'slow-final-probe', 'unregister-close-wps'],
+    ]) {
       const old = JSON.parse(await readFile(join(data, 'desktop-service.json'), 'utf8'));
-      reset('darwin', mode); Date.now = realNow;
-      if (mode) await assert.rejects(desktopCommand('close-wps'), /关闭已取消或失败/);
-      else assert.equal(await desktopCommand('close-wps'), 'WPS 已关闭');
+      reset(target, mode);
+      if (mode !== 'slow-final-probe') Date.now = realNow;
+      if (mode) await assert.rejects(desktopCommand(command), mode === 'cancel' ? /关闭已取消或失败/ : /15 秒/);
+      else assert.equal(await desktopCommand(command), 'WPS 已关闭');
+      Date.now = realNow;
       const next = JSON.parse(await readFile(join(data, 'desktop-service.json'), 'utf8'));
       assert.notEqual(next.pid, old.pid, 'the service stops before close and starts again afterwards');
       assert.equal((await health()).ok, true);

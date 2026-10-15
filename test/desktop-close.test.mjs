@@ -1,9 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import childProcess from 'node:child_process';
+import fs from 'node:fs';
+import fsPromises from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { promisify } from 'node:util';
-import { mkdtemp, writeFile, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, readdir, rm } from 'node:fs/promises';
 import { createServer, request } from 'node:http';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -245,3 +247,102 @@ test('busy work blocks closing; idle and failed closes restore the owned service
     await waitIdle(); await desktopCommand('stop');
   }
 });
+
+for (const failure of ['lost-response', 'metadata-cleanup']) {
+  test(`a ${failure} failure after accepting stop restores service without touching WPS`, { timeout: 15000 }, async t => {
+    Date.now = realNow;
+    Object.defineProperty(process, 'platform', platform);
+    const markerPath = join(data, 'desktop-registration.json');
+    await writeFile(markerPath, JSON.stringify({ port, addinsDir: join(data, 'addins'), removed: true }));
+    await desktopCommand('initialize');
+    const metaPath = join(data, 'desktop-service.json');
+    const old = JSON.parse(await readFile(metaPath, 'utf8'));
+    const originalFetch = globalThis.fetch;
+    let accepted = false;
+    try {
+      for (let i = 0; i < 100; i++) {
+        if (!(await (await originalFetch(`http://127.0.0.1:${port}/health`)).json()).busy) break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      if (failure === 'lost-response') {
+        t.mock.method(globalThis, 'fetch', async (url, options) => {
+          const response = await originalFetch(url, options);
+          if (String(url).endsWith('/api/desktop/stop')) {
+            assert.equal(response.status, 202);
+            accepted = true;
+            await response.text();
+            throw new TypeError('simulated lost stop response');
+          }
+          return response;
+        });
+      } else {
+        const originalUnlink = fsPromises.unlink;
+        t.mock.method(fsPromises, 'unlink', async path => {
+          if (path === metaPath && !accepted) {
+            accepted = true;
+            throw Object.assign(new Error('simulated metadata cleanup failure'), { code: 'EACCES' });
+          }
+          return originalUnlink(path);
+        });
+        syncBuiltinESMExports();
+      }
+      calls = [];
+      await assert.rejects(desktopCommand('unregister-close-wps'), /simulated/);
+      assert.equal(accepted, true);
+      assert.equal(calls.length, 0, 'no WPS commands after a failed stop');
+      const next = JSON.parse(await readFile(metaPath, 'utf8'));
+      assert.notEqual(next.pid, old.pid, 'the accepted stop is followed by a new service');
+      assert.equal((await (await originalFetch(`http://127.0.0.1:${port}/health`)).json()).ok, true);
+      assert.equal(JSON.parse(await readFile(markerPath, 'utf8')).removed, true);
+    } finally {
+      t.mock.restoreAll(); syncBuiltinESMExports();
+      await desktopCommand('stop');
+    }
+  });
+}
+
+for (const target of ['darwin', 'win32']) {
+  for (const command of ['register', 'unregister']) {
+    for (const failure of ['partial-write', 'replacement']) {
+      test(`${target} ${command} rolls back registries and preserves startup after marker ${failure}`, { timeout: 15000 }, async t => {
+        reset(target); running.clear(); Date.now = realNow;
+        await desktopCommand(command === 'register' ? 'unregister' : 'register');
+        const markerPath = join(data, 'desktop-registration.json');
+        const paths = [markerPath, join(data, 'addins/publish.xml'), ...(target === 'darwin' ? [join(data, 'addins/authaddin.json')] : [])];
+        const before = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+        const dataFiles = (await readdir(data)).sort();
+        const addinFiles = (await readdir(join(data, 'addins'))).sort();
+        try {
+          if (failure === 'partial-write') {
+            const originalWrite = fs.writeFileSync;
+            t.mock.method(fs, 'writeFileSync', (path, content, ...options) => {
+              if (String(path).startsWith(markerPath + '.wps-mcp-') && String(path).endsWith('.tmp')) {
+                originalWrite(path, String(content).slice(0, 4), ...options);
+                throw Object.assign(new Error('simulated marker ENOSPC'), { code: 'ENOSPC' });
+              }
+              return originalWrite(path, content, ...options);
+            });
+          } else {
+            const originalRename = fs.renameSync;
+            t.mock.method(fs, 'renameSync', (from, to) => {
+              if (to === markerPath) throw Object.assign(new Error('simulated marker EBUSY'), { code: 'EBUSY' });
+              return originalRename(from, to);
+            });
+          }
+          syncBuiltinESMExports();
+          await assert.rejects(desktopCommand(command), /simulated marker/);
+          assert.deepEqual(await Promise.all(paths.map(path => readFile(path, 'utf8'))), before);
+          assert.deepEqual((await readdir(data)).sort(), dataFiles);
+          assert.deepEqual((await readdir(join(data, 'addins'))).sort(), addinFiles);
+        } finally { t.mock.restoreAll(); syncBuiltinESMExports(); }
+        // A failed marker update must not poison the next start or removal intent.
+        Object.defineProperty(process, 'platform', platform);
+        try {
+          await desktopCommand('start');
+          assert.equal((await (await fetch(`http://127.0.0.1:${port}/health`)).json()).ok, true);
+          assert.equal(await readFile(markerPath, 'utf8'), before[0]);
+        } finally { await desktopCommand('stop'); }
+      });
+    }
+  }
+}

@@ -10,6 +10,10 @@ const WRITER_BACKUP = '.backup-before-wps-mcp-writer';
 type Span = { name: string; start: number; end: number; host?: [string, string]; selfClosing?: boolean };
 const isObject = (value: unknown) => value !== null && typeof value === 'object' && !Array.isArray(value);
 type RegistryChange = { path: string; before: string | null; after: string; backupSuffix?: string };
+type RegistrationState = { path: string; content: string };
+function appendRegistrationState(changes: RegistryChange[], state?: RegistrationState) {
+  if (state) changes.push({ path: state.path, before: existsSync(state.path) ? readFileSync(state.path, 'utf8') : null, after: state.content });
+}
 // Prepare replacements and current-operation rollback copies before changing any
 // live registry. Historical first-install backups are never used for rollback.
 function commitRegistries(changes: RegistryChange[]) {
@@ -96,7 +100,7 @@ function readAuthAddin(path: string) {
   if (!isObject(auth) || (auth.wps !== undefined && !isObject(auth.wps))) throw new Error('Invalid authaddin.json; registries left unchanged');
   return { original, auth: auth as { wps?: Record<string, any> } };
 }
-export function registerAddins(directory: string, port: string, enable: string, platform: string) {
+export function registerAddins(directory: string, port: string, enable: string, platform: string, state?: RegistrationState) {
   if (!/^\d+$/.test(port) || Number(port) < 1025 || Number(port) > 65535 || !/^[\w-]+$/.test(enable)) throw new Error('Invalid port or Add-in enable setting');
   const publishPath = join(directory, 'publish.xml');
   const original = existsSync(publishPath) ? readFileSync(publishPath, 'utf8') : null;
@@ -134,13 +138,14 @@ export function registerAddins(directory: string, port: string, enable: string, 
     writer.namelist = [...new Set([...String(writer.namelist ?? '').split(';').filter(Boolean), id])].join(';');
     changes.push({ path: authPath, before: loaded?.original ?? null, after: JSON.stringify(auth, null, 2) + '\n', backupSuffix: WRITER_BACKUP });
   }
-  // Validate both files before writing either; keep the first backups and all unrelated Add-ins.
+  appendRegistrationState(changes, state);
+  // Stage the registries and optional desktop marker together before committing any file.
   mkdirSync(directory, { recursive: true });
   commitRegistries(changes);
 }
 /// 移除本项目写入的三个宿主条目（macOS 同时移除 Writer 授权）。与注册对称：保留其他加载项、
 /// 注释与原始格式；第一次注册留下的用户原始备份不动，也不为「移除」新建备份。
-export function removeAddins(directory: string, platform: string) {
+export function removeAddins(directory: string, platform: string, state?: RegistrationState) {
   const writes: RegistryChange[] = [];
   let removed = 0;
   const publishPath = join(directory, 'publish.xml');
@@ -174,6 +179,7 @@ export function removeAddins(directory: string, platform: string) {
       removed += ids.length;
     }
   }
+  appendRegistrationState(writes, state);
   commitRegistries(writes);
   return removed ? 'WPS 加载项注册已移除，重新打开 WPS 后不再加载。' : '未找到 WPS 助手的加载项注册，无需移除。';
 }

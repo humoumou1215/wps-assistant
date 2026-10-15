@@ -24,6 +24,7 @@ const addinsDir = resolve(process.env.WPS_MCP_ADDINS_DIR ?? (process.platform ==
   ? join(homedir(), "Library/Containers/com.kingsoft.wpsoffice.mac/Data/.kingsoft/wps/jsaddons")
   : join(process.env.APPDATA ?? join(homedir(), "AppData/Roaming"), "kingsoft/wps/jsaddons")));
 type Metadata = { pid: number; instanceId: string; token: string; appDir: string; dataDir: string; port: number; parentPid?: number };
+type StopRecovery = { pending?: { meta: Metadata; deadline: number } };
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 function alive(pid: number) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -143,15 +144,21 @@ async function closeWps(deadline = Date.now() + 15_000) {
 // Keep the operation lock until registration and service recovery are complete.
 async function withClosedWps(action: () => Promise<string> = closeWps) {
   const running = await listening();
-  if (running) await stop(true);
-  else {
-    const meta = await readObject<Metadata>(metaPath);
-    if (meta && alive(meta.pid)) throw new Error("服务正在启动或退出，请稍后重试；不会关闭 WPS");
-  }
+  const recovery: StopRecovery = {};
   let result: string | undefined, failure: unknown;
-  try { result = await action(); } catch (error) { failure = error; }
-  if (running) {
-    try { await start(false); }
+  try {
+    if (running) await stop(true, recovery);
+    else {
+      const meta = await readObject<Metadata>(metaPath);
+      if (meta && alive(meta.pid)) throw new Error("服务正在启动或退出，请稍后重试；不会关闭 WPS");
+    }
+    result = await action();
+  } catch (error) { failure = error; }
+  if (recovery.pending) {
+    try {
+      const { meta, deadline } = recovery.pending;
+      await restoreStoppedService(meta, deadline);
+    }
     catch (error) {
       const detail = failure instanceof Error ? failure.message + "；" : "";
       throw new Error(`${detail}服务恢复失败：${(error as Error).message}`);
@@ -162,16 +169,15 @@ async function withClosedWps(action: () => Promise<string> = closeWps) {
 }
 async function register(deadline?: number) {
   await assertWpsClosed(deadline);
-  registerAddins(addinsDir, String(port), process.env.WPS_MCP_ADDIN_ENABLE ?? "enable_dev", process.platform);
-  await writeFile(markerPath, JSON.stringify({ port, addinsDir }), { mode: 0o600 });
+  registerAddins(addinsDir, String(port), process.env.WPS_MCP_ADDIN_ENABLE ?? "enable_dev", process.platform,
+    { path: markerPath, content: JSON.stringify({ port, addinsDir }) });
   return "WPS 加载项已注册，可以重新打开 WPS。";
 }
 /// 移除注册也要完全退出 WPS；标记保留端口/目录并把 removed 置位，避免下次启动服务又补注册。
 async function unregister(deadline?: number) {
   await assertWpsClosed(deadline);
-  const message = removeAddins(addinsDir, process.platform);
-  await writeFile(markerPath, JSON.stringify({ port, addinsDir, removed: true }), { mode: 0o600 });
-  return message;
+  return removeAddins(addinsDir, process.platform,
+    { path: markerPath, content: JSON.stringify({ port, addinsDir, removed: true }) });
 }
 async function start(firstRun: boolean) {
   const meta = await readObject<Metadata>(metaPath);
@@ -212,7 +218,26 @@ async function start(firstRun: boolean) {
   }
   throw new Error(`服务启动超时，进程仍保留，请查看 ${logs}，稍后通过托盘重试`);
 }
-async function stop(requireTrayOwner = false) {
+async function waitForServiceExit(meta: Metadata, deadline = Date.now() + 15_000) {
+  while (alive(meta.pid)) {
+    if (Date.now() >= deadline) throw new Error("服务尚未退出，请稍后重试；不会强制结束文档操作");
+    await pause(250);
+  }
+}
+async function restoreStoppedService(meta: Metadata, deadline: number) {
+  // A lost response may still stop the service. Never start a second process
+  // until the original exits, using the same stop deadline for recovery.
+  try { await waitForServiceExit(meta, deadline); }
+  catch {
+    // If the request never reached a healthy original service, leave it alone.
+    // A stopping service rejects status requests and is reported as unrecovered.
+    const status = await ownedStatus(meta);
+    assertTrayOwner(meta, status);
+    return;
+  }
+  await start(false);
+}
+async function stop(requireTrayOwner = false, recovery?: StopRecovery) {
   const meta = await readObject<Metadata>(metaPath);
   if (!(await listening())) {
     if (meta && alive(meta.pid)) throw new Error("服务进程尚未就绪或正在退出，请稍后重试");
@@ -222,15 +247,21 @@ async function stop(requireTrayOwner = false) {
   if (!meta) throw new Error("当前服务不由免安装程序管理，请从原启动方式停止");
   const status = await ownedStatus(meta);
   if (requireTrayOwner) assertTrayOwner(meta, status);
+  const deadline = Date.now() + 15_000;
+  // Only an authenticated request for this tray can require recovery. Explicit
+  // HTTP rejections (including busy) clear it before propagating the failure.
+  if (recovery) recovery.pending = { meta, deadline };
   const response = await fetch(`${base}/api/desktop/stop`, {
     method: "POST", headers: { authorization: `Bearer ${meta.token}`, "content-type": "application/json" }, body: "{}", signal: AbortSignal.timeout(3000),
   });
-  if (!response.ok) { const result = await response.json() as { error?: string }; throw new Error(result.error ?? "停止失败"); }
-  for (let i = 0; i < 60; i++) {
-    if (!alive(meta.pid)) { await unlink(metaPath); return "服务已停止"; }
-    await pause(250);
+  if (!response.ok) {
+    if (recovery) recovery.pending = undefined;
+    const result = await response.json() as { error?: string };
+    throw new Error(result.error ?? "停止失败");
   }
-  throw new Error("服务尚未退出，请稍后重试；不会强制结束文档操作");
+  await waitForServiceExit(meta, deadline);
+  await unlink(metaPath);
+  return "服务已停止";
 }
 export function xmlEscape(value: string) { return value.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!); }
 async function login(enabled: boolean, executable: string) {

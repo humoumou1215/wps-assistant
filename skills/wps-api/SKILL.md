@@ -39,6 +39,7 @@ description: 通过 WPS 工具读取或修改已连接的表格、演示和文�
 - PPT 表格 Render 默认包含容量判断和续表维护，每次重写都按当前记录与实际行高重新分页：放不下就新增模板续页，放得下就复用原页，数据减少时回收本规则生成且已不需要的续页。用户无需再次要求“续表”；用户明确限制页数或禁止增删页时遵循其限制。原表及其自动续表由同一 Render 联动维护，归属标记、分页、回收与验收见 [PPT 续表](references/report-sync.md#ppt-table-continuation)。
 - `sourceRef` / `targetRef` 供人工定位，不自动限制代码范围或决定取数口径。表格用 `工作表!A1:B13`；表名含空格/单引号时用单引号包围，内部单引号双写。PPT 用实际稳定 ID `SlideID:257!ShapeID:4`，也支持 `Slide:2!Shape:对象名`、`Slide:2`。Writer 用 `Paragraph:4`、`Table:1`、`Range:0:20`、`Bookmark:名称` 或 `Heading:标题!Paragraph` / `!Table`。多个 Word/PPT 目标用 `+` 连接，每段为完整位置。
 - 按已核实 ID 查找目标，缺失时抛出含页/对象含义的错误。Render 重复运行更新原对象并处理自己管理的过期内容，避免重复追加或影响未绑定对象。
+- 目标对象会增删或替换时，Render 返回 `renderTarget: { targetRef, description? }`，由工具校验并原子保存当前完整定位信息，界面重写无需 Agent 补做 update。引用最多 200 处 / 16000 字符，文档写入前预检容量。没有此返回字段的旧规则不会自动改变；详见 [动态目标返回约定](references/report-sync.md#动态目标的返回约定)。
 - update 省略字段保留原值，description/sourceRef/targetRef 可用 null 清除；只改变量名称或描述保留值。先检查定义再更新，保留 ID。
 
 ## 只读代码的可用写法

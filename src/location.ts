@@ -1,5 +1,8 @@
 export type SpreadsheetLocation = { sheet: string; address: string; ref: string; start?: number; end?: number };
 
+export const MAX_DOCUMENT_LOCATIONS = 200;
+export const MAX_DOCUMENT_REF_LENGTH = 16_000;
+
 /** Only explicit, bounded A1 references can drive navigation. Never evaluate saved code. */
 export function parseSpreadsheetRef(ref: string | undefined): SpreadsheetLocation | undefined {
   if (!ref) return;
@@ -46,10 +49,10 @@ const nameValid = (value: string) => value.length > 0 && value.length <= 200 && 
 
 /** Explicit references only. Names are data, never evaluated as JavaScript. */
 export function parseDocumentRefs(type: DocumentType | undefined, ref: string | undefined): DocumentLocation[] {
-  if (!ref || !type) return [];
+  if (!ref || !type || ref.length > MAX_DOCUMENT_REF_LENGTH) return [];
   if (type === "spreadsheet") { const location = parseSpreadsheetRef(ref); return location ? [location] : []; }
   const parts = ref.split("+").map(part => part.trim());
-  if (parts.length > 20 || parts.some(part => !part)) return [];
+  if (parts.length > MAX_DOCUMENT_LOCATIONS || parts.some(part => !part)) return [];
   const locations: DocumentLocation[] = [];
   for (const part of parts) {
     if (type === "presentation") {
@@ -103,7 +106,7 @@ export function parseDocumentRefs(type: DocumentType | undefined, ref: string | 
       locations.push({ kind: "writer", heading: legacy[1], afterHeading: legacy[2] === "表格" ? "table" : "paragraph", ref: part });
     }
   }
-  return locations.length <= 20 ? locations : [];
+  return locations.length <= MAX_DOCUMENT_LOCATIONS ? locations : [];
 }
 
 export function renderLocations(render: { targetRef?: string; description?: string }, type: DocumentType | undefined): DocumentLocation[] {

@@ -10,6 +10,9 @@ const windows = (await readFile(new URL('../scripts/install-windows.ps1', import
 function register(directory, platform, port = '18766') {
   return spawnSync(process.execPath, ['dist/src/addin-registration.js', directory, port, 'enable_dev', platform], { encoding: 'utf8' });
 }
+function remove(directory, platform) {
+  return spawnSync(process.execPath, ['dist/src/addin-registration.js', 'remove', directory, platform], { encoding: 'utf8' });
+}
 
 for (const platform of ['darwin', 'win32']) {
   test(`${platform} deployment updates URLs without duplicate entries and preserves other Add-ins and initial backups`, async () => {
@@ -129,6 +132,90 @@ test('macOS deployment creates an escaped LaunchAgent with the requested server,
     assert.equal(envValue('WPS_MCP_DATA_DIR'), data);
     assert.equal(envValue('WPS_MCP_PORT'), '19999');
     assert.equal(envValue('WPS_MCP_TRANSPORT'), 'http');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('removing registration deletes only project entries and keeps other Add-ins, comments and the original backup', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wps-remove-'));
+  const path = join(dir, 'publish.xml');
+  const comment = '<!-- keep me -->';
+  const foreign = '<jspluginonline name="Other" url="https://example.test/" type="et"/>';
+  const original = `<?xml version="1.0"?>\r\n<jsplugins>\r\n${comment}\r\n${foreign}\r\n</jsplugins>\r\n`;
+  try {
+    await writeFile(path, original);
+    assert.equal(register(dir, 'win32').status, 0);
+    assert.equal((await readFile(path, 'utf8')).match(/name="WpsMcp/g).length, 3);
+    const removed = remove(dir, 'win32'); assert.equal(removed.status, 0, removed.stderr);
+    assert.match(removed.stdout, /已移除/);
+    // 移除必须还原成用户原来的内容：无关条目、注释、缩进与换行风格都不动。
+    assert.equal(await readFile(path, 'utf8'), original);
+    assert.equal(await readFile(path + '.backup-before-wps-mcp', 'utf8'), original);
+    const repeat = remove(dir, 'win32'); assert.equal(repeat.status, 0, repeat.stderr);
+    assert.match(repeat.stdout, /无需移除/);
+    assert.equal(await readFile(path, 'utf8'), original);
+    // 移除之后重新注册必须回到注册态，不能被上一次移除影响。
+    assert.equal(register(dir, 'win32').status, 0);
+    assert.equal((await readFile(path, 'utf8')).match(/name="WpsMcp/g).length, 3);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('removing registration also clears the macOS Writer authorization entry', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wps-remove-mac-'));
+  const publishPath = join(dir, 'publish.xml');
+  const authPath = join(dir, 'authaddin.json');
+  const oldAuth = JSON.stringify({ et: { untouched: true }, wps: { namelist: 'other;ours', other: { name: 'Other' }, ours: { name: 'WpsMcpWPS', custom: 'preserve' } } });
+  try {
+    await writeFile(publishPath, '<jsplugins>\n</jsplugins>\n');
+    await writeFile(authPath, oldAuth);
+    assert.equal(register(dir, 'darwin').status, 0);
+    assert.equal(JSON.parse(await readFile(authPath, 'utf8')).wps.namelist, 'other;ours');
+    const removed = remove(dir, 'darwin'); assert.equal(removed.status, 0, removed.stderr);
+    assert.match(removed.stdout, /已移除/);
+    const auth = JSON.parse(await readFile(authPath, 'utf8'));
+    assert.deepEqual(auth.et, { untouched: true });
+    assert.deepEqual(auth.wps.other, { name: 'Other' });
+    assert.equal(auth.wps.ours, undefined);
+    assert.equal(auth.wps.namelist, 'other');
+    assert.ok(!(await readFile(publishPath, 'utf8')).includes('WpsMcp'));
+    assert.equal(await readFile(authPath + '.backup-before-wps-mcp-writer', 'utf8'), oldAuth);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('removing registration leaves a machine without project entries untouched and validates first', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wps-remove-empty-'));
+  const path = join(dir, 'publish.xml');
+  try {
+    for (const platform of ['darwin', 'win32']) {
+      const result = remove(dir, platform); assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /无需移除/);
+      assert.deepEqual(await readdir(dir), [], 'removal must not create files or backups');
+    }
+    const malformed = '<jsplugins>broken';
+    await writeFile(path, malformed);
+    const invalid = remove(dir, 'win32'); assert.notEqual(invalid.status, 0);
+    assert.equal(await readFile(path, 'utf8'), malformed);
+    assert.deepEqual(await readdir(dir), ['publish.xml']);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('removal preserves closing-tag indentation and whitespace belonging to adjacent entries', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wps-remove-format-'));
+  const path = join(dir, 'publish.xml');
+  try {
+    const original = '<jsplugins>\r\n    </jsplugins>\r\n';
+    await writeFile(path, original);
+    assert.equal(register(dir, 'win32').status, 0);
+    assert.equal(remove(dir, 'win32').status, 0);
+    assert.equal(await readFile(path, 'utf8'), original);
+    const foreign = '<jspluginonline name="Other"/>';
+    await writeFile(path, `<jsplugins>${foreign}  <jspluginonline name="WpsMcpET"/>\n</jsplugins>`);
+    assert.equal(remove(dir, 'win32').status, 0);
+    assert.equal(await readFile(path, 'utf8'), `<jsplugins>${foreign}  \n</jsplugins>`);
+    // Registration expands a self-closing root; removal preserves valid XML, not its old spelling.
+    await writeFile(path, '<jsplugins/>');
+    assert.equal(register(dir, 'win32').status, 0);
+    assert.equal(remove(dir, 'win32').status, 0);
+    assert.equal(await readFile(path, 'utf8'), '<jsplugins>\n</jsplugins>');
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 

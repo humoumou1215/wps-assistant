@@ -41,7 +41,53 @@ fn error(message: &str) {
         .set_level(rfd::MessageLevel::Error)
         .show();
 }
+/// 需要先退出 WPS 的操作以确认框征求同意；默认按钮是「否」，避免误点导致未保存的文档丢失。
+#[cfg(target_os = "windows")]
+fn confirm(message: &str) -> bool {
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut std::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+    let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = "WPS 助手".encode_utf16().chain(Some(0)).collect();
+    // MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2. IDYES is 6.
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x00000134) == 6
+    }
+}
+#[cfg(target_os = "macos")]
+fn confirm(message: &str) -> bool {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSAlertStyle, NSApplication};
+    use objc2_foundation::NSString;
+    let mtm = MainThreadMarker::new().expect("确认窗口必须在主线程显示");
+    let alert = NSAlert::new(mtm);
+    alert.setAlertStyle(NSAlertStyle::Warning);
+    alert.setMessageText(&NSString::from_str("WPS 助手"));
+    alert.setInformativeText(&NSString::from_str(message));
+    alert
+        .addButtonWithTitle(&NSString::from_str("否"))
+        .setKeyEquivalent(&NSString::from_str("\r"));
+    alert
+        .addButtonWithTitle(&NSString::from_str("是"))
+        .setKeyEquivalent(&NSString::from_str(""));
+    #[allow(deprecated)]
+    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+    alert.runModal() == NSAlertSecondButtonReturn
+}
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn confirm(_message: &str) -> bool {
+    false
+}
 const APP_VERSION: &str = env!("WPS_ASSISTANT_VERSION");
+/// 注册/移除加载项前都必须完全退出 WPS；确认后由托盘代劳，不再让用户自己去托盘里找进程。
+const REGISTER_PROMPT: &str = "检测到 WPS 正在运行，修复加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在请求 WPS 正常退出并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n若后台进程仍未退出，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
+const REMOVE_PROMPT: &str = "检测到 WPS 正在运行，移除加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在请求 WPS 正常退出并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n若后台进程仍未退出，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
 #[cfg(target_os = "macos")]
 fn show_about() {
     use objc2::MainThreadMarker;
@@ -403,6 +449,7 @@ fn main() {
     let stop = MenuItem::new("停止服务", false, None);
     let restart = MenuItem::new("重启服务", false, None);
     let register = MenuItem::new("修复 WPS 加载项注册", true, None);
+    let unregister = MenuItem::new("移除 WPS 加载项注册", true, None);
     let logs = MenuItem::new("打开日志目录", true, None);
     let login = CheckMenuItem::new("登录时启动", true, runtime.login_enabled(), None);
     let quit = MenuItem::new("退出 WPS 助手", false, None);
@@ -420,6 +467,7 @@ fn main() {
         &stop,
         &restart,
         &register,
+        &unregister,
         &logs,
         &login,
         &about,
@@ -512,7 +560,9 @@ fn main() {
                     item.set_enabled(!operating && running && managed && !busy);
                 }
                 quit.set_enabled(!operating && !(running && managed && busy));
-                register.set_enabled(!operating);
+                for item in [&register, &unregister] {
+                    item.set_enabled(!operating && !busy);
+                }
                 login.set_enabled(!operating);
                 for item in [&chat, &vars, &settings, &debug, &guide] {
                     item.set_enabled(running);
@@ -524,19 +574,47 @@ fn main() {
                 exit,
             }) => {
                 operating = false;
+                if command.starts_with("login-") {
+                    login.set_checked(runtime.login_enabled());
+                }
+                // 注册和移除都要先退出 WPS：把「请关闭 WPS」报错换成确认框，同意后由托盘关闭并自动重试。
+                if (command == "register" || command == "unregister") && result["reason"] == "wps-running" {
+                    let prompt = if command == "unregister" { REMOVE_PROMPT } else { REGISTER_PROMPT };
+                    if confirm(prompt) {
+                        operating = true;
+                        let _ = proxy.send_event(UserEvent::Status(last.clone()));
+                        let runtime = runtime.clone();
+                        let proxy = proxy.clone();
+                        std::thread::spawn(move || {
+                            let result = {
+                                let retried = runtime.run(&format!("{command}-close-wps"));
+                                // 关闭后 WPS 可能又被拉起；此时不再追问，直接给出可照做的提示。
+                                if retried["reason"] == "wps-running" {
+                                    let action = if command == "unregister" { "移除加载项注册" } else { "加载项注册" };
+                                    let message = format!("WPS 关闭后又自动启动，{action}仍未完成。请手动退出 WPS（包括右下角托盘图标）后重试。");
+                                    json!({ "ok": false, "message": message })
+                                } else {
+                                    retried
+                                }
+                            };
+                            let _ = proxy.send_event(UserEvent::Done {
+                                command,
+                                result,
+                                exit: false,
+                            });
+                        });
+                    } else {
+                        let _ = proxy.send_event(UserEvent::Status(last.clone()));
+                    }
+                    return;
+                }
                 if result["ok"] != true {
                     error(result["message"].as_str().unwrap_or("操作失败"));
-                    if command.starts_with("login-") {
-                        login.set_checked(runtime.login_enabled());
-                    }
                 } else {
-                    if command.starts_with("login-") {
-                        login.set_checked(runtime.login_enabled());
-                    }
-                    if command == "register" {
+                    if command == "register" || command == "unregister" {
                         rfd::MessageDialog::new()
                             .set_title("WPS 助手")
-                            .set_description("WPS 加载项已注册，可以重新打开 WPS。")
+                            .set_description(result["message"].as_str().unwrap_or("操作完成。"))
                             .show();
                     }
                     if exit {
@@ -588,6 +666,8 @@ fn main() {
                     "restart"
                 } else if e.id == register.id() {
                     "register"
+                } else if e.id == unregister.id() {
+                    "unregister"
                 } else if e.id == login.id() {
                     if login.is_checked() {
                         "login-on"

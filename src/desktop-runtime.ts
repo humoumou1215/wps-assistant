@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { createConnection } from "node:net";
 import { DATA_DIR } from "./paths.js";
-import { registerAddins } from "./addin-registration.js";
+import { registerAddins, removeAddins } from "./addin-registration.js";
 
 const execute = promisify(execFile);
 const appDir = await realpath(fileURLToPath(new URL("../../", import.meta.url)));
@@ -18,10 +18,13 @@ if (!Number.isInteger(port) || port < 1025 || port > 65535) throw new Error("无
 const base = `http://127.0.0.1:${port}`;
 const metaPath = join(DATA_DIR, "desktop-service.json");
 const markerPath = join(DATA_DIR, "desktop-registration.json");
+/// 标记已按哪个端口/目录注册过；removed 记录用户主动移除的决定，启动服务据此不再自动补注册。
+type RegistrationMarker = { port: number; addinsDir: string; removed?: boolean };
 const addinsDir = resolve(process.env.WPS_MCP_ADDINS_DIR ?? (process.platform === "darwin"
   ? join(homedir(), "Library/Containers/com.kingsoft.wpsoffice.mac/Data/.kingsoft/wps/jsaddons")
   : join(process.env.APPDATA ?? join(homedir(), "AppData/Roaming"), "kingsoft/wps/jsaddons")));
 type Metadata = { pid: number; instanceId: string; token: string; appDir: string; dataDir: string; port: number; parentPid?: number };
+type StopRecovery = { pending?: { meta: Metadata; deadline: number } };
 const pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 function alive(pid: number) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -51,36 +54,143 @@ async function ownedStatus(meta: Metadata) {
   }
   return status;
 }
-export async function assertWpsClosed() {
-  if (process.platform === "darwin") {
-    for (const name of ["wpsoffice", "promecefpluginhost"]) {
-      try { await execute("/usr/bin/pgrep", ["-x", name]); }
-      catch (error) { if ((error as { code?: number }).code === 1) continue; throw new Error("无法检查 WPS 是否已退出"); }
-      throw new Error("请完全退出 WPS（包括后台进程），再选择「修复 WPS 加载项注册」或「启动服务」");
-    }
-  } else if (process.platform === "win32") {
-    const result = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "@(Get-Process -Name wps,et,wpp,wpscenter,promecefpluginhost -ErrorAction SilentlyContinue).Count"], { windowsHide: true });
-    if (Number(result.stdout.trim()) !== 0) throw new Error("请完全退出 WPS（包括右下角托盘进程），再重试注册");
-  } else throw new Error("免安装桌面程序只支持 macOS 和 Windows");
+function assertTrayOwner(meta: Metadata, status: Metadata) {
+  const parentPid = process.env.WPS_MCP_DESKTOP_PARENT_PID ? Number(process.env.WPS_MCP_DESKTOP_PARENT_PID) : undefined;
+  if (meta.parentPid !== parentPid || status.parentPid !== parentPid) {
+    throw new Error("当前服务绑定其他托盘或旧版本，请先停止旧服务后重试");
+  }
 }
-async function register() {
-  await assertWpsClosed();
-  registerAddins(addinsDir, String(port), process.env.WPS_MCP_ADDIN_ENABLE ?? "enable_dev", process.platform);
-  await writeFile(markerPath, JSON.stringify({ port, addinsDir }), { mode: 0o600 });
-  return "WPS 加载项已注册，可以重新打开 WPS";
+/// 注册和启动都要求完全退出 WPS：文档宿主加上常驻的后台/CEF 宿主进程。
+function wpsProcessNames() {
+  if (process.platform === "darwin") return ["wpsoffice", "promecefpluginhost"];
+  if (process.platform === "win32") return ["wps", "et", "wpp", "wpscenter", "promecefpluginhost"];
+  throw new Error("免安装桌面程序只支持 macOS 和 Windows");
+}
+/// 正在运行的 WPS 进程数。macOS 逐个用 pgrep 精确匹配，Windows 一次查询进程名列表。
+async function wpsProcessCount(names = wpsProcessNames(), deadline?: number) {
+  const options = () => ({ windowsHide: true, ...(deadline === undefined ? {} : { timeout: remainingCloseTime(deadline) }) });
+  if (process.platform === "darwin") {
+    let count = 0;
+    for (const name of names) {
+      try { count += (await execute("/usr/bin/pgrep", ["-x", name], options())).stdout.split("\n").filter(Boolean).length; }
+      catch (error) {
+        if (deadline !== undefined) remainingCloseTime(deadline);
+        if ((error as { code?: number }).code === 1) continue;
+        throw new Error("无法检查 WPS 是否已退出");
+      }
+    }
+    return count;
+  }
+  const result = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `@(Get-Process -Name ${names.join(",")} -ErrorAction SilentlyContinue).Count`], options());
+  const count = Number(result.stdout.trim());
+  if (!Number.isInteger(count) || count < 0) throw new Error("无法检查 WPS 是否已退出");
+  return count;
+}
+/// 注册前必须先退出 WPS。reason 让托盘能识别这一情形，改为弹确认框并代用户关闭。
+export async function assertWpsClosed(deadline = Date.now() + 15_000) {
+  const count = await wpsProcessCount(undefined, deadline);
+  remainingCloseTime(deadline);
+  if (count === 0) return;
+  throw Object.assign(
+    new Error(process.platform === "darwin"
+      ? "请完全退出 WPS（包括后台进程），再选择「修复 WPS 加载项注册」或「启动服务」"
+      : "请完全退出 WPS（包括右下角托盘进程），再重试注册"),
+    { reason: "wps-running" },
+  );
+}
+const CLOSE_TIMEOUT = "WPS 未能在 15 秒内完全退出；请在 WPS 中保存并手动退出（包括后台进程）后重试";
+function remainingCloseTime(deadline: number) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error(CLOSE_TIMEOUT);
+  return remaining;
+}
+async function waitForWpsExit(names: string[], deadline: number) {
+  while (true) {
+    remainingCloseTime(deadline);
+    const count = await wpsProcessCount(names, deadline);
+    remainingCloseTime(deadline);
+    if (count === 0) return;
+    await pause(Math.min(250, remainingCloseTime(deadline)));
+  }
+}
+/// Only request a normal application quit. A process can relaunch between any
+/// probe and termination, so background hosts must exit on their own.
+async function closeWps(deadline = Date.now() + 15_000) {
+  const names = wpsProcessNames();
+  const run = async (file: string, args: string[]) => {
+    try { await execute(file, args, { windowsHide: true, timeout: remainingCloseTime(deadline) }); }
+    catch (error) {
+      if (Date.now() >= deadline || (error as { killed?: boolean }).killed) throw new Error(CLOSE_TIMEOUT);
+      throw new Error("WPS 关闭已取消或失败；请在 WPS 中保存并关闭后重试", { cause: error });
+    }
+    remainingCloseTime(deadline);
+  };
+  const count = await wpsProcessCount(names, deadline);
+  remainingCloseTime(deadline);
+  if (count === 0) return "WPS 未在运行";
+  if (process.platform === "win32") {
+    for (const name of ["wps", "et", "wpp"]) {
+      if (await wpsProcessCount([name], deadline)) await run("taskkill.exe", ["/IM", `${name}.exe`]);
+    }
+  } else {
+    if (await wpsProcessCount(["wpsoffice"], deadline)) {
+      await run("/usr/bin/osascript", ["-e", 'tell application id "com.kingsoft.wpsoffice.mac" to quit']);
+    }
+  }
+  await waitForWpsExit(names, deadline);
+  return "WPS 已关闭";
+}
+// Stopping through the authenticated endpoint both checks busy and gates new work.
+// Keep the operation lock until registration and service recovery are complete.
+async function withClosedWps(action: () => Promise<string> = closeWps) {
+  const running = await listening();
+  const recovery: StopRecovery = {};
+  let result: string | undefined, failure: unknown;
+  try {
+    if (running) await stop(true, recovery);
+    else {
+      const meta = await readObject<Metadata>(metaPath);
+      if (meta && alive(meta.pid)) throw new Error("服务正在启动或退出，请稍后重试；不会关闭 WPS");
+    }
+    result = await action();
+  } catch (error) { failure = error; }
+  if (recovery.pending) {
+    try {
+      const { meta, deadline } = recovery.pending;
+      await restoreStoppedService(meta, deadline);
+    }
+    catch (error) {
+      const detail = failure instanceof Error ? failure.message + "；" : "";
+      throw new Error(`${detail}服务恢复失败：${(error as Error).message}`);
+    }
+  }
+  if (failure) throw failure;
+  return result!;
+}
+async function register(deadline?: number) {
+  await assertWpsClosed(deadline);
+  registerAddins(addinsDir, String(port), process.env.WPS_MCP_ADDIN_ENABLE ?? "enable_dev", process.platform,
+    { path: markerPath, content: JSON.stringify({ port, addinsDir }) });
+  return "WPS 加载项已注册，可以重新打开 WPS。";
+}
+/// 移除注册也要完全退出 WPS；标记保留端口/目录并把 removed 置位，避免下次启动服务又补注册。
+async function unregister(deadline?: number) {
+  await assertWpsClosed(deadline);
+  return removeAddins(addinsDir, process.platform,
+    { path: markerPath, content: JSON.stringify({ port, addinsDir, removed: true }) });
 }
 async function start(firstRun: boolean) {
   const meta = await readObject<Metadata>(metaPath);
   if (await listening()) {
     if (!meta) throw new Error(`端口 ${port} 已被其他服务占用。请先停止原来的源码部署服务，再启动免安装版`);
-    await ownedStatus(meta);
-    const parentPid = Number(process.env.WPS_MCP_DESKTOP_PARENT_PID);
-    if (parentPid && meta.parentPid !== parentPid) throw new Error("当前服务绑定其他托盘或旧版本，请先停止旧服务后重试");
+    const status = await ownedStatus(meta);
+    if (process.env.WPS_MCP_DESKTOP_PARENT_PID) assertTrayOwner(meta, status);
     return "服务已在运行";
   }
   if (meta && alive(meta.pid)) throw new Error("已有服务进程尚未就绪或正在退出，请稍后重试；不会启动第二个服务");
   if (firstRun) {
-    const marker = await readObject<{ port: number; addinsDir: string }>(markerPath);
+    const marker = await readObject<RegistrationMarker>(markerPath);
+    // 端口/目录一致就视为已处理过：主动移除（removed）同样跳过，否则移除会被下次启动悄悄撤销。
     if (marker?.port !== port || marker?.addinsDir !== addinsDir) await register();
   }
   const logs = join(DATA_DIR, "logs"); await mkdir(logs, { recursive: true });
@@ -108,7 +218,26 @@ async function start(firstRun: boolean) {
   }
   throw new Error(`服务启动超时，进程仍保留，请查看 ${logs}，稍后通过托盘重试`);
 }
-async function stop() {
+async function waitForServiceExit(meta: Metadata, deadline = Date.now() + 15_000) {
+  while (alive(meta.pid)) {
+    if (Date.now() >= deadline) throw new Error("服务尚未退出，请稍后重试；不会强制结束文档操作");
+    await pause(250);
+  }
+}
+async function restoreStoppedService(meta: Metadata, deadline: number) {
+  // A lost response may still stop the service. Never start a second process
+  // until the original exits, using the same stop deadline for recovery.
+  try { await waitForServiceExit(meta, deadline); }
+  catch {
+    // If the request never reached a healthy original service, leave it alone.
+    // A stopping service rejects status requests and is reported as unrecovered.
+    const status = await ownedStatus(meta);
+    assertTrayOwner(meta, status);
+    return;
+  }
+  await start(false);
+}
+async function stop(requireTrayOwner = false, recovery?: StopRecovery) {
   const meta = await readObject<Metadata>(metaPath);
   if (!(await listening())) {
     if (meta && alive(meta.pid)) throw new Error("服务进程尚未就绪或正在退出，请稍后重试");
@@ -116,16 +245,23 @@ async function stop() {
     return "服务已停止";
   }
   if (!meta) throw new Error("当前服务不由免安装程序管理，请从原启动方式停止");
-  await ownedStatus(meta);
+  const status = await ownedStatus(meta);
+  if (requireTrayOwner) assertTrayOwner(meta, status);
+  const deadline = Date.now() + 15_000;
+  // Only an authenticated request for this tray can require recovery. Explicit
+  // HTTP rejections (including busy) clear it before propagating the failure.
+  if (recovery) recovery.pending = { meta, deadline };
   const response = await fetch(`${base}/api/desktop/stop`, {
     method: "POST", headers: { authorization: `Bearer ${meta.token}`, "content-type": "application/json" }, body: "{}", signal: AbortSignal.timeout(3000),
   });
-  if (!response.ok) { const result = await response.json() as { error?: string }; throw new Error(result.error ?? "停止失败"); }
-  for (let i = 0; i < 60; i++) {
-    if (!alive(meta.pid)) { await unlink(metaPath); return "服务已停止"; }
-    await pause(250);
+  if (!response.ok) {
+    if (recovery) recovery.pending = undefined;
+    const result = await response.json() as { error?: string };
+    throw new Error(result.error ?? "停止失败");
   }
-  throw new Error("服务尚未退出，请稍后重试；不会强制结束文档操作");
+  await waitForServiceExit(meta, deadline);
+  await unlink(metaPath);
+  return "服务已停止";
 }
 export function xmlEscape(value: string) { return value.replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]!); }
 async function login(enabled: boolean, executable: string) {
@@ -181,6 +317,13 @@ export async function desktopCommand(command: string, tray = "") {
       }
       case "restart": await stop(); return start(true);
       case "register": return register();
+      case "unregister": return unregister();
+      case "close-wps": return withClosedWps();
+      case "register-close-wps": case "unregister-close-wps": return withClosedWps(async () => {
+        const deadline = Date.now() + 15_000;
+        await closeWps(deadline);
+        return command === "register-close-wps" ? register(deadline) : unregister(deadline);
+      });
       case "login-on": return login(true, tray);
       case "login-off": return login(false, tray);
       default: throw new Error("未知托盘操作");
@@ -189,5 +332,10 @@ export async function desktopCommand(command: string, tray = "") {
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try { console.log(JSON.stringify({ ok: true, message: await desktopCommand(process.argv[2] ?? "initialize", process.argv[3]) })); }
-  catch (error) { console.log(JSON.stringify({ ok: false, message: (error as Error).message })); process.exitCode = 1; }
+  catch (error) {
+    // reason 只由本文件的显式标记产生，ErrnoException 的 code 不会串到这里。
+    const failure = error as { message?: string; reason?: string };
+    console.log(JSON.stringify({ ok: false, message: failure.message ?? "操作失败", ...(failure.reason ? { reason: failure.reason } : {}) }));
+    process.exitCode = 1;
+  }
 }

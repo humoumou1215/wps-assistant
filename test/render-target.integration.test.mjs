@@ -20,7 +20,10 @@ async function connect(h, t) {
 }
 async function presentation(h) {
   h.appState.type = 'presentation';
-  const registered = new Promise(resolve => h.socket.once('message', resolve));
+  const registered = new Promise(resolve => {
+    const listener = raw => { if (JSON.parse(raw).type === 'registered') { h.socket.off('message', listener); resolve(); } };
+    h.socket.on('message', listener);
+  });
   h.socket.send(JSON.stringify({ type: 'register', documents: [{ documentKey: 'ui-fixture', name: '续表.pptx', type: 'presentation' }] }));
   await registered;
 }
@@ -121,4 +124,27 @@ test('failed state persistence publishes neither new destinations nor lastRun', 
   assert.equal((await call('wps_run_render', { variableId, renderId })).success, true);
   const persisted = JSON.parse(await readFile(file, 'utf8')).variables[0].renders[0];
   assert.equal(persisted.targetRef, 'Summary!B2'); assert.equal(persisted.description, '新位置'); assert.ok(persisted.lastRun);
+});
+
+test('UI batch requests retain all dynamic target updates across an intervening Render failure', { timeout: 30000 }, async t => {
+  const h = await startHarness(); t.after(() => h.close());
+  const call = await connect(h, t); await presentation(h);
+  for (const name of ['项目明细', '风险明细']) {
+    const { variableId } = await call('wps_create_variable', { variableName: name, sourceDocumentId: 'doc_001', code: 'return 42;' });
+    await call('wps_run_transform', { variableId });
+    const first = await call('wps_create_render', { variableId, targetDocumentId: 'doc_001', code: constant({ renderTarget: { targetRef: refs(2), description: name + '续表' } }) });
+    const failed = await call('wps_create_render', { variableId, targetDocumentId: 'doc_001', targetRef: refs(1), code: 'throw new Error("目标不可写");' });
+    const last = await call('wps_create_render', { variableId, targetDocumentId: 'doc_001', code: constant({ renderTarget: { targetRef: 'SlideID:999!ShapeID:4' } }) });
+    const response = await post(h, '/api/actions', { op: 'render', variableId });
+    assert.equal(response.status, 422);
+    assert.deepEqual((await response.json()).renders.map(r => [r.renderId, r.success]), [[first.renderId, true], [failed.renderId, false], [last.renderId, true]]);
+    const saved = await call('wps_get_variable', { variableId });
+    assert.equal(saved.value, 42);
+    assert.deepEqual(saved.renders.map(r => r.targetRef), [refs(2), refs(1), 'SlideID:999!ShapeID:4']);
+    assert.ok(saved.renders[0].lastRun); assert.ok(saved.renders[2].lastRun);
+    assert.equal(Object.hasOwn(saved.renders[1], 'lastRun'), false);
+    assert.equal(saved.renders[0].description, name + '续表');
+    const disk = JSON.parse(await readFile(join(h.dir, 'state.json'), 'utf8'));
+    assert.deepEqual(disk.variables.find(v => v.variableId === variableId).renders, saved.renders);
+  }
 });

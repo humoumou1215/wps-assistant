@@ -7,12 +7,16 @@ import { startHarness } from './helpers/ui-harness.mjs';
 
 const linkType = process.platform === 'win32' ? 'junction' : 'dir';
 async function fixture(t) {
-  const root = await mkdtemp(join(tmpdir(), 'wps-reference-boundary-'));
+  const container = await mkdtemp(join(tmpdir(), 'wps-reference-boundary-'));
+  // Emulate macOS /var and Windows short-name expansion even when TMPDIR is
+  // already canonical: both the parent and the configured data directory alias.
+  const root = join(container, 'entry');
+  await symlink(container, root, linkType);
   const actual = join(root, 'actual'), alias = join(root, 'alias');
   await mkdir(actual);
   await symlink(actual, alias, linkType);
   const h = await startHarness({ dataDir: alias });
-  t.after(async () => { await h.close(); await rm(root, { recursive: true, force: true }); });
+  t.after(async () => { await h.close(); await rm(container, { recursive: true, force: true }); });
   const get = path => fetch(h.base + path);
   const file = path => get('/api/skill-file?path=' + encodeURIComponent(path));
   return { root, alias, actual, h, get, file };
@@ -30,7 +34,7 @@ test('reference API accepts canonical and aliased paths while preserving file an
     const result = await f.file(path); assert.equal(result.status, 200);
     assert.equal((await result.json()).content, content.content);
   }
-  const installed = join(f.actual, 'pi/skills'), own = join(installed, 'wps-api');
+  const installed = await realpath(join(f.actual, 'pi/skills')), own = join(installed, 'wps-api');
   const sibling = join(installed, 'local-skill'); await mkdir(sibling);
   await writeFile(join(sibling, 'SKILL.md'), '---\nname: local-skill\ndescription: Test sibling\n---\nSibling');
   await writeFile(join(sibling, 'secret.md'), 'sibling content');

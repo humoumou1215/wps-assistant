@@ -198,6 +198,27 @@ test('removing registration leaves a machine without project entries untouched a
   } finally { await rm(dir, { recursive: true, force: true }); }
 });
 
+test('removal preserves closing-tag indentation and whitespace belonging to adjacent entries', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'wps-remove-format-'));
+  const path = join(dir, 'publish.xml');
+  try {
+    const original = '<jsplugins>\r\n    </jsplugins>\r\n';
+    await writeFile(path, original);
+    assert.equal(register(dir, 'win32').status, 0);
+    assert.equal(remove(dir, 'win32').status, 0);
+    assert.equal(await readFile(path, 'utf8'), original);
+    const foreign = '<jspluginonline name="Other"/>';
+    await writeFile(path, `<jsplugins>${foreign}  <jspluginonline name="WpsMcpET"/>\n</jsplugins>`);
+    assert.equal(remove(dir, 'win32').status, 0);
+    assert.equal(await readFile(path, 'utf8'), `<jsplugins>${foreign}  \n</jsplugins>`);
+    // Registration expands a self-closing root; removal preserves valid XML, not its old spelling.
+    await writeFile(path, '<jsplugins/>');
+    assert.equal(register(dir, 'win32').status, 0);
+    assert.equal(remove(dir, 'win32').status, 0);
+    assert.equal(await readFile(path, 'utf8'), '<jsplugins>\n</jsplugins>');
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 const reloadBlock = mac.slice(mac.indexOf('# Reload the service.'), mac.indexOf('READY=0'));
 function reloadService(mode) {
   return spawnSync('bash', ['-s', '--', mode], { encoding: 'utf8', input: `

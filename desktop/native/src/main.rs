@@ -42,19 +42,52 @@ fn error(message: &str) {
         .show();
 }
 /// 需要先退出 WPS 的操作以确认框征求同意；默认按钮是「否」，避免误点导致未保存的文档丢失。
+#[cfg(target_os = "windows")]
 fn confirm(message: &str) -> bool {
-    rfd::MessageDialog::new()
-        .set_title("WPS 助手")
-        .set_description(message)
-        .set_level(rfd::MessageLevel::Warning)
-        .set_buttons(rfd::MessageButtons::YesNo)
-        .show()
-        == rfd::MessageDialogResult::Yes
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn MessageBoxW(
+            hwnd: *mut std::ffi::c_void,
+            text: *const u16,
+            caption: *const u16,
+            flags: u32,
+        ) -> i32;
+    }
+    let text: Vec<u16> = message.encode_utf16().chain(Some(0)).collect();
+    let title: Vec<u16> = "WPS 助手".encode_utf16().chain(Some(0)).collect();
+    // MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2. IDYES is 6.
+    unsafe {
+        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), 0x00000134) == 6
+    }
+}
+#[cfg(target_os = "macos")]
+fn confirm(message: &str) -> bool {
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::{NSAlert, NSAlertSecondButtonReturn, NSAlertStyle, NSApplication};
+    use objc2_foundation::NSString;
+    let mtm = MainThreadMarker::new().expect("确认窗口必须在主线程显示");
+    let alert = NSAlert::new(mtm);
+    alert.setAlertStyle(NSAlertStyle::Warning);
+    alert.setMessageText(&NSString::from_str("WPS 助手"));
+    alert.setInformativeText(&NSString::from_str(message));
+    alert
+        .addButtonWithTitle(&NSString::from_str("否"))
+        .setKeyEquivalent(&NSString::from_str("\r"));
+    alert
+        .addButtonWithTitle(&NSString::from_str("是"))
+        .setKeyEquivalent(&NSString::from_str(""));
+    #[allow(deprecated)]
+    NSApplication::sharedApplication(mtm).activateIgnoringOtherApps(true);
+    alert.runModal() == NSAlertSecondButtonReturn
+}
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn confirm(_message: &str) -> bool {
+    false
 }
 const APP_VERSION: &str = env!("WPS_ASSISTANT_VERSION");
 /// 注册/移除加载项前都必须完全退出 WPS；确认后由托盘代劳，不再让用户自己去托盘里找进程。
-const REGISTER_PROMPT: &str = "检测到 WPS 正在运行，修复加载项注册需要完全退出 WPS（包括右下角托盘的后台进程）。\n\n是否现在关闭 WPS 并继续？\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
-const REMOVE_PROMPT: &str = "检测到 WPS 正在运行，移除加载项注册需要完全退出 WPS（包括右下角托盘的后台进程）。\n\n是否现在关闭 WPS 并继续？\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
+const REGISTER_PROMPT: &str = "检测到 WPS 正在运行，修复加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在请求 WPS 正常退出并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n若后台进程仍未退出，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
+const REMOVE_PROMPT: &str = "检测到 WPS 正在运行，移除加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在请求 WPS 正常退出并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n若后台进程仍未退出，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
 #[cfg(target_os = "macos")]
 fn show_about() {
     use objc2::MainThreadMarker;
@@ -528,7 +561,7 @@ fn main() {
                 }
                 quit.set_enabled(!operating && !(running && managed && busy));
                 for item in [&register, &unregister] {
-                    item.set_enabled(!operating);
+                    item.set_enabled(!operating && !busy);
                 }
                 login.set_enabled(!operating);
                 for item in [&chat, &vars, &settings, &debug, &guide] {
@@ -553,9 +586,8 @@ fn main() {
                         let runtime = runtime.clone();
                         let proxy = proxy.clone();
                         std::thread::spawn(move || {
-                            let closed = runtime.run("close-wps");
-                            let result = if closed["ok"] == true {
-                                let retried = runtime.run(&command);
+                            let result = {
+                                let retried = runtime.run(&format!("{command}-close-wps"));
                                 // 关闭后 WPS 可能又被拉起；此时不再追问，直接给出可照做的提示。
                                 if retried["reason"] == "wps-running" {
                                     let action = if command == "unregister" { "移除加载项注册" } else { "加载项注册" };
@@ -564,8 +596,6 @@ fn main() {
                                 } else {
                                     retried
                                 }
-                            } else {
-                                closed
                             };
                             let _ = proxy.send_event(UserEvent::Done {
                                 command,

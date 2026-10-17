@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "wps-assistant-tray"
-version = "0.1.13"
+version = "0.1.14"
 dependencies = [
  "dirs",
  "dunce",

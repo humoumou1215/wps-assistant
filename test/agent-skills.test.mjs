@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -69,7 +69,8 @@ test('skill references list every shipped file except the entry point and skip e
     'references/api-catalog.md', 'references/common.md', 'references/macos-validation.md', 'references/presentation.md',
     'references/report-sync.md', 'references/spreadsheet.md', 'references/validation.md', 'references/writer.md',
   ]);
-  assert.ok(references.every(r => r.size > 0 && r.name === r.path.split('/').pop() && r.filePath.startsWith(skill.baseDir)), 'every reference keeps a readable size and its absolute path');
+  const root = await realpath(skill.baseDir);
+  assert.ok(references.every(r => r.size > 0 && r.name === r.path.split('/').pop() && r.filePath === join(root, r.path)), 'every reference keeps a readable size and its canonical absolute path');
   const linked = join(INSTALLED_SKILLS_DIR, 'link-skill');
   await mkdir(join(linked, 'docs'), { recursive: true });
   await writeFile(join(linked, 'SKILL.md'), '---\nname: link-skill\ndescription: Linked\ntest\n---\nBody');
@@ -80,6 +81,25 @@ test('skill references list every shipped file except the entry point and skip e
   const listed = await listSkillReferences({ baseDir: linked });
   assert.deepEqual(listed.map(r => r.path), ['docs/guide.md'], 'the entry point, links leaving the directory and nested files outside the skill stay hidden');
   assert.ok(!listed.some(r => /escape|SKILL/.test(r.path)));
+});
+
+test('canonical references remain readable through an aliased skill root', async () => {
+  await installBundledSkills();
+  const alias = join(dir, 'skills-alias');
+  await symlink(INSTALLED_SKILLS_DIR, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const skill = { baseDir: join(alias, 'wps-api') };
+  const refs = await listSkillReferences(skill);
+  const ref = refs.find(item => item.name === 'writer.md');
+  assert.match((await readSkillContent([skill], ref.filePath)).content, /Writer|Paragraph/);
+});
+
+test('reference enumeration skips cyclic links but still reports a missing skill root', async () => {
+  const baseDir = join(INSTALLED_SKILLS_DIR, 'cycle-skill');
+  await mkdir(baseDir);
+  await writeFile(join(baseDir, 'guide.md'), 'readable guide');
+  await symlink(join(baseDir, 'loop'), join(baseDir, 'loop'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.deepEqual((await listSkillReferences({ baseDir })).map(ref => ref.path), ['guide.md']);
+  await assert.rejects(listSkillReferences({ baseDir: join(dir, 'missing-skill') }), { code: 'ENOENT' });
 });
 
 test('upgrades remove retired bundled skills and references while preserving user files', async () => {

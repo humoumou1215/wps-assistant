@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync, constants } from "node:fs";
+import { readFileSync, writeFileSync, copyFileSync, mkdirSync, existsSync, accessSync, statSync, renameSync, unlinkSync, constants } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
@@ -9,6 +9,63 @@ const PUBLISH_BACKUP = '.backup-before-wps-mcp';
 const WRITER_BACKUP = '.backup-before-wps-mcp-writer';
 type Span = { name: string; start: number; end: number; host?: [string, string]; selfClosing?: boolean };
 const isObject = (value: unknown) => value !== null && typeof value === 'object' && !Array.isArray(value);
+type RegistryChange = { path: string; before: string | null; after: string; backupSuffix?: string };
+type RegistrationState = { path: string; content: string };
+function appendRegistrationState(changes: RegistryChange[], state?: RegistrationState) {
+  if (state) changes.push({ path: state.path, before: existsSync(state.path) ? readFileSync(state.path, 'utf8') : null, after: state.content });
+}
+// Prepare replacements and current-operation rollback copies before changing any
+// live registry. Historical first-install backups are never used for rollback.
+function commitRegistries(changes: RegistryChange[]) {
+  const prepared: { change: RegistryChange; next: string; restore: string; committed: boolean; keepRestore: boolean }[] = [];
+  let failure: unknown;
+  try {
+    for (const change of changes.filter(change => change.before !== change.after)) {
+      const { path, before, after } = change;
+      // rename can replace a read-only file on POSIX; honor the registry's own
+      // write permission before preparing either replacement.
+      if (before !== null) accessSync(path, constants.W_OK);
+      const suffix = `.wps-mcp-${randomBytes(12).toString('hex')}`;
+      const item = { change, next: path + suffix + '.tmp', restore: path + suffix + '.restore', committed: false, keepRestore: false };
+      prepared.push(item);
+      const mode = before === null ? 0o600 : statSync(path).mode & 0o777;
+      writeFileSync(item.next, after, { encoding: 'utf8', flag: 'wx', mode });
+      if (before !== null) writeFileSync(item.restore, before, { encoding: 'utf8', flag: 'wx', mode });
+    }
+    for (const { change } of prepared) {
+      const { path, before, backupSuffix } = change;
+      if (before !== null && backupSuffix && !existsSync(path + backupSuffix)) copyFileSync(path, path + backupSuffix, constants.COPYFILE_EXCL);
+    }
+    for (const item of prepared) {
+      renameSync(item.next, item.change.path);
+      item.committed = true;
+    }
+  } catch (error) {
+    const failures: string[] = [];
+    for (const item of [...prepared].reverse()) {
+      if (!item.committed) continue;
+      try {
+        if (item.change.before === null) unlinkSync(item.change.path);
+        else renameSync(item.restore, item.change.path);
+      } catch {
+        item.keepRestore = item.change.before !== null;
+        failures.push(item.keepRestore ? `${item.change.path} (recovery copy: ${item.restore})` : item.change.path);
+      }
+    }
+    failure = failures.length
+      ? new Error(`Registry update failed: ${(error as Error).message}; rollback incomplete: ${failures.join(', ')}`, { cause: error })
+      : error;
+  } finally {
+    const cleanupFailures: string[] = [];
+    for (const item of prepared) {
+      for (const path of [item.next, ...(!item.keepRestore ? [item.restore] : [])]) {
+        try { unlinkSync(path); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') cleanupFailures.push(path); }
+      }
+    }
+    if (cleanupFailures.length) failure = new Error(`${failure instanceof Error ? failure.message + '; ' : ''}Registry temporary-file cleanup failed: ${cleanupFailures.join(', ')}`, { cause: failure });
+  }
+  if (failure) throw failure;
+}
 /// 校验真实的 XML 并记录完整元素跨度。这是注册表更新，不是 HTML 清洗器：
 /// 必须保留无关元素、注释与原始格式。校验失败时抛错，调用方据此放弃写入。
 function scanPublish(publish: string) {
@@ -43,7 +100,7 @@ function readAuthAddin(path: string) {
   if (!isObject(auth) || (auth.wps !== undefined && !isObject(auth.wps))) throw new Error('Invalid authaddin.json; registries left unchanged');
   return { original, auth: auth as { wps?: Record<string, any> } };
 }
-export function registerAddins(directory: string, port: string, enable: string, platform: string) {
+export function registerAddins(directory: string, port: string, enable: string, platform: string, state?: RegistrationState) {
   if (!/^\d+$/.test(port) || Number(port) < 1025 || Number(port) > 65535 || !/^[\w-]+$/.test(enable)) throw new Error('Invalid port or Add-in enable setting');
   const publishPath = join(directory, 'publish.xml');
   const original = existsSync(publishPath) ? readFileSync(publishPath, 'utf8') : null;
@@ -64,11 +121,13 @@ export function registerAddins(directory: string, port: string, enable: string, 
   if (root.selfClosing) {
     parts.push(publish.slice(cursor, root.start), publish.slice(root.start, root.end - 2), '>', eol, additions, eol, `</${root.name}>`, publish.slice(root.end));
   } else {
-    parts.push(publish.slice(cursor, rootClose), ...(missing.length ? [additions, eol] : []), publish.slice(rootClose));
+    const lineStart = publish.lastIndexOf('\n', rootClose - 1) + 1;
+    const insertion = /^[\t ]*$/.test(publish.slice(lineStart, rootClose)) ? lineStart : rootClose;
+    parts.push(publish.slice(cursor, insertion), ...(missing.length ? [additions, eol] : []), publish.slice(insertion));
   }
   publish = parts.join('');
   new SaxesParser().write(publish).close();
-  const changes: [string, string | null, string, string][] = [[publishPath, original, publish, PUBLISH_BACKUP]];
+  const changes: RegistryChange[] = [{ path: publishPath, before: original, after: publish, backupSuffix: PUBLISH_BACKUP }];
   if (platform === 'darwin') {
     const authPath = join(directory, 'authaddin.json');
     const loaded = readAuthAddin(authPath);
@@ -77,37 +136,35 @@ export function registerAddins(directory: string, port: string, enable: string, 
     const id = Object.keys(writer).find(key => key !== 'namelist' && writer[key]?.name === 'WpsMcpWPS') ?? randomBytes(16).toString('hex');
     writer[id] = { ...writer[id], enable: true, isload: true, md5: '', mode: 2, name: 'WpsMcpWPS', path: `http://127.0.0.1:${port}/addins/wps` };
     writer.namelist = [...new Set([...String(writer.namelist ?? '').split(';').filter(Boolean), id])].join(';');
-    changes.push([authPath, loaded?.original ?? null, JSON.stringify(auth, null, 2) + '\n', WRITER_BACKUP]);
+    changes.push({ path: authPath, before: loaded?.original ?? null, after: JSON.stringify(auth, null, 2) + '\n', backupSuffix: WRITER_BACKUP });
   }
-  // Validate both files before writing either; keep the first backups and all unrelated Add-ins.
+  appendRegistrationState(changes, state);
+  // Stage the registries and optional desktop marker together before committing any file.
   mkdirSync(directory, { recursive: true });
-  for (const [path, before, after, suffix] of changes) {
-    if (before === after) continue;
-    if (before !== null && !existsSync(path + suffix)) copyFileSync(path, path + suffix, constants.COPYFILE_EXCL);
-    writeFileSync(path, after, 'utf8');
-  }
+  commitRegistries(changes);
 }
 /// 移除本项目写入的三个宿主条目（macOS 同时移除 Writer 授权）。与注册对称：保留其他加载项、
 /// 注释与原始格式；第一次注册留下的用户原始备份不动，也不为「移除」新建备份。
-export function removeAddins(directory: string, platform: string) {
-  const writes: [string, string][] = [];
+export function removeAddins(directory: string, platform: string, state?: RegistrationState) {
+  const writes: RegistryChange[] = [];
   let removed = 0;
   const publishPath = join(directory, 'publish.xml');
   if (existsSync(publishPath)) {
     const original = readFileSync(publishPath, 'utf8');
     const { spans } = scanPublish(original);
-    const eol = original.includes('\r\n') ? '\r\n' : '\n';
     let publish = original;
     // 从后往前删，前面条目的跨度才不会被后面的改动打乱；条目连同它的缩进和行尾换行一起去掉。
     for (const span of [...spans].reverse()) {
-      let start = span.start;
-      while (start > 0 && (publish[start - 1] === ' ' || publish[start - 1] === '\t')) start--;
-      const end = publish.startsWith(eol, span.end) ? span.end + eol.length : span.end;
+      const lineStart = publish.lastIndexOf('\n', span.start - 1) + 1;
+      const tail = publish.slice(span.end).match(/^[\t ]*(?:\r?\n|$)/);
+      const ownLine = /^[\t ]*$/.test(publish.slice(lineStart, span.start)) && tail;
+      const start = ownLine ? lineStart : span.start;
+      const end = ownLine ? span.end + tail[0].length : span.end;
       publish = publish.slice(0, start) + publish.slice(end);
     }
     new SaxesParser().write(publish).close();
     removed += spans.length;
-    if (publish !== original) writes.push([publishPath, publish]);
+    if (publish !== original) writes.push({ path: publishPath, before: original, after: publish });
   }
   if (platform === 'darwin') {
     const authPath = join(directory, 'authaddin.json');
@@ -118,11 +175,12 @@ export function removeAddins(directory: string, platform: string) {
       for (const id of ids) delete writer[id];
       writer.namelist = String(writer.namelist ?? '').split(';').filter(entry => entry && !ids.includes(entry)).join(';');
       const after = JSON.stringify(loaded.auth, null, 2) + '\n';
-      if (after !== loaded.original) writes.push([authPath, after]);
+      if (after !== loaded.original) writes.push({ path: authPath, before: loaded.original, after });
       removed += ids.length;
     }
   }
-  for (const [path, content] of writes) writeFileSync(path, content, 'utf8');
+  appendRegistrationState(writes, state);
+  commitRegistries(writes);
   return removed ? 'WPS 加载项注册已移除，重新打开 WPS 后不再加载。' : '未找到 WPS 助手的加载项注册，无需移除。';
 }
 

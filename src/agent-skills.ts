@@ -71,6 +71,9 @@ export async function listSkillReferences(skill: { baseDir: string }) {
   const entries: SkillReference[] = [];
   async function walk(dir: string, prefix: string): Promise<void> {
     for (const entry of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
+      // Do not resolve links: a cyclic or broken link is not a reference, and
+      // must not make the entire Agent resource listing unavailable.
+      if (entry.isSymbolicLink()) continue;
       const path = prefix ? `${prefix}/${entry.name}` : entry.name;
       let resolved: string;
       try { resolved = await realpath(join(dir, entry.name)); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
@@ -89,13 +92,17 @@ export async function listSkillReferences(skill: { baseDir: string }) {
 
 export async function readSkillContent(skills: Skill[], path: string) {
   const candidate = resolve(INSTALLED_SKILLS_DIR, path);
-  if (!skills.some(skill => isWithin(skill.baseDir, candidate))) throw new Error("只能读取已安装技能目录中的文件");
+  const roots = await Promise.all(skills.map(async skill => ({ path: resolve(skill.baseDir), real: await realpath(skill.baseDir) })));
+  // The pane returns canonical paths, while the SDK may retain a directory
+  // alias or Windows short name. Accept either spelling, then bind the real
+  // file check to the same skill(s), never an unrelated installed sibling.
+  const allowed = roots.filter(root => isWithin(root.path, candidate) || isWithin(root.real, candidate));
+  if (!allowed.length) throw new Error("只能读取已安装技能目录中的文件");
   const resolved = await realpath(candidate);
   // Reject links escaping either the installed skill root or its own directory.
   const installed = await realpath(INSTALLED_SKILLS_DIR);
   if (!isWithin(installed, resolved)) throw new Error("只能读取已安装技能目录中的文件");
-  const roots = await Promise.all(skills.map(skill => realpath(skill.baseDir)));
-  if (!roots.some(root => isWithin(root, resolved))) throw new Error("只能读取已安装技能目录中的文件");
+  if (!allowed.some(root => isWithin(root.real, resolved))) throw new Error("只能读取已安装技能目录中的文件");
   const info = await stat(resolved);
   if (!info.isFile() || info.size > 2_000_000) throw new Error("技能文件必须是小于 2 MB 的文本文件");
   const content = await readFile(resolved, "utf8");

@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
 import { APP_DIR, callTool, getState, PORT, deleteVariableDefinition, navigateVariableLocation, asToolError } from "./tools.js";
 import { publicConfig, parseConfig, saveConfig, redact } from "./config.js";
-import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema, chatHistory, agentResources, commandCatalog, executeCommand, listChatSessions, sessionAction, assertChatSession } from "./agent.js";
+import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema, chatHistory, agentResources, agentSkillFile, commandCatalog, executeCommand, listChatSessions, sessionAction, assertChatSession } from "./agent.js";
 import { logger } from "./logger.js";
 import { resolveSelectionReference } from "./references.js";
 import { DATA_DIR } from "./paths.js";
@@ -69,6 +69,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       return;
     }
     if (path === "/api/agent" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(await agentResources())))); return; }
+    if (path === "/api/skill-file" && req.method === "GET") {
+      const target = new URL(req.url ?? "/", `http://${host}`).searchParams.get("path") ?? "";
+      if (!target) throw new Error("缺少 path 参数");
+      const value = await agentSkillFile(target);
+      json(res, 200, value); return;
+    }
     if (path === "/api/ref-resolve" && req.method === "POST") {
       json(res, 200, await resolveSelectionReference(await readJson(req))); return;
     }

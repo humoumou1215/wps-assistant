@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 const dir = await mkdtemp(join(tmpdir(), 'wps-skills-test-'));
 process.env.WPS_MCP_DATA_DIR = dir;
-const { BUNDLED_SKILLS_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, readSkillContent, readSkillFile, createSkillReadTool } = await import('../dist/src/agent-skills.js');
+const { BUNDLED_SKILLS_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, listSkillReferences, readSkillContent, readSkillFile, createSkillReadTool } = await import('../dist/src/agent-skills.js');
 test.after(() => rm(dir, { recursive: true, force: true }));
 
 test('bundled skills and references install, refresh, and preserve additional installed skills', async () => {
@@ -59,6 +59,47 @@ test('bundled WPS workflow is self-contained and its reference links are readabl
     const reference = await readSkillContent(skills, resolve(dirname(skill.filePath), link));
     assert.ok(reference.content.length > 0, link);
   }
+});
+
+test('skill references list every shipped file except the entry point and skip escaping links', async () => {
+  const { skills } = await installBundledSkills();
+  const skill = skills.find(s => s.name === 'wps-api');
+  const references = await listSkillReferences(skill);
+  assert.deepEqual(references.map(r => r.path).sort(), [
+    'references/api-catalog.md', 'references/common.md', 'references/macos-validation.md', 'references/presentation.md',
+    'references/report-sync.md', 'references/spreadsheet.md', 'references/validation.md', 'references/writer.md',
+  ]);
+  const root = await realpath(skill.baseDir);
+  assert.ok(references.every(r => r.size > 0 && r.name === r.path.split('/').pop() && r.filePath === join(root, r.path)), 'every reference keeps a readable size and its canonical absolute path');
+  const linked = join(INSTALLED_SKILLS_DIR, 'link-skill');
+  await mkdir(join(linked, 'docs'), { recursive: true });
+  await writeFile(join(linked, 'SKILL.md'), '---\nname: link-skill\ndescription: Linked\ntest\n---\nBody');
+  await writeFile(join(linked, 'docs/guide.md'), 'inner guide');
+  await mkdir(join(dir, 'outside'), { recursive: true });
+  await writeFile(join(dir, 'outside/secret.md'), 'outside skill root');
+  await symlink(join(dir, 'outside'), join(linked, 'escape'), process.platform === 'win32' ? 'junction' : 'dir');
+  const listed = await listSkillReferences({ baseDir: linked });
+  assert.deepEqual(listed.map(r => r.path), ['docs/guide.md'], 'the entry point, links leaving the directory and nested files outside the skill stay hidden');
+  assert.ok(!listed.some(r => /escape|SKILL/.test(r.path)));
+});
+
+test('canonical references remain readable through an aliased skill root', async () => {
+  await installBundledSkills();
+  const alias = join(dir, 'skills-alias');
+  await symlink(INSTALLED_SKILLS_DIR, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const skill = { baseDir: join(alias, 'wps-api') };
+  const refs = await listSkillReferences(skill);
+  const ref = refs.find(item => item.name === 'writer.md');
+  assert.match((await readSkillContent([skill], ref.filePath)).content, /Writer|Paragraph/);
+});
+
+test('reference enumeration skips cyclic links but still reports a missing skill root', async () => {
+  const baseDir = join(INSTALLED_SKILLS_DIR, 'cycle-skill');
+  await mkdir(baseDir);
+  await writeFile(join(baseDir, 'guide.md'), 'readable guide');
+  await symlink(join(baseDir, 'loop'), join(baseDir, 'loop'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.deepEqual((await listSkillReferences({ baseDir })).map(ref => ref.path), ['guide.md']);
+  await assert.rejects(listSkillReferences({ baseDir: join(dir, 'missing-skill') }), { code: 'ENOENT' });
 });
 
 test('upgrades remove retired bundled skills and references while preserving user files', async () => {

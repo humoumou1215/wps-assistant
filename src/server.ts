@@ -89,7 +89,7 @@ async function startBridge() {
     const path = (req.url ?? "/").split("?")[0] ?? "/";
     const work = path === "/mcp" || (path.startsWith("/api/") && !path.startsWith("/api/desktop/"));
     if (work) activeHttpWork++;
-    const route = /^\/(health|mcp|api\/(state|config(?:\/test)?|chat|commands|sessions|ref-preview|ref-resolve|actions|navigate))$/.test(path)
+    const route = /^\/(health|mcp|api\/(agent|state|config(?:\/test)?|chat|commands|sessions|ref-preview|ref-resolve|skill-file|actions|navigate))$/.test(path)
       ? path : /^\/(addon|addins\/(et|wpp|wps))\//.test(path) ? "/addon/*" : "[unknown]";
     const started = Date.now();
     res.setHeader("x-request-id", requestId);

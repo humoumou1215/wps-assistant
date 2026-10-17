@@ -101,7 +101,13 @@ try {
   assert.match(init, /protocolVersion/);
   assert.ok(init.includes(`"version":"${version}"`));
   assert.match(await (await post('/mcp', { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, headers)).text(), /wps_run_render/);
-  const agent = await get('/api/agent'); assert.equal(agent.tools.length, 11); assert.ok(agent.skills.some(s => s.name === 'wps-api'));
+  const agent = await get('/api/agent');
+  // Eleven shared WPS tools, plus the model-only skill reader. Keep the exact
+  // names checked so a missing tool cannot be masked by a duplicate or extra.
+  const expectedWpsTools = ['wps_list_documents', 'wps_get_document', 'wps_run_readonly_code', 'wps_create_variable', 'wps_update_variable', 'wps_create_render', 'wps_update_render', 'wps_list_variables', 'wps_get_variable', 'wps_run_transform', 'wps_run_render'];
+  assert.equal(agent.tools.length, 12);
+  assert.deepEqual(agent.tools.map(tool => tool.name).sort(), [...expectedWpsTools, 'read'].sort());
+  assert.ok(agent.skills.some(s => s.name === 'wps-api'));
   const cfg = { kind: 'custom', label: 'Offline smoke', baseUrl: `http://127.0.0.1:${model.address().port}/v1`, api: 'openai-completions', apiKey: 'fixture', model: { id: 'fixture', name: 'fixture', contextWindow: 32768, maxTokens: 1024, reasoning: false, vision: false }, thinkingLevel: 'off', compat: { thinkingFormat: '', maxTokensField: '' }, revision: (await get('/api/config')).revision };
   assert.equal((await post('/api/config', cfg)).status, 200);
   const stream = await (await post('/api/chat', { message: '离线包模拟模型验证' })).text();

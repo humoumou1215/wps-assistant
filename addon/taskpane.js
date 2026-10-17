@@ -81,7 +81,36 @@
     document.querySelectorAll('[data-agent-view]').forEach(button => button.setAttribute('aria-expanded', 'false'));
   }
   document.querySelectorAll('[data-agent-view]').forEach(button => { button.onclick = () => openAgentResources(button.dataset.agentView, button); });
+  let skillRefRequest = 0;
+  const skillRefButtons = () => [...$('agentContent').querySelectorAll('.skill-ref')];
+  function closeSkillReference() {
+    skillRefRequest++;
+    const view = $('agentContent').querySelector('#skillRefView');
+    if (view) { view.hidden = true; view.dataset.path = ''; view.innerHTML = ''; }
+    skillRefButtons().forEach(item => item.setAttribute('aria-pressed', 'false'));
+  }
+  async function openSkillReference(button) {
+    const view = $('agentContent').querySelector('#skillRefView'); if (!view) return;
+    const target = button.dataset.skillRef;
+    if (!view.hidden && view.dataset.path === target) { closeSkillReference(); return; }
+    const request = ++skillRefRequest;
+    view.hidden = false; view.dataset.path = target;
+    view.innerHTML = '<div class="agent-empty">正在读取参考资料…</div>';
+    skillRefButtons().forEach(item => item.setAttribute('aria-pressed', String(item === button)));
+    try {
+      const value = await api('/api/skill-file?path=' + encodeURIComponent(target));
+      if (request !== skillRefRequest || !view.isConnected) return;
+      const name = String(value.path || target).split(/[\\/]/).pop();
+      view.innerHTML = '<div class="agent-section-head"><h3>' + esc(name) + '</h3><button type="button" class="mini" data-skill-ref-close>收起</button></div><div class="body-text">' + V.markdown(value.content) + '</div>';
+    } catch (error) {
+      if (request !== skillRefRequest || !view.isConnected) return;
+      view.innerHTML = '<div class="agent-empty">读取参考资料失败：' + esc(error.message) + '</div>';
+    }
+  }
   $('agentContent').onclick = event => {
+    if (event.target.closest('[data-skill-ref-close]')) { closeSkillReference(); return; }
+    const reference = event.target.closest('[data-skill-ref]');
+    if (reference) { event.preventDefault(); void openSkillReference(reference); return; }
     const button = event.target.closest('[data-agent-item]'); if (!button) return;
     const listScroll = $('agentContent').querySelector('.agent-list').scrollTop;
     agentSelection[agentView] = button.dataset.agentItem; renderAgentResources();

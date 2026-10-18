@@ -2,7 +2,7 @@
 
 ## 取数
 
-从 `wpsDocument.Worksheets.Item(工作表名)` 取得绑定工作表，`Range(地址).Value2` 读取数据；`Value` 在部分 Mac 版本读写失败，优先 Value2。`UsedRange` 提供候选边界及 Rows/Columns.Count，不保证每行均有业务数据；按关键列过滤。
+从 `wpsDocument.Worksheets.Item(工作表名)` 取得绑定工作表，`Range(地址).Value2` 读取数据；`Value` 在部分 Mac 版本读写失败，优先 Value2。`UsedRange` 提供候选边界及 Rows/Columns.Count，不保证每行均有业务数据；按关键列过滤。sourceRef/targetRef 用 `工作表!A1:B13`；表名含空格或单引号时以单引号包围，内部单引号双写。
 
 ```js
 const sheets = [];

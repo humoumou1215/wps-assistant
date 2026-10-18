@@ -85,9 +85,10 @@ fn confirm(_message: &str) -> bool {
     false
 }
 const APP_VERSION: &str = env!("WPS_ASSISTANT_VERSION");
-/// 注册/移除加载项前都必须完全退出 WPS；确认后由托盘代劳，不再让用户自己去托盘里找进程。
-const REGISTER_PROMPT: &str = "检测到 WPS 正在运行，修复加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在请求 WPS 正常退出并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n若后台进程仍未退出，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
-const REMOVE_PROMPT: &str = "检测到 WPS 正在运行，移除加载项注册需要完全退出 WPS（包括后台进程）。\n\n是否现在请求 WPS 正常退出并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n若后台进程仍未退出，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
+/// 注册/移除加载项前必须先关闭已打开的文档：只有文档宿主退出时才重写 publish.xml。
+/// 常驻的加载项辅助宿主（-Entry=EntryPoint）不计入前置条件，确认后由托盘代劳关闭文档。
+const REGISTER_PROMPT: &str = "检测到 WPS 中还有已打开的文档，修复加载项注册需要先关闭它们。\n\n是否现在请求 WPS 关闭这些文档并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n如果文档未在 15 秒内关闭，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
+const REMOVE_PROMPT: &str = "检测到 WPS 中还有已打开的文档，移除加载项注册需要先关闭它们。\n\n是否现在请求 WPS 关闭这些文档并继续？当前所属服务会短暂停止，操作结束后恢复；服务忙碌时无法继续。\n如果文档未在 15 秒内关闭，将提示手动处理。\n如果还有未保存的文档，请选择「否」，先在 WPS 中保存后再重试。";
 #[cfg(target_os = "macos")]
 fn show_about() {
     use objc2::MainThreadMarker;
@@ -577,7 +578,7 @@ fn main() {
                 if command.starts_with("login-") {
                     login.set_checked(runtime.login_enabled());
                 }
-                // 注册和移除都要先退出 WPS：把「请关闭 WPS」报错换成确认框，同意后由托盘关闭并自动重试。
+                // 注册和移除都要先关闭已打开的文档：把「请关闭文档」报错换成确认框，同意后由托盘关闭并自动重试。
                 if (command == "register" || command == "unregister") && result["reason"] == "wps-running" {
                     let prompt = if command == "unregister" { REMOVE_PROMPT } else { REGISTER_PROMPT };
                     if confirm(prompt) {
@@ -588,10 +589,10 @@ fn main() {
                         std::thread::spawn(move || {
                             let result = {
                                 let retried = runtime.run(&format!("{command}-close-wps"));
-                                // 关闭后 WPS 可能又被拉起；此时不再追问，直接给出可照做的提示。
+                                // 关闭后文档又可能被打开；此时不再追问，直接给出可照做的提示。
                                 if retried["reason"] == "wps-running" {
                                     let action = if command == "unregister" { "移除加载项注册" } else { "加载项注册" };
-                                    let message = format!("WPS 关闭后又自动启动，{action}仍未完成。请手动退出 WPS（包括右下角托盘图标）后重试。");
+                                    let message = format!("WPS 关闭后又打开了文档，{action}仍未完成。请手动关闭 WPS 中已打开的文档后重试。");
                                     json!({ "ok": false, "message": message })
                                 } else {
                                     retried

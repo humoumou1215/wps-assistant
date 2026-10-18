@@ -60,63 +60,112 @@ function assertTrayOwner(meta: Metadata, status: Metadata) {
     throw new Error("当前服务绑定其他托盘或旧版本，请先停止旧服务后重试");
   }
 }
-/// 注册和启动都要求完全退出 WPS：文档宿主加上常驻的后台/CEF 宿主进程。
-function wpsProcessNames() {
-  if (process.platform === "darwin") return ["wpsoffice", "promecefpluginhost"];
-  if (process.platform === "win32") return ["wps", "et", "wpp", "wpscenter", "promecefpluginhost"];
-  throw new Error("免安装桌面程序只支持 macOS 和 Windows");
+/// 文档宿主：只有 Writer/表格/演示退出时才会重写 jsaddons/publish.xml，注册与移除
+/// 以此为准。WPS 12.x 也用同一个 wps.exe 承载加载项辅助宿主（命令行带
+/// -Entry=EntryPoint，加载 jsapibrowser/aspcenter 等），它们没有窗口、常驻不退出，
+/// 也不接收 taskkill 的 WM_CLOSE，因此不计入前置条件、也不强行结束。
+type DocumentHosts = { wps: number; et: number; wpp: number };
+type WpsHosts = { documents: DocumentHosts; backgrounds: number };
+const DOCUMENT_HOSTS = ["wps", "et", "wpp"] as const;
+const documentTotal = (documents: DocumentHosts) => documents.wps + documents.et + documents.wpp;
+const CLOSE_BUDGET = 15_000;
+const CLOSE_TIMEOUT = "WPS 未能在 15 秒内关闭已打开的文档；请在 WPS 中保存并关闭文档后重试";
+/// 一次查出全部宿主并区分文档宿主与后台宿主：CIM 查询能读到命令行，Get-Process 不能。
+const WIN32_PROBE = `# WPS_DOC_PROBE
+$doc=@{wps=0;et=0;wpp=0};$bg=0
+foreach($p in @(Get-CimInstance Win32_Process -Filter "Name='wps.exe' OR Name='et.exe' OR Name='wpp.exe' OR Name='wpscenter.exe' OR Name='promecefpluginhost.exe'" -ErrorAction SilentlyContinue)){
+  $name=$p.Name.ToLower().Replace('.exe','')
+  if($doc.ContainsKey($name) -and (([string]$p.CommandLine) -notmatch '-Entry=EntryPoint')){$doc[$name]++}else{$bg++}
 }
-/// 正在运行的 WPS 进程数。macOS 逐个用 pgrep 精确匹配，Windows 一次查询进程名列表。
-async function wpsProcessCount(names = wpsProcessNames(), deadline?: number) {
-  const options = () => ({ windowsHide: true, ...(deadline === undefined ? {} : { timeout: remainingCloseTime(deadline) }) });
-  if (process.platform === "darwin") {
-    let count = 0;
-    for (const name of names) {
-      try { count += (await execute("/usr/bin/pgrep", ["-x", name], options())).stdout.split("\n").filter(Boolean).length; }
-      catch (error) {
-        if (deadline !== undefined) remainingCloseTime(deadline);
-        if ((error as { code?: number }).code === 1) continue;
-        throw new Error("无法检查 WPS 是否已退出");
-      }
-    }
-    return count;
-  }
-  const result = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `@(Get-Process -Name ${names.join(",")} -ErrorAction SilentlyContinue).Count`], options());
-  const count = Number(result.stdout.trim());
-  if (!Number.isInteger(count) || count < 0) throw new Error("无法检查 WPS 是否已退出");
-  return count;
-}
-/// 注册前必须先退出 WPS。reason 让托盘能识别这一情形，改为弹确认框并代用户关闭。
-export async function assertWpsClosed(deadline = Date.now() + 15_000) {
-  const count = await wpsProcessCount(undefined, deadline);
-  remainingCloseTime(deadline);
-  if (count === 0) return;
-  throw Object.assign(
-    new Error(process.platform === "darwin"
-      ? "请完全退出 WPS（包括后台进程），再选择「修复 WPS 加载项注册」或「启动服务」"
-      : "请完全退出 WPS（包括右下角托盘进程），再重试注册"),
-    { reason: "wps-running" },
-  );
-}
-const CLOSE_TIMEOUT = "WPS 未能在 15 秒内完全退出；请在 WPS 中保存并手动退出（包括后台进程）后重试";
+[pscustomobject]@{wps=$doc.wps;et=$doc.et;wpp=$doc.wpp;backgrounds=$bg} | ConvertTo-Json -Compress`;
+/// 等待文档宿主退出不逐轮冷启 powershell.exe（一次 0.3~1.5 秒，会把 15 秒预算耗在探测上），
+/// 而是让一个长驻脚本在同一预算内自行轮询。
+const winWaitScript = (budget: number) => `# WPS_DOC_WAIT
+$end=[DateTime]::UtcNow.AddMilliseconds(${budget})
+do{
+  $open=@(Get-CimInstance Win32_Process -Filter "Name='wps.exe' OR Name='et.exe' OR Name='wpp.exe'" -ErrorAction SilentlyContinue | Where-Object{ (([string]$_.CommandLine) -notmatch '-Entry=EntryPoint') })
+  if($open.Count -eq 0){exit 0}
+  Start-Sleep -Milliseconds 250
+}while([DateTime]::UtcNow -lt $end)
+exit 2`;
 function remainingCloseTime(deadline: number) {
   const remaining = deadline - Date.now();
   if (remaining <= 0) throw new Error(CLOSE_TIMEOUT);
   return remaining;
 }
-async function waitForWpsExit(names: string[], deadline: number) {
-  while (true) {
-    remainingCloseTime(deadline);
-    const count = await wpsProcessCount(names, deadline);
-    remainingCloseTime(deadline);
-    if (count === 0) return;
-    await pause(Math.min(250, remainingCloseTime(deadline)));
+function probeOptions(deadline?: number) {
+  return { windowsHide: true, ...(deadline === undefined ? {} : { timeout: remainingCloseTime(deadline) }) };
+}
+async function countPids(name: string, deadline?: number) {
+  try { return (await execute("/usr/bin/pgrep", ["-x", name], probeOptions(deadline))).stdout.split("\n").filter(Boolean).length; }
+  catch (error) {
+    if (deadline !== undefined) remainingCloseTime(deadline);
+    if ((error as { code?: number }).code === 1) return 0;
+    throw new Error("无法检查 WPS 是否已退出");
   }
 }
-/// Only request a normal application quit. A process can relaunch between any
-/// probe and termination, so background hosts must exit on their own.
-async function closeWps(deadline = Date.now() + 15_000) {
-  const names = wpsProcessNames();
+async function probeWpsHosts(deadline?: number): Promise<WpsHosts> {
+  if (process.platform === "darwin") {
+    return {
+      documents: { wps: await countPids("wpsoffice", deadline), et: 0, wpp: 0 },
+      backgrounds: await countPids("promecefpluginhost", deadline),
+    };
+  }
+  if (process.platform !== "win32") throw new Error("免安装桌面程序只支持 macOS 和 Windows");
+  let result;
+  try { result = await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", WIN32_PROBE], probeOptions(deadline)); }
+  catch (error) {
+    if ((error as { killed?: boolean }).killed || (deadline !== undefined && Date.now() >= deadline)) throw new Error(CLOSE_TIMEOUT);
+    throw new Error("无法检查 WPS 是否已退出");
+  }
+  let value: { wps?: unknown; et?: unknown; wpp?: unknown; backgrounds?: unknown };
+  try { value = JSON.parse(result.stdout.trim()); }
+  catch { throw new Error("无法检查 WPS 是否已退出"); }
+  const hosts: WpsHosts = {
+    documents: { wps: Number(value.wps), et: Number(value.et), wpp: Number(value.wpp) },
+    backgrounds: Number(value.backgrounds),
+  };
+  if (!DOCUMENT_HOSTS.every(name => Number.isInteger(hosts.documents[name])) || !Number.isInteger(hosts.backgrounds)) {
+    throw new Error("无法检查 WPS 是否已退出");
+  }
+  return hosts;
+}
+/// 注册前必须先退出文档宿主。reason 让托盘能识别这一情形，改为弹确认框并代用户关闭。
+export async function assertWpsClosed(deadline = Date.now() + CLOSE_BUDGET) {
+  const hosts = await probeWpsHosts(deadline);
+  remainingCloseTime(deadline);
+  if (documentTotal(hosts.documents) === 0) return;
+  throw Object.assign(
+    new Error(process.platform === "darwin"
+      ? "请完全退出 WPS 中已打开的 Writer 文档，再选择「修复 WPS 加载项注册」或「启动服务」"
+      : "请关闭 WPS 中已打开的文档（Writer/表格/演示），再重试"),
+    { reason: "wps-running" },
+  );
+}
+/// 等待文档宿主退出：macOS 的 pgrep 冷启动可忽略，逐次探测即可；Windows 交给长驻脚本。
+async function waitForDocumentExit(deadline: number) {
+  if (process.platform === "darwin") {
+    while (await countPids("wpsoffice", deadline)) {
+      remainingCloseTime(deadline);
+      await pause(Math.min(250, remainingCloseTime(deadline)));
+    }
+    return;
+  }
+  const budget = remainingCloseTime(deadline);
+  try {
+    await execute("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", winWaitScript(budget)], { windowsHide: true, timeout: budget + 1_000 });
+  } catch (error) {
+    if (Date.now() >= deadline || (error as { killed?: boolean }).killed || (error as { code?: number }).code === 2) throw new Error(CLOSE_TIMEOUT);
+    throw error;
+  }
+}
+/// Only request a normal application quit of document hosts; resident add-in hosts are
+/// left alone. A process can relaunch between any probe and termination, so nothing is
+/// terminated by process name, and the wait is bounded by the remaining close budget.
+async function closeWps(deadline = Date.now() + CLOSE_BUDGET) {
+  const hosts = await probeWpsHosts(deadline);
+  remainingCloseTime(deadline);
+  if (documentTotal(hosts.documents) === 0) return "WPS 未在运行";
   const run = async (file: string, args: string[]) => {
     try { await execute(file, args, { windowsHide: true, timeout: remainingCloseTime(deadline) }); }
     catch (error) {
@@ -125,19 +174,12 @@ async function closeWps(deadline = Date.now() + 15_000) {
     }
     remainingCloseTime(deadline);
   };
-  const count = await wpsProcessCount(names, deadline);
-  remainingCloseTime(deadline);
-  if (count === 0) return "WPS 未在运行";
   if (process.platform === "win32") {
-    for (const name of ["wps", "et", "wpp"]) {
-      if (await wpsProcessCount([name], deadline)) await run("taskkill.exe", ["/IM", `${name}.exe`]);
-    }
+    for (const name of DOCUMENT_HOSTS) if (hosts.documents[name]) await run("taskkill.exe", ["/IM", `${name}.exe`]);
   } else {
-    if (await wpsProcessCount(["wpsoffice"], deadline)) {
-      await run("/usr/bin/osascript", ["-e", 'tell application id "com.kingsoft.wpsoffice.mac" to quit']);
-    }
+    await run("/usr/bin/osascript", ["-e", 'tell application id "com.kingsoft.wpsoffice.mac" to quit']);
   }
-  await waitForWpsExit(names, deadline);
+  await waitForDocumentExit(deadline);
   return "WPS 已关闭";
 }
 // Stopping through the authenticated endpoint both checks busy and gates new work.
@@ -167,15 +209,16 @@ async function withClosedWps(action: () => Promise<string> = closeWps) {
   if (failure) throw failure;
   return result!;
 }
-async function register(deadline?: number) {
-  await assertWpsClosed(deadline);
+/// 注册与移除用关闭阶段之后自己的 15 秒预算：关闭再慢，也不会挤掉写注册文件前的这次探测。
+async function register() {
+  await assertWpsClosed();
   registerAddins(addinsDir, String(port), process.env.WPS_MCP_ADDIN_ENABLE ?? "enable_dev", process.platform,
     { path: markerPath, content: JSON.stringify({ port, addinsDir }) });
   return "WPS 加载项已注册，可以重新打开 WPS。";
 }
-/// 移除注册也要完全退出 WPS；标记保留端口/目录并把 removed 置位，避免下次启动服务又补注册。
-async function unregister(deadline?: number) {
-  await assertWpsClosed(deadline);
+/// 移除注册也要完全退出文档宿主；标记保留端口/目录并把 removed 置位，避免下次启动服务又补注册。
+async function unregister() {
+  await assertWpsClosed();
   return removeAddins(addinsDir, process.platform,
     { path: markerPath, content: JSON.stringify({ port, addinsDir, removed: true }) });
 }
@@ -320,9 +363,9 @@ export async function desktopCommand(command: string, tray = "") {
       case "unregister": return unregister();
       case "close-wps": return withClosedWps();
       case "register-close-wps": case "unregister-close-wps": return withClosedWps(async () => {
-        const deadline = Date.now() + 15_000;
-        await closeWps(deadline);
-        return command === "register-close-wps" ? register(deadline) : unregister(deadline);
+        // 关闭与写注册各自计时：关闭用完自己的预算不影响注册前的探测。
+        await closeWps();
+        return command === "register-close-wps" ? register() : unregister();
       });
       case "login-on": return login(true, tray);
       case "login-off": return login(false, tray);

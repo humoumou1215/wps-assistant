@@ -15,8 +15,10 @@ $node = (Get-Command node.exe -ErrorAction Stop).Source
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
 $nodeVersion = (& $node --version).TrimStart('v').Split('.')
 if ($LASTEXITCODE -ne 0 -or [int]$nodeVersion[0] -lt 22 -or ([int]$nodeVersion[0] -eq 22 -and [int]$nodeVersion[1] -lt 19)) { throw 'Node.js 22.19.0 or newer is required.' }
-$wpsProcesses = @(Get-Process -Name wps, et, wpp, wpscenter, promecefpluginhost -ErrorAction SilentlyContinue)
-if ($wpsProcesses.Count) { throw 'Fully quit WPS Office, including its tray process, before deployment.' }
+# 只有文档宿主会重写 jsaddons/publish.xml；wps.exe 同时承载 -Entry=EntryPoint 的常驻
+# 加载项辅助宿主，按名字判断会把它们误当成 WPS 未退出。
+$documentHosts = @(Get-CimInstance Win32_Process -Filter "Name='wps.exe' OR Name='et.exe' OR Name='wpp.exe'" -ErrorAction SilentlyContinue | Where-Object { (([string]$_.CommandLine) -notmatch '-Entry=EntryPoint') })
+if ($documentHosts.Count) { throw 'Close every WPS document (Writer, Spreadsheets, Presentation) before deployment.' }
 $baseUrl = "http://127.0.0.1:$Port"
 $metadataPath = Join-Path $projectDirectory '.dev\windows-deployment.json'
 $bridgeProcess = $null

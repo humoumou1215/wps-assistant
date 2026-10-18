@@ -88,16 +88,16 @@ const connections = new Map<string, Connection>();
 const pending = new Map<string, Pending>();
 const state: PersistedState = { variables: [], counters: {}, documentIds: {}, documentMetadata: {} };
 
-function nextId(kind: string) {
-  state.counters[kind] = (state.counters[kind] ?? 0) + 1;
-  return `${kind}_${String(state.counters[kind]).padStart(3, "0")}`;
+function nextId(kind: string, counters = state.counters) {
+  counters[kind] = (counters[kind] ?? 0) + 1;
+  return `${kind}_${String(counters[kind]).padStart(3, "0")}`;
 }
 let persistence = Promise.resolve();
 let pendingStateWrites = 0;
-function persist(variables?: Variable[]) {
+function persist(variables?: Variable[], counters?: Partial<Record<"var" | "transform" | "render", number>>) {
   pendingStateWrites++;
   const write = persistence.then(async () => {
-    const snapshot = JSON.stringify({ ...state, variables: variables ?? state.variables }, null, 2);
+    const snapshot = JSON.stringify({ ...state, variables: variables ?? state.variables, counters: { ...state.counters, ...counters } }, null, 2);
     await mkdir(DATA_DIR, { recursive: true });
     const temp = `${STATE_FILE}.${randomUUID()}.tmp`;
     try {
@@ -114,7 +114,10 @@ function persist(variables?: Variable[]) {
       await rm(temp, { force: true }).catch(() => {});
       throw error;
     }
+    // Variable mutations are serialized; publish their draft only after replacement.
+    // Merge only their counters: document registration may allocate IDs during I/O.
     if (variables) state.variables = variables;
+    if (counters) Object.assign(state.counters, counters);
   });
   persistence = write.then(() => { pendingStateWrites--; }, () => { pendingStateWrites--; });
   return write;
@@ -474,8 +477,9 @@ defineTool("wps_create_variable", {
   try {
     assertReadOnlyCode(code);
     documentById(sourceDocumentId);
-    const variableId = nextId("var");
-    const transformId = nextId("transform");
+    const counters = { var: state.counters.var ?? 0, transform: state.counters.transform ?? 0 };
+    const variableId = nextId("var", counters);
+    const transformId = nextId("transform", counters);
     const variable: Variable = {
       variableId,
       name: variableName,
@@ -483,8 +487,7 @@ defineTool("wps_create_variable", {
       transform: { transformId, sourceDocumentId, code, ...(sourceRef ? { sourceRef } : {}) },
       renders: [],
     };
-    state.variables.push(variable);
-    await persist();
+    await persist([...state.variables, variable], counters);
     return toolResult({ success: true, variableId, transformId });
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
 });
@@ -492,7 +495,7 @@ defineTool("wps_create_variable", {
 defineTool("wps_update_variable", {
   title: "Update Variable",
   description: "Update an existing Variable's name, description, source, or read-only Transform code without changing IDs or Render bindings. Omitted fields stay unchanged; null clears description/sourceRef. Code/source changes invalidate the value: run wps_run_transform before wps_run_render. Saves only, never executes WPS code.",
-  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),
     variableName: z.string().min(1).optional(),
@@ -550,9 +553,11 @@ defineTool("wps_create_render", {
     const variable = variableById(variableId);
     const doc = documentById(targetDocumentId);
     if (targetRef && !parseDocumentRefs(doc.type, targetRef).length) throw new ToolError("INVALID_REQUEST", "targetRef 必须是明确位置：表格 Summary!A1:B4；演示 SlideID:257!ShapeID:4；文字 Heading:本周概况!Paragraph 或 Table:1");
-    const renderId = nextId("render");
-    variable.renders.push({ renderId, targetDocumentId, ...(targetRef ? { targetRef } : {}), ...(description ? { description } : {}), code });
-    await persist();
+    const counters = { render: state.counters.render ?? 0 };
+    const renderId = nextId("render", counters);
+    const render = { renderId, targetDocumentId, ...(targetRef ? { targetRef } : {}), ...(description ? { description } : {}), code };
+    const updated = { ...variable, renders: [...variable.renders, render] };
+    await persist(state.variables.map(item => item === variable ? updated : item), counters);
     return toolResult({ success: true, renderId });
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
 });
@@ -560,7 +565,7 @@ defineTool("wps_create_render", {
 defineTool("wps_update_render", {
   title: "Update Render rule",
   description: "Update one existing Render by variableId and renderId, preserving its ID and other bindings. Omitted fields stay unchanged; null clears description/targetRef. targetRef identifies the destination for UI navigation: Sheet!A1:B4, SlideID:257!ShapeID:4, Paragraph:4, Table:1 or Heading:标题!Paragraph/!Table. Join multiple Word/PPT destinations with +. Saves only: run wps_run_render with this renderId to apply it. Existing document content is not undone or moved.",
-  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),
     renderId: z.string().min(1),
@@ -627,8 +632,8 @@ defineTool("wps_get_variable", {
 
 defineTool("wps_run_transform", {
   title: "Run Variable Transform",
-  description: "Run a Variable's read-only Transform in its source document and save the JSON value.",
-  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  description: "Run a Variable's Transform with read-only access to its source WPS document, then overwrite and persist the Variable's JSON value, hasValue and Transform lastRun. Does not modify WPS documents.",
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   inputSchema: { variableId: z.string().min(1) },
 }, async ({ variableId }) => {
   try {
@@ -636,10 +641,9 @@ defineTool("wps_run_transform", {
     const doc = documentById(variable.transform.sourceDocumentId);
     const started = Date.now();
     const value = await executeWps(doc, variable.transform.code, undefined, "query");
-    variable.value = value;
-    variable.hasValue = true;
-    variable.transform.lastRun = { at: new Date().toISOString(), durationMs: Date.now() - started };
-    await persist();
+    const updated = { ...variable, value, hasValue: true,
+      transform: { ...variable.transform, lastRun: { at: new Date().toISOString(), durationMs: Date.now() - started } } };
+    await persist(state.variables.map(item => item === variable ? updated : item));
     return toolResult({ success: true, variableId, value });
   } catch (error) { return toolError(error, "TRANSFORM_EXECUTION_ERROR"); }
 });

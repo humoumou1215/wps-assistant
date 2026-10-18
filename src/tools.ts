@@ -11,7 +11,7 @@ import { boundedSelection } from "./selection.js";
 import { analyzeReadOnlyCode, formatReadOnlyViolations, MAX_CODE_LENGTH } from "./readonly-guard.js";
 import { DATA_DIR } from "./paths.js";
 import { logger } from "./logger.js";
-import { parseDocumentRefs, renderLocations } from "./location.js";
+import { MAX_DOCUMENT_LOCATIONS, MAX_DOCUMENT_REF_LENGTH, parseDocumentRefs, renderLocations } from "./location.js";
 
 const sourceRoot = new URL("../", import.meta.url);
 const openFile = promisify(execFile);
@@ -19,6 +19,10 @@ const APP_DIR = resolve(fileURLToPath(existsSync(new URL("package.json", sourceR
 const PORT = Number(process.env.WPS_MCP_PORT ?? "18766");
 const STATE_FILE = join(DATA_DIR, "state.json");
 const RPC_TIMEOUT_MS = 45_000;
+const renderTargetSchema = z.object({
+  targetRef: z.string().min(1).max(MAX_DOCUMENT_REF_LENGTH),
+  description: z.string().max(1000).nullable().optional(),
+}).strict();
 
 type DocType = "spreadsheet" | "presentation" | "writer";
 type DocumentRecord = {
@@ -534,7 +538,7 @@ defineTool("wps_create_render", {
   inputSchema: {
     variableId: z.string().min(1),
     targetDocumentId: z.string().min(1),
-    targetRef: z.string().min(1).max(1000).optional(),
+    targetRef: z.string().min(1).max(MAX_DOCUMENT_REF_LENGTH).optional(),
     description: z.string().optional(),
     code: z.string().min(1).max(MAX_CODE_LENGTH),
   },
@@ -558,7 +562,7 @@ defineTool("wps_update_render", {
     variableId: z.string().min(1),
     renderId: z.string().min(1),
     targetDocumentId: z.string().min(1).optional(),
-    targetRef: z.string().min(1).max(1000).nullable().optional(),
+    targetRef: z.string().min(1).max(MAX_DOCUMENT_REF_LENGTH).nullable().optional(),
     description: z.string().nullable().optional(),
     code: z.string().min(1).max(MAX_CODE_LENGTH).optional(),
   },
@@ -639,12 +643,12 @@ defineTool("wps_run_transform", {
 
 defineTool("wps_run_render", {
   title: "Run Variable Render",
-  description: "Run one Render or all Renders for a Variable, allowing the saved code to modify target WPS documents.",
+  description: `Run one Render or all Renders for a Variable, allowing the saved code to modify target WPS documents. Code may return { renderTarget: { targetRef, description? }, ... } to persist its current destinations after writing (up to ${MAX_DOCUMENT_LOCATIONS} locations / ${MAX_DOCUMENT_REF_LENGTH} characters). Omit renderTarget to preserve existing metadata. Invalid metadata fails that Render after possible document writes; no rollback.`,
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   inputSchema: { variableId: z.string().min(1), renderId: z.string().optional() },
 }, async ({ variableId, renderId }) => {
   try {
-    const variable = variableById(variableId);
+    let variable = variableById(variableId);
     if (!variable.hasValue) throw new ToolError("INVALID_REQUEST", "Variable has no value; run wps_run_transform first");
     const selected = renderId ? variable.renders.filter((r) => r.renderId === renderId) : variable.renders;
     if (renderId && selected.length === 0) throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
@@ -654,9 +658,22 @@ defineTool("wps_run_render", {
         const doc = documentById(render.targetDocumentId);
         const started = Date.now();
         const result = await executeWps(doc, render.code, { id: variable.variableId, name: variable.name, description: variable.description, value: variable.value }, "render");
-        render.lastRun = { at: new Date().toISOString(), durationMs: Date.now() - started };
-        await persist();
-        renders.push({ renderId: render.renderId, targetDocumentId: render.targetDocumentId, targetDocumentName: doc.name, description: render.description, lastRun: render.lastRun, success: true, result });
+        const updated = { ...render, lastRun: { at: new Date().toISOString(), durationMs: Date.now() - started } };
+        if (result && typeof result === "object" && Object.hasOwn(result, "renderTarget")) {
+          const parsed = renderTargetSchema.safeParse((result as { renderTarget: unknown }).renderTarget);
+          if (!parsed.success || !parseDocumentRefs(doc.type, parsed.data.targetRef).length) {
+            throw new ToolError("RENDER_EXECUTION_ERROR", `Render 返回的 renderTarget 无效；目标位置须匹配文档类型，最多 ${MAX_DOCUMENT_LOCATIONS} 处 / ${MAX_DOCUMENT_REF_LENGTH} 字符，description 须为最多 1000 字符的文本或 null。文档可能已写入，原目标定义保持不变，请核对文档后修正规则。`);
+          }
+          updated.targetRef = parsed.data.targetRef;
+          if (parsed.data.description === null) delete updated.description;
+          else if (parsed.data.description !== undefined) updated.description = parsed.data.description;
+        }
+        const updatedVariable = { ...variable, renders: variable.renders.map(item => item.renderId === render.renderId ? updated : item) };
+        // Publish metadata and lastRun only after the atomic state write succeeds.
+        await persist(state.variables.map(item => item.variableId === variable.variableId ? updatedVariable : item));
+        variable = updatedVariable;
+        renders.push({ renderId: updated.renderId, targetDocumentId: updated.targetDocumentId, targetDocumentName: doc.name,
+          ...(updated.targetRef ? { targetRef: updated.targetRef } : {}), description: updated.description, lastRun: updated.lastRun, success: true, result });
       } catch (error) { renders.push({ renderId: render.renderId, success: false, error: asToolError(error, "RENDER_EXECUTION_ERROR") }); }
     }
     const success = renders.every((r) => r.success);

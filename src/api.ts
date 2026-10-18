@@ -7,6 +7,7 @@ import { logger } from "./logger.js";
 import { resolveSelectionReference } from "./references.js";
 import { DATA_DIR } from "./paths.js";
 import { APP_VERSION } from "./version.js";
+import { MAX_DOCUMENT_LOCATIONS } from "./location.js";
 import { desktopManaged, desktopInstance, desktopAuthorized, isDesktopBusy, requestDesktopStop, desktopParentPid } from "./desktop-control.js";
 
 const pluginVersion = APP_VERSION;
@@ -107,7 +108,7 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       json(res, 200, { ref, hasValue: true, value: addresses.length === 1 ? value.result[0] : addresses.map((area: { address: string }, i: number) => ({ address: area.address, value: value.result[i] })), address: addresses.map((area: { address: string }) => area.address).join(","), truncated: regions.length > 6 || addresses.some((area: { truncated: boolean }) => area.truncated) }); return;
     }
     if (path === "/api/navigate" && req.method === "POST") {
-      const { variableId, renderId, locationIndex } = z.object({ variableId: z.string().min(1), renderId: z.string().min(1).optional(), locationIndex: z.number().int().min(0).max(19).optional() }).strict().parse(await readJson(req));
+      const { variableId, renderId, locationIndex } = z.object({ variableId: z.string().min(1), renderId: z.string().min(1).optional(), locationIndex: z.number().int().min(0).max(MAX_DOCUMENT_LOCATIONS - 1).optional() }).strict().parse(await readJson(req));
       try { json(res, 200, await navigateVariableLocation(variableId, renderId, locationIndex)); }
       catch (error) {
         const detail = asToolError(error);

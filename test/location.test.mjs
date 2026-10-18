@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseSpreadsheetRef, renderLocation } from '../dist/src/location.js';
+import { MAX_DOCUMENT_LOCATIONS, MAX_DOCUMENT_REF_LENGTH, parseDocumentRefs, parseSpreadsheetRef, renderLocation } from '../dist/src/location.js';
 
 test('locations support quoted names, absolute addresses and bounded ranges', () => {
   assert.deepEqual(parseSpreadsheetRef("'Team''s Sales'!$a$1:$D$4"), { sheet: "Team's Sales", address: 'A1:D4', ref: "'Team''s Sales'!A1:D4" });
@@ -33,4 +33,14 @@ test('PPT and Word references preserve explicit IDs and split each destination',
   for (const [type, ref] of [['writer', 'Paragraph:0'], ['writer', 'Table:99999999999999'], ['writer', 'Range:20:1'], ['writer', 'Heading:'], ['writer', 'Paragraph:1+invalid'], ['presentation', 'Slide:0'], ['presentation', 'SlideID:1!ShapeID:-1'], ['presentation', 'Slide:1!ShapeID:2.5'], ['presentation', '第2页 任意描述'], ['presentation', 'SlideID:1!ShapeID:2+'], ['writer', 'Slide:1'], ['presentation', 'Paragraph:1']]) assert.equal(parseDocumentRefs(type, ref).length, 0, ref);
   assert.equal(renderLocations({ targetRef: 'invalid', description: '第2页' }, 'presentation').length, 0);
   assert.equal(renderLocations({ description: '重写本周概况段落与表格' }, 'writer').length, 0);
+});
+
+test('large destination groups have consistent bounds including legacy references that expand', () => {
+  const refs = Array.from({ length: MAX_DOCUMENT_LOCATIONS }, (_, i) => `SlideID:${257 + i}!ShapeID:4`);
+  assert.equal(parseDocumentRefs('presentation', refs.join('+')).length, MAX_DOCUMENT_LOCATIONS);
+  assert.equal(parseDocumentRefs('presentation', [...refs, 'SlideID:999!ShapeID:4'].join('+')).length, 0);
+  assert.equal(parseDocumentRefs('writer', Array.from({ length: MAX_DOCUMENT_LOCATIONS }, (_, i) => `Paragraph:${i + 1}`).join('+')).length, MAX_DOCUMENT_LOCATIONS);
+  const expanded = Array.from({ length: 101 }, (_, i) => `第${i + 1}页 甲与乙文本框`).join('+');
+  assert.equal(parseDocumentRefs('presentation', expanded).length, 0);
+  assert.equal(parseDocumentRefs('presentation', 'Slide:1' + ' '.repeat(MAX_DOCUMENT_REF_LENGTH)).length, 0);
 });

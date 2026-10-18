@@ -9,6 +9,9 @@ process.env.WPS_MCP_DATA_DIR = dir;
 const { BUNDLED_SKILLS_DIR, INSTALLED_SKILLS_DIR, installBundledSkills, listSkillReferences, readSkillContent, readSkillFile, createSkillReadTool } = await import('../dist/src/agent-skills.js');
 test.after(() => rm(dir, { recursive: true, force: true }));
 
+// 技能文本随平台检出可能是 LF 或 CRLF；按行核对时统一行尾，避免与内容无关的平台差异。
+const normalizeEol = content => content.replace(/\r\n/g, '\n');
+
 test('bundled skills and references install, refresh, and preserve additional installed skills', async () => {
   const result = await installBundledSkills();
   const skill = result.skills.find(s => s.name === 'wps-api');
@@ -63,23 +66,30 @@ test('bundled WPS workflow is self-contained and its reference links are readabl
 
 test('task routes read complete sections without loading unrelated report branches', async () => {
   const { skills } = await installBundledSkills();
-  const main = (await readSkillContent(skills, 'wps-api/SKILL.md')).content;
+  const main = normalizeEol((await readSkillContent(skills, 'wps-api/SKILL.md')).content);
   const routes = [...main.matchAll(/^\| ([^|]+) \| .*?\]\((references\/[^)#]+)(?:#[^)]*)?\).*? \| (\d+) \| (\d+) \|$/gm)];
-  assert.ok(routes.length > 0);
-  const report = (await readSkillContent(skills, 'wps-api/references/report-sync.md')).content.split('\n');
+  assert.equal(routes.length, 11, 'every route in the entry table is parsed');
+  const sources = new Map();
+  const sourceOf = async path => {
+    if (!sources.has(path)) sources.set(path, normalizeEol((await readSkillContent(skills, 'wps-api/' + path)).content).split('\n'));
+    return sources.get(path);
+  };
+  const report = await sourceOf('references/report-sync.md');
   const reportRoutes = [];
   for (const [, trigger, path, start, count] of routes) {
     const offset = Number(start), limit = Number(count);
-    const page = await readSkillFile(skills, 'wps-api/' + path, offset, limit);
-    assert.equal(page.content.split('\n').length, limit, trigger);
-    assert.equal((page.content.match(/^```/gm) || []).length % 2, 0, 'route must not cut off a code example: ' + trigger);
+    const page = normalizeEol((await readSkillFile(skills, 'wps-api/' + path, offset, limit)).content);
+    assert.equal(page.split('\n').length, limit, trigger);
+    assert.equal((page.match(/^```/gm) || []).length % 2, 0, 'route must not cut off a code example: ' + trigger);
+    const rest = (await sourceOf(path)).slice(offset + limit - 1).find(line => line.trim());
+    assert.ok(rest === undefined || /^(#{1,3} |<a id=)/.test(rest), 'route must stop on a section boundary, not mid-paragraph: ' + trigger);
     if (path === 'references/report-sync.md') {
       const nextHeading = report.findIndex((line, index) => index >= offset + limit - 1 && /^## /.test(line));
-      const trailing = report.slice(offset + limit - 1, nextHeading === -1 ? undefined : nextHeading).filter(line => line && !line.startsWith('<a '));
+      const trailing = report.slice(offset + limit - 1, nextHeading === -1 ? undefined : nextHeading).filter(line => line.trim() && !line.startsWith('<a '));
       assert.deepEqual(trailing, [], 'route must include its entire section: ' + trigger);
-      reportRoutes.push(page.content);
+      reportRoutes.push(page);
     } else if (/spreadsheet|presentation|writer/.test(path)) {
-      assert.doesNotMatch(page.content, /^\| (?:common|et|wpp|wps) \|/m, 'initial host route excludes historical probe tables');
+      assert.doesNotMatch(page, /^\| (?:common|et|wpp|wps) \|/m, 'initial host route excludes historical probe tables');
     }
   }
   assert.equal(reportRoutes.length, 4);
@@ -89,12 +99,12 @@ test('task routes read complete sections without loading unrelated report branch
 
 test('API object index preserves host inventories and points to complete member tables', async () => {
   const { skills } = await installBundledSkills();
-  const catalog = (await readSkillContent(skills, 'wps-api/references/api-catalog.md')).content;
+  const catalog = normalizeEol((await readSkillContent(skills, 'wps-api/references/api-catalog.md')).content);
   const header = catalog.slice(0, catalog.indexOf('\n## '));
   const indexed = [...header.matchAll(/^\| ([^|]+) \| ([^|]+) \| (\d+) \| (\d+) \|$/gm)];
   const inventories = new Map();
   for (const [host, file] of [['Presentation / WPP', 'presentation'], ['Spreadsheet / ET', 'spreadsheet'], ['Writer / WPS', 'writer']]) {
-    const guide = (await readSkillContent(skills, `wps-api/references/${file}.md`)).content;
+    const guide = normalizeEol((await readSkillContent(skills, `wps-api/references/${file}.md`)).content);
     for (const match of guide.matchAll(/^### `([^`]+)` \((\d+) members\)\n/gm)) {
       const body = guide.slice(match.index + match[0].length).split(/\n#{1,3} /)[0];
       const members = [...body.matchAll(/^\| ([^|]+) \| ([^|]+) \|/gm)].slice(2).map(row => [row[1].trim(), row[2].trim()]);
@@ -107,9 +117,9 @@ test('API object index preserves host inventories and points to complete member 
   let total = 0;
   for (const [, host, object, start, count] of indexed) {
     const key = host.trim() + ' · ' + object.trim();
-    const page = await readSkillFile(skills, 'wps-api/references/api-catalog.md', Number(start), Number(count));
-    assert.equal(page.content.split('\n')[0], '## ' + key);
-    const rows = [...page.content.matchAll(/^\| ([^|]+) \| ([^|]+) \| ([^|]+) \|$/gm)].slice(2);
+    const page = normalizeEol((await readSkillFile(skills, 'wps-api/references/api-catalog.md', Number(start), Number(count))).content);
+    assert.equal(page.split('\n')[0], '## ' + key);
+    const rows = [...page.matchAll(/^\| ([^|]+) \| ([^|]+) \| ([^|]+) \|$/gm)].slice(2);
     const members = rows.map(row => [row[1].trim(), row[2].trim()]);
     assert.deepEqual(members.sort(), inventories.get(key)?.toSorted(), key);
     assert.ok(rows.every(row => ['枚举', '同名探测'].includes(row[3].trim())));

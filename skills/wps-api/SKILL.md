@@ -1,6 +1,6 @@
 ---
 name: wps-api
-description: 读取或修改已连接的 WPS 表格、演示和文字文档，创建、纠正及执行数据绑定规则。
+description: 读取或修改已连接的 WPS 表格、演示和文字文档，创建、纠正及执行 Variable / Transform / Render 数据绑定规则，把源数据同步到报告模板。
 ---
 
 # WPS API skill
@@ -13,17 +13,17 @@ WPS JS API 操作文档，WPS 工具管理文档身份和规则。内嵌助手�
 
 | 触发条件 | 资料 | offset | limit |
 | --- | --- | ---: | ---: |
-| 表格取数、计算或写入 | [表格](references/spreadsheet.md) | 1 | 30 |
+| 表格取数、计算或写入 | [表格](references/spreadsheet.md) | 1 | 29 |
 | PPT 文本、表格或图表 | [演示](references/presentation.md) | 1 | 30 |
 | Writer 段落、表格或书签 | [文字](references/writer.md) | 1 | 23 |
 | 用户引用选区 | [选区](references/common.md) | 1 | 11 |
-| 通用枚举、事件或依赖选区的宿主命令 | [宿主与事件](references/common.md#宿主与事件) | 12 | 10 |
-| 绑定报告模板或调整表格行列 | [报告通用流程](references/report-sync.md) | 1 | 35 |
-| 原生图表写入 | [图表](references/report-sync.md#图表)；另读报告通用流程 | 37 | 3 |
-| 目标对象增删或替换 | [动态目标](references/report-sync.md#动态目标的返回约定) | 41 | 20 |
-| PPT 表格写入，包括首次写入 | [PPT 续表](references/report-sync.md#ppt-table-continuation)；另读报告通用流程和动态目标 | 62 | 13 |
+| 通用枚举、事件或依赖选区的宿主命令 | [宿主与事件](references/common.md#宿主与事件) | 12 | 11 |
+| 绑定报告模板或调整表格行列 | [报告通用流程](references/report-sync.md) | 1 | 34 |
+| 原生图表写入 | [图表](references/report-sync.md#图表)；另读报告通用流程 | 36 | 3 |
+| 目标对象增删或替换 | [动态目标](references/report-sync.md#动态目标的返回约定) | 40 | 20 |
+| PPT 表格写入，包括首次写入 | [PPT 续表](references/report-sync.md#ppt-table-continuation)；另读报告通用流程和动态目标 | 61 | 13 |
 | 平台差异、兼容性结论 | [验证范围](references/validation.md)，再按需读取其中链接 | 1 | 20 |
-| 缺少具体 API 成员 | [成员索引](references/api-catalog.md)，再按对象所在行范围读取 | 1 | 50 |
+| 缺少具体 API 成员 | [成员索引](references/api-catalog.md)，再按对象所在行范围读取 | 1 | 39 |
 
 ## 执行与完成标准
 

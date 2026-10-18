@@ -51,7 +51,7 @@ test('bundled WPS workflow is self-contained and its reference links are readabl
   const skill = skills.find(s => s.name === 'wps-api');
   const main = (await readSkillContent(skills, skill.filePath)).content;
   assert.doesNotMatch(main, /wps-mcp-binding|check-readonly\.mjs/);
-  assert.match(main, /automatically apply the guard/);
+  assert.match(main, /自动校验只读代码/);
   assert.match(main, /wpsDocument/);
   const links = [...main.matchAll(/\]\(([^)]+\.md)(?:#[^)]*)?\)/g)].map(m => m[1]);
   assert.ok(links.length > 0);
@@ -59,6 +59,63 @@ test('bundled WPS workflow is self-contained and its reference links are readabl
     const reference = await readSkillContent(skills, resolve(dirname(skill.filePath), link));
     assert.ok(reference.content.length > 0, link);
   }
+});
+
+test('task routes read complete sections without loading unrelated report branches', async () => {
+  const { skills } = await installBundledSkills();
+  const main = (await readSkillContent(skills, 'wps-api/SKILL.md')).content;
+  const routes = [...main.matchAll(/^\| ([^|]+) \| .*?\]\((references\/[^)#]+)(?:#[^)]*)?\).*? \| (\d+) \| (\d+) \|$/gm)];
+  assert.ok(routes.length > 0);
+  const report = (await readSkillContent(skills, 'wps-api/references/report-sync.md')).content.split('\n');
+  const reportRoutes = [];
+  for (const [, trigger, path, start, count] of routes) {
+    const offset = Number(start), limit = Number(count);
+    const page = await readSkillFile(skills, 'wps-api/' + path, offset, limit);
+    assert.equal(page.content.split('\n').length, limit, trigger);
+    assert.equal((page.content.match(/^```/gm) || []).length % 2, 0, 'route must not cut off a code example: ' + trigger);
+    if (path === 'references/report-sync.md') {
+      const nextHeading = report.findIndex((line, index) => index >= offset + limit - 1 && /^## /.test(line));
+      const trailing = report.slice(offset + limit - 1, nextHeading === -1 ? undefined : nextHeading).filter(line => line && !line.startsWith('<a '));
+      assert.deepEqual(trailing, [], 'route must include its entire section: ' + trigger);
+      reportRoutes.push(page.content);
+    } else if (/spreadsheet|presentation|writer/.test(path)) {
+      assert.doesNotMatch(page.content, /^\| (?:common|et|wpp|wps) \|/m, 'initial host route excludes historical probe tables');
+    }
+  }
+  assert.equal(reportRoutes.length, 4);
+  assert.doesNotMatch(reportRoutes[0], /^## (?:图表|动态目标|PPT 表格)/m, 'general reports do not load specialized branches');
+  assert.deepEqual(reportRoutes.slice(1).map(content => content.match(/^## .+/m)?.[0]), ['## 图表', '## 动态目标的返回约定', '## PPT 表格：每次重写都维护续表']);
+});
+
+test('API object index preserves host inventories and points to complete member tables', async () => {
+  const { skills } = await installBundledSkills();
+  const catalog = (await readSkillContent(skills, 'wps-api/references/api-catalog.md')).content;
+  const header = catalog.slice(0, catalog.indexOf('\n## '));
+  const indexed = [...header.matchAll(/^\| ([^|]+) \| ([^|]+) \| (\d+) \| (\d+) \|$/gm)];
+  const inventories = new Map();
+  for (const [host, file] of [['Presentation / WPP', 'presentation'], ['Spreadsheet / ET', 'spreadsheet'], ['Writer / WPS', 'writer']]) {
+    const guide = (await readSkillContent(skills, `wps-api/references/${file}.md`)).content;
+    for (const match of guide.matchAll(/^### `([^`]+)` \((\d+) members\)\n/gm)) {
+      const body = guide.slice(match.index + match[0].length).split(/\n#{1,3} /)[0];
+      const members = [...body.matchAll(/^\| ([^|]+) \| ([^|]+) \|/gm)].slice(2).map(row => [row[1].trim(), row[2].trim()]);
+      assert.equal(members.length, Number(match[2]));
+      inventories.set(host + ' · ' + match[1], members);
+    }
+  }
+  assert.equal(indexed.length, inventories.size);
+  assert.ok(header.split('\n').length <= 50, 'the initial catalog read exposes every object index');
+  let total = 0;
+  for (const [, host, object, start, count] of indexed) {
+    const key = host.trim() + ' · ' + object.trim();
+    const page = await readSkillFile(skills, 'wps-api/references/api-catalog.md', Number(start), Number(count));
+    assert.equal(page.content.split('\n')[0], '## ' + key);
+    const rows = [...page.content.matchAll(/^\| ([^|]+) \| ([^|]+) \| ([^|]+) \|$/gm)].slice(2);
+    const members = rows.map(row => [row[1].trim(), row[2].trim()]);
+    assert.deepEqual(members.sort(), inventories.get(key)?.toSorted(), key);
+    assert.ok(rows.every(row => ['枚举', '同名探测'].includes(row[3].trim())));
+    total += rows.length;
+  }
+  assert.equal(total, 2598);
 });
 
 test('skill references list every shipped file except the entry point and skip escaping links', async () => {

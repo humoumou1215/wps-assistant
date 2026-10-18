@@ -123,7 +123,7 @@ async function createSession(version: number) {
   const loader = await initializeAgentResources();
   const customTools: ToolDefinition[] = toolDefinitions.map(tool => ({
     name: tool.name, label: tool.config.title, description: tool.config.description,
-    parameters: z.toJSONSchema(z.object(tool.config.inputSchema)) as any,
+    parameters: z.toJSONSchema(tool.config.inputSchema) as any,
     executionMode: "sequential",
     execute: (_id, args, signal) => logger.withContext({ modelToolCallId: _id }, async () => {
       if (signal?.aborted) throw new Error("已停止");
@@ -141,6 +141,17 @@ async function createSession(version: number) {
   const manager = await chatSessionManager();
   settingsManager.setCompactionEnabled(autoCompactionEnabled());
   const { session: created } = await createAgentSession({ cwd: agentDir, agentDir, modelRuntime: runtime, model, thinkingLevel: cfg.thinkingLevel, noTools: "builtin", customTools, resourceLoader: loader, sessionManager: manager, settingsManager });
+  // Pi normalizes optional nulls and coerces types before custom tool execution.
+  // Validate the original arguments too, so an explicit null cannot become "run all".
+  const beforeToolCall = created.agent.beforeToolCall;
+  created.agent.beforeToolCall = async (context, signal) => {
+    const tool = toolDefinitions.find(tool => tool.name === context.toolCall.name);
+    if (tool) {
+      const parsed = tool.config.inputSchema.safeParse(context.toolCall.arguments);
+      if (!parsed.success) return { block: true, reason: JSON.stringify({ success: false, error: { code: "INVALID_REQUEST", message: parsed.error.message } }) };
+    }
+    return beforeToolCall?.(context, signal);
+  };
   // Translate historical call names in model context without rewriting saved conversation records.
   const transformContext = created.agent.transformContext;
   created.agent.transformContext = async (messages, signal) => normalizeToolMessages(transformContext ? await transformContext(messages, signal) : messages);

@@ -126,8 +126,8 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       return;
     }
     if (path === "/api/actions" && req.method === "POST") {
-      const { op, variableId, renderId } = z.object({ op: z.enum(["transform", "render"]), variableId: z.string().min(1), renderId: z.string().optional() }).parse(await readJson(req));
-      const result = await callTool(op === "transform" ? "wps_run_transform" : "wps_run_render", { variableId, renderId });
+      const { op, variableId, renderId } = z.object({ op: z.enum(["transform", "render"]), variableId: z.string().min(1), renderId: z.string().min(1).optional() }).strict().parse(await readJson(req));
+      const result = await callTool(op === "transform" ? "wps_run_transform" : "wps_run_render", op === "transform" ? { variableId } : { variableId, renderId });
       const value = JSON.parse(result.content[0].text);
       json(res, result.isError || value.success === false ? 422 : 200, value); return;
     }

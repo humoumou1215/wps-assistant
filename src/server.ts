@@ -9,7 +9,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { WebSocketServer } from "ws";
-import type { ZodRawShape } from "zod";
+import type { ZodObject, ZodRawShape } from "zod";
 import { APP_DIR, PORT, loadState, registerDocument, connections, documents, pending, isToolBusy, toolDefinitions, type Connection, type AddinDocument } from "./tools.js";
 import { logger } from "./logger.js";
 import { configureDesktopStop, isDesktopStopping, desktopManaged, isDesktopBusy, watchDesktopParent } from "./desktop-control.js";
@@ -17,7 +17,7 @@ import { APP_VERSION } from "./version.js";
 let activeHttpWork = 0;
 function createMcpServer() {
   const mcp = new McpServer({ name: "wps-mcp", version: APP_VERSION });
-  for (const tool of toolDefinitions) mcp.registerTool<ZodRawShape, ZodRawShape>(tool.name, tool.config, (args, extra) => tool.invoke(args, extra.signal));
+  for (const tool of toolDefinitions) mcp.registerTool<ZodRawShape, ZodObject<ZodRawShape>>(tool.name, tool.config, (args, extra) => tool.invoke(args, extra.signal));
   return mcp;
 }
 

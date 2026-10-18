@@ -393,12 +393,15 @@ export async function refreshDocument(documentId: string) {
 
 export const toolDefinitions: { name: string; config: any; invoke: (args: any, signal?: AbortSignal) => Promise<any> }[] = [];
 function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema: S; title: string; description: string; annotations: Record<string, boolean> }, handler: (args: z.infer<z.ZodObject<S>>) => Promise<any>) {
-  toolDefinitions.push({ name, config, invoke: (args, signal) => logger.withContext({ toolCallId: randomUUID() }, async () => {
+  // Share the strict object with MCP registration and the Agent's JSON Schema.
+  // A raw shape lets the MCP SDK discard unknown selection fields before invoke.
+  const inputSchema = z.object(config.inputSchema).strict();
+  toolDefinitions.push({ name, config: { ...config, inputSchema }, invoke: (args, signal) => logger.withContext({ toolCallId: randomUUID() }, async () => {
     activeToolCalls++;
     try {
     const started = Date.now();
     let parsed: z.infer<z.ZodObject<S>>;
-    try { parsed = z.object(config.inputSchema).parse(args); }
+    try { parsed = inputSchema.parse(args); }
     catch (error) { logger.warn("tool.end", { toolName: name, success: false, errorCode: "INVALID_REQUEST", durationMs: Date.now() - started }); return toolError(error, "INVALID_REQUEST"); }
     const ids = Object.fromEntries(Object.entries(parsed).filter(([key, value]) => /^(documentId|sourceDocumentId|targetDocumentId|variableId|renderId)$/.test(key) && typeof value === "string" && /^(doc|var|render)_\d+$/.test(value)));
     logger.info("tool.start", { toolName: name, ...ids });
@@ -645,13 +648,13 @@ defineTool("wps_run_render", {
   title: "Run Variable Render",
   description: `Run one Render or all Renders for a Variable, allowing the saved code to modify target WPS documents. Code may return { renderTarget: { targetRef, description? }, ... } to persist its current destinations after writing (up to ${MAX_DOCUMENT_LOCATIONS} locations / ${MAX_DOCUMENT_REF_LENGTH} characters). Omit renderTarget to preserve existing metadata. Invalid metadata fails that Render after possible document writes; no rollback.`,
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-  inputSchema: { variableId: z.string().min(1), renderId: z.string().optional() },
+  inputSchema: { variableId: z.string().min(1), renderId: z.string().min(1).optional() },
 }, async ({ variableId, renderId }) => {
   try {
     let variable = variableById(variableId);
     if (!variable.hasValue) throw new ToolError("INVALID_REQUEST", "Variable has no value; run wps_run_transform first");
-    const selected = renderId ? variable.renders.filter((r) => r.renderId === renderId) : variable.renders;
-    if (renderId && selected.length === 0) throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
+    const selected = renderId === undefined ? variable.renders : variable.renders.filter((r) => r.renderId === renderId);
+    if (renderId !== undefined && selected.length === 0) throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
     const renders = [];
     for (const render of selected) {
       try {

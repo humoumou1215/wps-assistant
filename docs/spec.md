@@ -219,6 +219,7 @@ Transform 的代码、来源文档或源区域变化会清除旧值（`hasValue=
 
 ## 4.2 参数、执行与并发边界
 
+- 所有 WPS 工具拒绝未知参数字段（包括大小写或拼写错误），不静默丢弃后执行。MCP 注册、内嵌 Agent 的参数 Schema 和共用调用入口复用同一个严格对象 Schema；无参数工具也只接受空对象。内嵌 Agent 另以同一 Schema 校验原始调用参数，避免 pi SDK 清除可选字段的 `null` 或转换类型后改变执行语义。非法参数在业务处理前失败，不下发 WPS RPC、不保存规则或执行时间；MCP 返回参数错误 `-32602`，共用调用入口返回 `INVALID_REQUEST`。
 - `code` 必须为 1–100000 字符；查询和 Transform 还须通过只读检查。查询、Transform 和 Render 的返回值必须能经 JSON 序列化，不返回 WPS/COM 宿主对象或 `undefined`。
 - `sourceRef` 可选，最长 1000 字符；创建/更新时作为来源描述保存，不按文档类型解析校验。格式无法识别时来源定位不可用，执行仍以 Transform 代码为准。
 - `targetRef` 可选，提供时须为 1–16000 字符；创建 Render 时按目标文档类型解析，更新其位置或目标文档时校验有效位置与文档类型是否匹配。通过格式校验不保证目标对象存在，定位时再由宿主检查。格式见第 27.5 节。
@@ -817,7 +818,9 @@ wps_run_transform(var_001)
 }
 ```
 
-也可以执行 Variable 的所有 Render：
+只有省略 `renderId` 才执行 Variable 的所有 Render；提供时必须是非空字符串，空字符串、`null` 或拼错的字段名（如 `renderID`）均作为参数错误拒绝，不回退到全部执行。非空但不存在的 ID 返回 `RENDER_NOT_FOUND`，不执行任何 Render。变量页 `/api/actions` 同样拒绝空 ID 和未知字段，非法参数返回 HTTP 400。
+
+执行全部 Render 的请求：
 
 ```json
 {

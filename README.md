@@ -37,13 +37,13 @@ WPS 任务窗格 → /api/chat → 内嵌 pi Agent ──┐
 
 要求预先安装支持 JS Add-in 的 WPS Office。macOS 解压后运行 `WPS Assistant.app`；Windows 保留完整解压文件夹并运行 `wps-assistant.exe`。包内自带 Node 与生产依赖，无需预装 Node、npm 或 Rust。
 
-首次启动前完全退出 WPS（包括托盘进程）。程序注册 ET / WPP / Writer Add-in 并启动桥接服务，随后重新打开 WPS，在 **WPS MCP** 选项卡打开「助手面板」。在「设置」配置模型、测试连接并保存；已有规则的重算/重写无需模型。
+首次启动前关闭 WPS 中已打开的文档（常驻的托盘与加载项辅助进程不影响注册）。程序注册 ET / WPP / Writer Add-in 并启动桥接服务，随后重新打开 WPS，在 **WPS MCP** 选项卡打开「助手面板」。在「设置」配置模型、测试连接并保存；已有规则的重算/重写无需模型。
 
 托盘提供助手、变量、模型设置、MCP 调试/配置引导、服务启停、日志和注册修复入口。隔离网络中本地服务与规则可以运行，需要 AI 时模型端点仍须可达。系统要求、升级与签名边界见 [SPEC 免安装桌面程序](docs/spec.md#portable-desktop)。
 
 ## 源码开发部署
 
-要求 Node.js **22.19.0 或更高版本**，以及支持 JS Add-in 的 WPS Office。完全退出 WPS 后，在仓库根目录执行：
+要求 Node.js **22.19.0 或更高版本**，以及支持 JS Add-in 的 WPS Office。关闭所有 WPS 文档后，在仓库根目录执行：
 
 ```bash
 # macOS

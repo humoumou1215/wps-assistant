@@ -14,9 +14,8 @@ for tool in node npm launchctl plutil lsof curl; do command -v "$tool" >/dev/nul
 NODE="$(command -v node)"
 node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (major < 22 || (major === 22 && minor < 19)) throw new Error("Node.js 22.19.0 or newer is required");'
 [[ "$DEPLOY_PORT" =~ ^[0-9]+$ && "$DEPLOY_PORT" -ge 1025 && "$DEPLOY_PORT" -le 65535 ]] || { echo "Invalid WPS_MCP_PORT." >&2; exit 2; }
-for proc in wpsoffice promecefpluginhost; do
-  if pgrep -x "$proc" >/dev/null 2>&1; then echo "Fully quit WPS Office before deployment (found $proc)." >&2; exit 2; fi
-done
+# 只有 Writer 文档宿主会重写 jsaddons/publish.xml；常驻的 CEF/加载项宿主不阻塞部署。
+if pgrep -x wpsoffice >/dev/null 2>&1; then echo "Close every WPS document before deployment (found wpsoffice)." >&2; exit 2; fi
 # Only restart this checkout's existing service, never another listener or an active conversation.
 if launchctl print "$SERVICE" >/dev/null 2>&1; then
   plutil -convert json -o - "$PLIST" | node -e 'const fs = require("node:fs"); const p = JSON.parse(fs.readFileSync(0, "utf8")); if (p.ProgramArguments?.[1] !== process.argv[1] || p.EnvironmentVariables?.WPS_MCP_DATA_DIR !== process.argv[2]) throw new Error("Existing service uses another checkout or data directory");' "$ROOT/dist/src/server.js" "$DEPLOY_DATA_DIR"

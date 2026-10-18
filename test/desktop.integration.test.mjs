@@ -95,8 +95,9 @@ test('portable runtime refuses foreign listeners and stale or altered ownership,
   }
 });
 
-// 注册与移除加载项都要求完全退出 WPS。控制程序把这一情形标记为 wps-running，托盘据此弹确认框
-// 并代用户关闭 WPS；这里只锁定该标记与「WPS 未运行」时的结果，绝不结束构建机器上真实运行的 WPS。
+// 注册与移除加载项都要求先关闭已打开的文档。控制程序把这一情形标记为 wps-running，托盘据此弹确认框
+// 并代用户关闭文档；常驻的加载项辅助宿主不阻塞。这里只锁定该标记、辅助宿主与「WPS 未运行」时的结果，
+// 绝不结束构建机器上真实运行的 WPS。
 test('add-in repair and removal report a running WPS so the tray can offer to close it', { timeout: 60000 }, async () => {
   const data = await mkdtemp(join(tmpdir(), 'wps-register-'));
   const probe = createServer(); await new Promise(r => probe.listen(0, '127.0.0.1', r));
@@ -110,12 +111,13 @@ test('add-in repair and removal report a running WPS so the tray can offer to cl
     import { promisify } from 'node:util';
     const fake = () => { throw new Error('Unexpected callback'); };
     fake[promisify.custom] = async (file) => {
-      const running = process.argv[2] === 'running';
+      const mode = process.argv[2]; // running | background | stopped
       if (file === '/usr/bin/pgrep') {
-        if (!running) throw Object.assign(new Error('No process'), { code: 1 });
+        if (mode !== 'running') throw Object.assign(new Error('No process'), { code: 1 });
         return { stdout: '123\\n' };
       }
-      if (file === 'powershell.exe') return { stdout: running ? '1' : '0' };
+      // 只有文档宿主会阻塞注册；background 只留下常驻的加载项辅助宿主。
+      if (file === 'powershell.exe') return { stdout: JSON.stringify({ wps: mode === 'running' ? 1 : 0, et: 0, wpp: 0, backgrounds: mode === 'stopped' ? 0 : 2 }) };
       throw new Error('Unexpected process command: ' + file);
     };
     childProcess.execFile = fake; syncBuiltinESMExports();
@@ -123,8 +125,8 @@ test('add-in repair and removal report a running WPS so the tray can offer to cl
     try { console.log(JSON.stringify({ ok: true, message: await desktopCommand(process.argv[1]) })); }
     catch (error) { console.log(JSON.stringify({ ok: false, message: error.message, reason: error.reason })); }
   `;
-  const command = (action, running = false) => new Promise((resolveCommand, reject) => {
-    const child = spawn(process.execPath, ['--input-type=module', '-e', script, action, running ? 'running' : 'stopped'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  const command = (action, mode = 'stopped') => new Promise((resolveCommand, reject) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', script, action, mode], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     let output = '', error = ''; child.stdout.on('data', b => { output += b; }); child.stderr.on('data', b => { error += b; });
     child.once('error', reject); child.once('exit', () => { try { resolveCommand(JSON.parse(output)); } catch { reject(new Error(error || output)); } });
   });
@@ -139,11 +141,13 @@ test('add-in repair and removal report a running WPS so the tray can offer to cl
       return;
     }
     for (const action of ['register', 'unregister']) {
-      const registered = await command(action, true);
+      const registered = await command(action, 'running');
       assert.equal(registered.reason, 'wps-running', registered.message);
-      assert.match(registered.message, /完全退出 WPS/);
+      assert.match(registered.message, /已打开的/);
       await assert.rejects(readFile(join(data, 'desktop-registration.json')), { code: 'ENOENT' });
     }
+    // 常驻的加载项辅助宿主（-Entry=EntryPoint）不阻塞注册，否则 WPS 留着后台就没法注册。
+    for (const action of ['register', 'unregister']) assert.equal((await command(action, 'background')).ok, true);
     const registered = await command('register'); assert.equal(registered.ok, true, registered.message);
     assert.equal((await command('close-wps')).message, 'WPS 未在运行');
     const removed = await command('unregister');

@@ -49,7 +49,7 @@ Variable
 
 Agent 负责调查文档、创建或修正规则，并验证重算值和写入结果。
 
-规则创建完成之后，用户显式触发重算和重写，不需要再次请求模型：
+持续绑定的规则创建完成之后，用户显式触发重算和重写，不需要再次请求模型：
 
 ```text
 源文档变化
@@ -177,7 +177,7 @@ MCP Server 必须维护当前可操作文档列表。
 
 # 4. MCP Tools
 
-当前提供 11 个工具：
+当前提供 13 个工具：
 
 ```text
 Workspace
@@ -191,7 +191,9 @@ Definition
 ├── wps_create_variable
 ├── wps_update_variable
 ├── wps_create_render
-└── wps_update_render
+├── wps_update_render
+├── wps_delete_variable
+└── wps_delete_render
 
 Variable
 ├── wps_list_variables
@@ -199,6 +201,17 @@ Variable
 ├── wps_run_transform
 └── wps_run_render
 ```
+
+MCP 注解描述工具对整个环境的副作用，包含本机持久状态，不只看是否修改 WPS 文档。按 [MCP ToolAnnotations 定义](https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations)，`readOnlyHint: true` 表示不修改环境，`destructiveHint: false` 表示仅追加更新；覆盖定义、变量值或清除已有状态均不能声明为仅追加。
+
+| 工具 | `readOnlyHint` | `destructiveHint` | `idempotentHint` | 状态副作用 |
+| --- | --- | --- | --- | --- |
+| `wps_run_transform` | `false` | `true` | `false` | 对 WPS 文档只读，但覆盖并持久保存变量值、`hasValue` 和 Transform `lastRun` |
+| `wps_update_variable` | `false` | `true` | `true` | 覆盖变量/Transform 定义，来源或代码变化时清除过期值和执行时间 |
+| `wps_update_render` | `false` | `true` | `true` | 覆盖 Render 定义，定义变化时清除执行时间 |
+| `wps_delete_variable` / `wps_delete_render` | `false` | `true` | `true` | 标记删除本机定义，保留值、代码、执行记录和文档内容 |
+
+以上工具的 `openWorldHint` 均为 `false`；注解用于准确描述副作用，不改变第 4.1、11 章的业务行为，也不引入第 24.3 节之外的确认流程。
 
 <a id="已有规则的更新"></a>
 
@@ -219,20 +232,50 @@ Transform 的代码、来源文档或源区域变化会清除旧值（`hasValue=
 
 ## 4.2 参数、执行与并发边界
 
+- 所有 WPS 工具拒绝未知参数字段（包括大小写或拼写错误），不静默丢弃后执行。MCP 注册、内嵌 Agent 的参数 Schema 和共用调用入口复用同一个严格对象 Schema；无参数工具也只接受空对象。内嵌 Agent 另以同一 Schema 校验原始调用参数，避免 pi SDK 清除可选字段的 `null` 或转换类型后改变执行语义。非法参数在业务处理前失败，不下发 WPS RPC、不保存规则或执行时间；MCP 返回参数错误 `-32602`，共用调用入口返回 `INVALID_REQUEST`。
 - `code` 必须为 1–100000 字符；查询和 Transform 还须通过只读检查。查询、Transform 和 Render 的返回值必须能经 JSON 序列化，不返回 WPS/COM 宿主对象或 `undefined`。
 - `sourceRef` 可选，最长 1000 字符；创建/更新时作为来源描述保存，不按文档类型解析校验。格式无法识别时来源定位不可用，执行仍以 Transform 代码为准。
 - `targetRef` 可选，提供时须为 1–16000 字符；创建 Render 时按目标文档类型解析，更新其位置或目标文档时校验有效位置与文档类型是否匹配。通过格式校验不保证目标对象存在，定位时再由宿主检查。格式见第 27.5 节。
 - 文档 ID 把请求路由到对应 Add-in 和 `documentKey`，并提供绑定对象 `wpsDocument`；`sourceRef` / `targetRef` 用于展示与导航，不限制规则代码实际访问范围，不是权限沙箱。
 - 所有变量定义创建、更新、重算、重写和 UI 删除共用服务级队列串行执行，状态文件写入另有串行队列。普通查询不进入变量修改队列；不能把它描述为全服务请求均串行。
+- 变量定义、值和执行时间先在副本中修改，`state.json` 原子替换成功后才发布到共享内存；等待写盘的查询仍读取上次提交的状态。创建 Variable/Transform/Render 的 ID 计数器随定义一起提交；保存失败不发布新定义、不消耗这些 ID，重算失败保留原值、`hasValue` 和 `lastRun`，后续保存不得夹带失败修改。只合并本次涉及的变量/规则计数器，避免覆盖写盘期间文档注册分配的 ID。
 - 停止生成阻止未开始的工具执行；已经开始的 WPS 操作可能继续完成，已写入内容不回滚。RPC 默认等待最多 45 秒，超时或断开不代表宿主写入已撤销。
 
-工具统一使用 `wps_` 前缀的小写 snake_case。MCP 和 pi 启用相同的十一个 WPS 工具；内嵌 Agent 另有技能专用 `read`。历史会话中的旧工具名在恢复显示和发送模型上下文时转换，原始记录保留。升级后重启服务并让外部客户端重新发现工具。
+工具统一使用 `wps_` 前缀的小写 snake_case。MCP 和 pi 启用相同的十三个 WPS 工具；内嵌 Agent 另有技能专用 `read`。历史会话中的旧工具名在恢复显示和发送模型上下文时转换，原始记录保留。升级后重启服务并让外部客户端重新发现工具。
 
 ## 4.3 变量定义的枚举
 
-`wps_list_variables` 无参数，返回全部已保存变量定义的摘要，用于执行任务前核对已有规则、发现遗留或过期定义。每项包含 `variableId`、`name`、可选 `description`、`hasValue`、可选 `lastRunAt`、Transform 来源（`sourceDocumentId`、可选 `sourceDocumentName`、`sourceConnected`、可选 `sourceRef`），以及 `renderCount` 和每条 Render 的摘要（`renderId`、`targetDocumentId`、可选 `targetDocumentName`、`targetConnected`、可选 `targetRef`）。
+`wps_list_variables(includeDeleted?)` 默认返回未删除的已保存变量定义摘要，用于执行任务前核对已有规则、发现遗留或过期定义。每项包含 `variableId`、`name`、可选 `description`、`hasValue`、可选 `lastRunAt`、Transform 来源（`sourceDocumentId`、可选 `sourceDocumentName`、`sourceConnected`、可选 `sourceRef`），以及 `renderCount` 和每条 Render 的摘要（`renderId`、`targetDocumentId`、可选 `targetDocumentName`、`targetConnected`、可选 `targetRef`）。
 
 摘要不含 `code` 和 `value`：完整定义与值按需通过 `wps_get_variable` 读取。变量定义持久保存，来源或目标文档断开时仍会列出，此时 `sourceConnected` / `targetConnected` 为 `false`。只读查询不进入变量修改队列，无变量时返回空列表。
+
+
+## 4.4 规则软删除与恢复
+
+新增工具与严格参数：
+
+```text
+wps_delete_variable(variableId: 非空字符串)
+wps_delete_render(variableId: 非空字符串, renderId: 非空字符串)
+```
+
+两者拒绝额外字段、缺失字段、空字符串、null 和类型转换，不提供批量删除、永久删除或确认参数。用户明确要求删除且对象已核实时可直接调用；第 18 章约定的一次性编辑收尾也可直接调用，无需用户另行要求删除。不能因离线、过期或相似名称自行删除。删除只更改本机规则状态，不下发 WPS RPC、不撤销已写入内容。Variable 和 Render 各以可选 `deletedAt`（UTC ISO 时间）记录自身删除时间；旧记录缺少该字段视为未删除。ID、Transform、Render、代码、值、执行时间和计数器保留，ID 不复用。
+
+- `wps_delete_variable` 标记 Variable，使其 Transform 与全部 Render 不可用，但不改写各 Render 的 `deletedAt`。成功响应为 `{success:true, variableId, deletedAt, alreadyDeleted, affectedRenderCount}`；数量只统计未单独删除、随父变量停用的 Render，重复调用仍报告该数量。
+- `wps_delete_render` 要求父变量未删除，只标记指定 Render，不影响变量值、Transform 和其他绑定。成功响应为 `{success:true, variableId, renderId, deletedAt, alreadyDeleted}`。最后一条 Render 删除后，变量仍保留。
+- 重复删除返回成功，保留首次时间，`alreadyDeleted=true`，不再次写盘；不存在的 ID 仍返回 `VARIABLE_NOT_FOUND` / `RENDER_NOT_FOUND`。父变量已删除时，针对其 Render 的删除、恢复或执行优先返回 `VARIABLE_DELETED`。
+
+有效性统一为：Variable 自身未删除；Render 自身及所属 Variable 均未删除。普通列表、详情、`/api/state`、统计、引用候选和服务器发送时引用解析只包含有效对象。「展示全部」包含离线对象，仍不含已删除对象。更新、创建绑定、重算、重写和定位在服务端独立检查，分别拒绝已删除 Variable 或 Render（`VARIABLE_DELETED` / `RENDER_DELETED`）；无 `renderId` 的重写只执行有效 Render。
+
+`wps_list_variables` 与 `wps_get_variable` 新增可选布尔参数 `includeDeleted`，默认 false。设为 true 时包含已删除对象及 Render，各自增加 `active`（包含父状态的有效性）及自身存在时的 `deletedAt`；查询不授权执行或修改。列表仍不返回代码或值，`renderCount` 等于本次返回的 Render 数量。完整读取保留代码和执行时间；`hasValue=false` 时不返回 `value`，显式检查可通过 `retainedValue` 查看仍保存的旧值。
+
+面板通过同源 `GET /api/deleted` 按需获取已删除摘要：父变量已删除时列出其全部 Render，父变量有效时只列其单独删除的 Render；普通轮询不传输回收记录。`POST /api/variable {variableId}` 按需读取含已删除对象的完整详情（等同 `wps_get_variable(..., includeDeleted:true)`）。`POST /api/restore {variableId, renderId?}` 恢复原 ID；严格拒绝未知字段。恢复父变量不恢复其此前单独删除的 Render；父变量删除时不能单独恢复其 Render。重复恢复返回成功、`alreadyActive=true`，不再次写盘或使值失效。实际恢复返回 `alreadyActive=false`，响应包含 `success`、`variableId`、可选 `renderId` 和 `valueInvalidated`。
+
+恢复 Variable 保留旧值和历史执行时间，但设置 `hasValue=false`、`valueInvalidated=true`，必须先重算再重写；恢复单条 Render 不使变量值失效。恢复不执行代码、不要求文档在线、不自动合并同名规则或迁移绑定；面板提示与有效 Render 的目标文档及明确 `targetRef` 完全相同的绑定，不能把未发现重复视为无冲突保证。恢复后需核实目标再写入。暂不提供 Agent 恢复工具或永久清理入口，不自动清理保留数据。
+
+所有删除和恢复与现有变量修改共用一个队列，仅入队一次；出队时检查状态和取消信号。已开始的 Render 先完成，再提交删除；删除先提交则后续执行失败。停止可取消未开始的删除，已开始提交则完成原子保存。先写盘后发布，保存失败保留原状态，后续保存不夹带失败变更；内部失败使用 `INTERNAL_ERROR`，取消使用 `OPERATION_CANCELLED`。HTTP 恢复/删除对不存在 ID 返回 404，对已删除父对象返回 409，保存失败返回 500。
+
+历史会话和已发送引用快照保留原事实，不因当前删除而改写；草稿中的旧引用标记不可用，提交时再次核实。软删除不清除历史消息中的内容，也不是历史版本管理。旧版本不识别删除标记，回退后可能重新执行已删除规则或物理删除记录；使用过软删除的数据目录不得直接交给旧版本继续运行，回退应使用升级前备份。此前已物理删除的规则无法恢复。
 
 ---
 
@@ -817,7 +860,9 @@ wps_run_transform(var_001)
 }
 ```
 
-也可以执行 Variable 的所有 Render：
+只有省略 `renderId` 才执行 Variable 的所有 Render；提供时必须是非空字符串，空字符串、`null` 或拼错的字段名（如 `renderID`）均作为参数错误拒绝，不回退到全部执行。非空但不存在的 ID 返回 `RENDER_NOT_FOUND`，不执行任何 Render。变量页 `/api/actions` 同样拒绝空 ID 和未知字段，非法参数返回 HTTP 400。
+
+执行全部 Render 的请求：
 
 ```json
 {
@@ -917,6 +962,8 @@ return {
 interface Variable {
   variableId: string;
 
+  deletedAt?: string;
+
   name: string;
 
   description?: string;
@@ -930,6 +977,8 @@ interface Variable {
   renders: Render[];
 }
 ```
+
+软删除状态及父子有效性、恢复后值失效的约定见第 4.4 节。正常查询不暴露恢复时保留的失效值，显式检查用 `retainedValue`。
 
 新建 Variable 尚无有效值，`hasValue` 可省略；工具读取统一返回布尔值，`hasValue=false` 时省略 `value`。重算成功后保存 `value`、`hasValue=true` 和 Transform 的 `lastRun`；Render 不依据值的真假判断可执行性，`null`、`0`、空数组等也可为有效 JSON 值。更新导致值失效的条件见第 4.1 节。
 
@@ -962,6 +1011,8 @@ interface Transform {
 ```ts
 interface Render {
   renderId: string;
+
+  deletedAt?: string;
 
   targetDocumentId: string;
 
@@ -1099,6 +1150,10 @@ Excel Add-in
 
 内嵌助手的系统提示词保留文档身份、选区快照、读写边界、规则生命周期和交付要求；宿主操作细节放在内置 `wps-api` 技能中。任务匹配技能时先读取 `SKILL.md`，再按触发条件读取表格、演示、文字、选区或报告绑定参考资料；历史 API 目录只按所需成员查阅。本轮已核实的文档、定义和值可以复用，查询只返回决策和验收需要的字段。
 
+用户只要求当前编辑（例如“在这句话后加一句总结”“修改这一处格式”）、未要求建立或保留可复用绑定时，内嵌助手在执行并独立回读验证成功后，用现有 `wps_delete_*` 工具软删除本次专用的新建规则，无需另行询问。新建 Variable 及其全部 Render 均只服务于本次已验证编辑时，调用 `wps_delete_variable`；复用已有 Variable 或变量仍需服务其他绑定时，只调用 `wps_delete_render` 删除本次专用的新建 Render，不清理已有变量或已有 Render。用户要求建立持续绑定、保留规则、仅保存定义或更新已有绑定时保留规则。执行失败、回读不符、中止或仍需修正时保留相关规则；清理失败如实报告，不能宣称已清理。收尾保留已写入文档内容及软删除记录，不代表永久清除数据。
+
+上述一次性用途由系统提示词指导助手判断，不增加生命周期字段、工具或界面，也不提供服务端自动清理、会话结束清理或超时回收保证；外部 MCP 客户端自行决定是否采用相同工作流程。历史遗留规则不因本次行为约定变化而自动清理。
+
 变量按业务含义命名、按业务职责和独立重算口径拆分，每个变量只保留该职责需要的数据；同源或同属一份报告不能作为把独立指标、明细、趋势和配置装进一个超大对象的理由，也不机械拆到每个字段或单元格。相同口径的数据可由一个变量供多条 Render 复用。Transform 保留具名业务值、来源、筛选、单位与可核对汇总，Render 负责目标映射与展示格式。
 
 一条 Render 默认只负责一处可独立定位、更新和验收的目标（一个文本框、表格、图表或连续区域）；同页或同源的不同目标分别建 Render。只有目标必须联动、拆开无法完成同一处更新时才合并多处，例如表格溢出必须维护模板续表；description 写清页码、对象、用途与合并原因，targetRef 列全位置，执行后逐处验收。这是 Agent 的规则组织要求，不改变工具支持多个目标引用的接口，不提供事务或回滚保证。
@@ -1111,11 +1166,11 @@ PPT 表格写入（包括首次写入）必须读取报告绑定的续表章节�
 
 自动续页必须有可跨次执行核对的持久归属标记，关联变量及原始页/表格稳定 ID；优先复用原表和已有续页，确认保留记录已写入并读回后，从后向前回收多余自动续页。不得删除原始页、用户已有页或其他规则的页；自动续页若含用户新增的无关内容，保留并报告。标记和分页 API 须在当前宿主验证，缺少已验证路径时报告阻塞。写后核对各页实际布局及全量记录无遗漏、重复、过期内容，通过第 12.4.1 节的 `renderTarget` 返回当前全部目标，由工具层同步定位引用；验收覆盖增页、减页、空数据及重复重写幂等。详细流程见 `skills/wps-api/references/report-sync.md#ppt-table-continuation`。
 
-复杂任务开始简述目标，阶段结果、关键假设或阻塞时更新；仅集中询问无法从文档确定且会改变结果的问题。交付简述完成内容、关键验证结果、再次重算与重写的操作及未完成项；代码和内部 ID 默认保留在工具记录，排错或核对规则时再展示。技能指引不构成跨平台 API 兼容性保证，实际支持须在当前宿主核实。
+复杂任务开始简述目标，阶段结果、关键假设或阻塞时更新；仅集中询问无法从文档确定且会改变结果的问题。交付简述完成内容、关键验证结果及未完成项；一次性编辑说明收尾结果，持续绑定另说明已保存规则和后续重算、重写方式。代码和内部 ID 默认保留在工具记录，排错或核对规则时再展示。技能指引不构成跨平台 API 兼容性保证，实际支持须在当前宿主核实。
 
 假设用户输入：
 
-> 把销售数据.xlsx中的各部门销售额更新到经营汇报.pptx第3页的销售图中。
+> 把销售数据.xlsx中的各部门销售额绑定到经营汇报.pptx第3页的销售图中，保留规则供后续重算、重写。
 
 Agent 应执行：
 
@@ -1328,11 +1383,13 @@ DOCUMENT_DISCONNECTED
 WPS_EXEC_ERROR
 
 VARIABLE_NOT_FOUND
+VARIABLE_DELETED
 
 READ_ONLY_VIOLATION
 TRANSFORM_EXECUTION_ERROR
 
 RENDER_NOT_FOUND
+RENDER_DELETED
 RENDER_EXECUTION_ERROR
 
 INVALID_REQUEST
@@ -1400,7 +1457,7 @@ Render 能正确执行
 
 # 22. 当前 MCP Tool 定义
 
-当前固定提供以下十一个工具；`?` 表示可省略，清除可选字段的 `null` 语义见第 4.1 节：
+当前固定提供以下十三个工具；`?` 表示可省略，清除可选字段的 `null` 语义见第 4.1 节：
 
 ```text
 wps_list_documents()
@@ -1448,10 +1505,22 @@ wps_update_render(
     code?
 )
 
-wps_list_variables()
+wps_delete_variable(
+    variableId
+)
+
+wps_delete_render(
+    variableId,
+    renderId
+)
+
+wps_list_variables(
+    includeDeleted?
+)
 
 wps_get_variable(
-    variableId
+    variableId,
+    includeDeleted?
 )
 
 wps_run_transform(
@@ -1920,7 +1989,7 @@ API Key 和自定义 Header 值仍以普通 JSON 存在本机 `config.json`，�
 
 ## 27.3 Agent 技能、会话与命令
 
-内嵌 Agent 使用 `@earendil-works/pi-coding-agent`，十一个 WPS 工具直接挂载为 custom tools，并禁用默认 bash、write、edit 和通用 read。另提供一个只允许读取已安装技能文本及参考资料的 `read`，合计十二个模型工具；Portable smoke 校验完整名称集合，防止缺失、重复或额外工具。路径可以使用技能目录的原始别名或消解后的绝对路径（包括 Windows 混合分隔符与短路径展开），真实文件必须同时位于安装目录及该路径所属的单个技能目录内；拒绝跨技能或安装目录逃逸的符号链接、非文件、含 NUL 的二进制或超过 2,000,000 字节的文件。扩展、提示模板、主题及外部上下文自动发现关闭，不依赖用户安装 pi CLI。
+内嵌 Agent 使用 `@earendil-works/pi-coding-agent`，十三个 WPS 工具直接挂载为 custom tools，并禁用默认 bash、write、edit 和通用 read。另提供一个只允许读取已安装技能文本及参考资料的 `read`，合计十四个模型工具；Portable smoke 校验完整名称集合，防止缺失、重复或额外工具。路径可以使用技能目录的原始别名或消解后的绝对路径（包括 Windows 混合分隔符与短路径展开），真实文件必须同时位于安装目录及该路径所属的单个技能目录内；拒绝跨技能或安装目录逃逸的符号链接、非文件、含 NUL 的二进制或超过 2,000,000 字节的文件。扩展、提示模板、主题及外部上下文自动发现关闭，不依赖用户安装 pi CLI。
 
 服务启动时将项目 `skills/`（含参考资料）安装到 `<数据目录>/pi/skills/`。`.wps-bundled-files.json` 清单用于更新随项目文件并清理撤下的内置文件，保留其他已安装技能和用户新增资料；清单建立前的遗留文件不推断为内置文件后删除。WPS API 知识按任务读取表格、演示、Writer、通用/选区、平台验收与报告绑定参考，不一次塞入完整目录。
 
@@ -1988,7 +2057,7 @@ macOS 的 WPS 统一标签页需先通过系统 `open` 显示已注册路径的�
 
 每张卡片展示 Transform 和全部 Render，离线绑定标注「已断开」。支持单个及批量重算/重写、展开值与规则代码、定位来源/各目标。批量重算跳过离线源，重写跳过离线目标及没有当前值的变量；多 Render 分别报告成功/失败。错误和跳过项在面板显示，写入不自动回滚。
 
-Variable 和每条 Render 都可原位点击「删除」再点「确认」，点击外部取消。删除只移除本机定义/绑定，保留已写入文档内容；与其他变量修改串行，写盘成功后才发布新列表。创建、更新和已有绑定的重算/重写生命周期见第 4–15 章。
+Variable 和每条 Render 都可原位点击「删除」再点「确认」，点击外部取消。面板和两个删除工具统一为第 4.4 节的软删除：停用规则，保留本机数据和文档内容。「已删除」是独立查看入口，不改变原「展示当前 / 展示全部」所决定的引用范围；其中禁止批量重算/重写，按需查看保留值和规则快照，并提供恢复。父变量停用时，其 Render 的恢复按钮提示先恢复变量。恢复变量后提示先重算、核实目标再重写；同目标的有效绑定按第 4.4 节提示。创建、更新和已有绑定的重算/重写生命周期见第 4–15 章。
 
 ## 27.7 数据目录与持久化
 
@@ -2006,7 +2075,7 @@ Variable 和每条 Render 都可原位点击「删除」再点「确认」，点
 | `desktop-registration.json` | 免安装最近注册的端口和加载项目录；`removed` 表示用户已主动移除注册 |
 | `logs/desktop.stdout.log` / `logs/desktop.stderr.log` | 免安装后台服务输出捕获，用于启动诊断 |
 
-连接、活动工作表/页及最近选区只在内存中；但发送到会话的引用快照会随会话历史持久化。重启恢复离线文档元数据，WPS 重新连接后上报实时状态。`state.json` 使用同目录临时文件原子替换，Windows 短暂读取锁重试边界见第 25.6 节；更新定义时写盘失败保留原定义。
+连接、活动工作表/页及最近选区只在内存中；但发送到会话的引用快照会随会话历史持久化。重启恢复离线文档元数据，WPS 重新连接后上报实时状态。`state.json` 包含软删除记录与保留值，正常界面的过滤结果不得用于替换完整持久化状态。没有自动回收策略，大值和删除记录会增加整个状态文件的写入成本；软删除后的旧版回退限制见第 4.4 节。`state.json` 使用同目录临时文件原子替换，Windows 短暂读取锁重试边界见第 25.6 节；变量定义创建、更新、删除以及重算/重写元数据均在写盘成功后才发布，失败保留原变量状态和变量/规则 ID 计数器，见第 4.2 节。该提交边界不撤销已经发生的 WPS 文档写入；文档注册的在线信息与稳定身份映射仍按注册流程更新，不纳入变量提交。
 
 桌面控制文件不是变量或会话数据；控制凭据不返回浏览器、不写入日志，启停/注册另用短生命周期操作锁。升级、重复部署和替换应用不清除业务数据。会话可能含文档内容与凭据以外的业务信息，不受运行日志的正文排除、脱敏与轮转设置管理。
 
@@ -2051,7 +2120,7 @@ tail -n 30 -f "$HOME/Library/Application Support/wps-mcp/logs/wps-mcp.log"
 | 路径 | 职责 |
 | --- | --- |
 | `src/server.ts` | MCP、HTTP、WebSocket 和服务生命周期 |
-| `src/tools.ts` | 十一个 WPS 工具、文档路由、RPC、变量与规则持久化 |
+| `src/tools.ts` | 十三个 WPS 工具、文档路由、RPC、变量与规则持久化 |
 | `src/api.ts` | 面板 HTTP API、配置、会话、引用、导航、UI 删除及桌面管理入口 |
 | `src/agent.ts` | pi Agent、系统提示词、流式事件、工具挂载与会话资源 |
 | `src/agent-skills.ts` | 内置技能安装与技能专用 read 隔离 |

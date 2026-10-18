@@ -91,6 +91,14 @@ test('local pages call the real MCP endpoint, expose tool failures and preserve 
     assert.equal((await fetch(h.base + '/health').then(r => r.json())).version, APP_VERSION);
     const tools = rpcResult(await client.send(client.request('tools/list'))).tools;
     assert.ok(tools.some(tool => tool.name === 'wps_run_render' && tool.annotations.destructiveHint));
+    // WPS document reads can still overwrite local state; rule updates are not additive.
+    for (const [name, idempotentHint] of [
+      ['wps_run_transform', false], ['wps_update_variable', true], ['wps_update_render', true],
+    ]) {
+      assert.deepEqual(tools.find(tool => tool.name === name)?.annotations, {
+        readOnlyHint: false, destructiveHint: true, idempotentHint, openWorldHint: false,
+      }, name);
+    }
     const call = async (name, args) => client.send(client.request('tools/call', { name, arguments: args }));
     const listed = await call('wps_list_documents', {});
     assert.ok(listed.requestId);

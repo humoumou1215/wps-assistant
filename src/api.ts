@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { z } from "zod";
-import { APP_DIR, callTool, getState, PORT, deleteVariableDefinition, navigateVariableLocation, asToolError } from "./tools.js";
+import { APP_DIR, callTool, getState, PORT, deleteVariableDefinition, restoreVariableDefinition, getDeletedDefinitions, navigateVariableLocation, asToolError } from "./tools.js";
 import { publicConfig, parseConfig, saveConfig, redact } from "./config.js";
 import { builtinModels, testConfig, resetAgent, isChatBusy, runChat, chatSchema, chatHistory, agentResources, agentSkillFile, commandCatalog, executeCommand, listChatSessions, sessionAction, assertChatSession } from "./agent.js";
 import { logger } from "./logger.js";
@@ -50,6 +50,12 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       json(res, 404, { error: "未知管理操作" }); return;
     }
     if (path === "/api/state" && req.method === "GET") { json(res, 200, { ...getState(), pluginVersion }); return; }
+    if (path === "/api/deleted" && req.method === "GET") { json(res, 200, getDeletedDefinitions()); return; }
+    if (path === "/api/variable" && req.method === "POST") {
+      const { variableId } = z.object({ variableId: z.string().min(1) }).strict().parse(await readJson(req));
+      const result = await callTool("wps_get_variable", { variableId, includeDeleted: true });
+      json(res, result.isError ? 404 : 200, JSON.parse(result.content[0].text)); return;
+    }
     if (path === "/api/config" && req.method === "GET") { json(res, 200, { ...publicConfig(), builtinModels: await builtinModels() }); return; }
     if (path === "/api/chat" && req.method === "GET") { json(res, 200, JSON.parse(redact(JSON.stringify(await chatHistory())))); return; }
     if (path === "/api/commands" && req.method === "GET") { json(res, 200, await commandCatalog()); return; }
@@ -116,18 +122,18 @@ export async function handleApi(req: IncomingMessage, res: ServerResponse, path:
       }
       return;
     }
-    if (path === "/api/delete" && req.method === "POST") {
-      const { variableId, renderId } = z.object({ variableId: z.string().min(1), renderId: z.string().min(1).optional() }).parse(await readJson(req));
-      try { json(res, 200, await deleteVariableDefinition(variableId, renderId)); }
+    if (["/api/delete", "/api/restore"].includes(path) && req.method === "POST") {
+      const { variableId, renderId } = z.object({ variableId: z.string().min(1), renderId: z.string().min(1).optional() }).strict().parse(await readJson(req));
+      try { json(res, 200, await (path === "/api/delete" ? deleteVariableDefinition : restoreVariableDefinition)(variableId, renderId)); }
       catch (error) {
         const detail = asToolError(error);
-        json(res, ["VARIABLE_NOT_FOUND", "RENDER_NOT_FOUND"].includes(detail.code) ? 404 : 500, { success: false, error: detail });
+        json(res, ["VARIABLE_NOT_FOUND", "RENDER_NOT_FOUND"].includes(detail.code) ? 404 : ["VARIABLE_DELETED", "RENDER_DELETED"].includes(detail.code) ? 409 : 500, { success: false, error: detail });
       }
       return;
     }
     if (path === "/api/actions" && req.method === "POST") {
-      const { op, variableId, renderId } = z.object({ op: z.enum(["transform", "render"]), variableId: z.string().min(1), renderId: z.string().optional() }).parse(await readJson(req));
-      const result = await callTool(op === "transform" ? "wps_run_transform" : "wps_run_render", { variableId, renderId });
+      const { op, variableId, renderId } = z.object({ op: z.enum(["transform", "render"]), variableId: z.string().min(1), renderId: z.string().min(1).optional() }).strict().parse(await readJson(req));
+      const result = await callTool(op === "transform" ? "wps_run_transform" : "wps_run_render", op === "transform" ? { variableId } : { variableId, renderId });
       const value = JSON.parse(result.content[0].text);
       json(res, result.isError || value.success === false ? 422 : 200, value); return;
     }

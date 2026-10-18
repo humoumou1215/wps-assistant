@@ -48,6 +48,7 @@ type Transform = {
 };
 type Render = {
   renderId: string;
+  deletedAt?: string;
   targetDocumentId: string;
   targetRef?: string;
   description?: string;
@@ -56,6 +57,7 @@ type Render = {
 };
 type Variable = {
   variableId: string;
+  deletedAt?: string;
   name: string;
   description?: string;
   value?: unknown;
@@ -88,16 +90,16 @@ const connections = new Map<string, Connection>();
 const pending = new Map<string, Pending>();
 const state: PersistedState = { variables: [], counters: {}, documentIds: {}, documentMetadata: {} };
 
-function nextId(kind: string) {
-  state.counters[kind] = (state.counters[kind] ?? 0) + 1;
-  return `${kind}_${String(state.counters[kind]).padStart(3, "0")}`;
+function nextId(kind: string, counters = state.counters) {
+  counters[kind] = (counters[kind] ?? 0) + 1;
+  return `${kind}_${String(counters[kind]).padStart(3, "0")}`;
 }
 let persistence = Promise.resolve();
 let pendingStateWrites = 0;
-function persist(variables?: Variable[]) {
+function persist(variables?: Variable[], counters?: Partial<Record<"var" | "transform" | "render", number>>) {
   pendingStateWrites++;
   const write = persistence.then(async () => {
-    const snapshot = JSON.stringify({ ...state, variables: variables ?? state.variables }, null, 2);
+    const snapshot = JSON.stringify({ ...state, variables: variables ?? state.variables, counters: { ...state.counters, ...counters } }, null, 2);
     await mkdir(DATA_DIR, { recursive: true });
     const temp = `${STATE_FILE}.${randomUUID()}.tmp`;
     try {
@@ -114,7 +116,10 @@ function persist(variables?: Variable[]) {
       await rm(temp, { force: true }).catch(() => {});
       throw error;
     }
+    // Variable mutations are serialized; publish their draft only after replacement.
+    // Merge only their counters: document registration may allocate IDs during I/O.
     if (variables) state.variables = variables;
+    if (counters) Object.assign(state.counters, counters);
   });
   persistence = write.then(() => { pendingStateWrites--; }, () => { pendingStateWrites--; });
   return write;
@@ -141,20 +146,51 @@ function mutateVariables<T>(operation: () => Promise<T>, signal?: AbortSignal): 
   });
 }
 
-// UI-only deletion: never execute WPS code or clear already-written content.
-// Commit to disk before publishing the new list; serialize with tool mutations.
+// This operation runs inside the shared mutation queue, from either tool or UI.
+// Parent deletion hides children without changing their individual deletion state.
+async function softDeleteDefinition(variableId: string, renderId?: string) {
+  const variable = variableById(variableId, renderId === undefined);
+  const render = renderId === undefined ? undefined : renderById(variable, renderId, true);
+  const previous = render ? render.deletedAt : variable.deletedAt;
+  const deletedAt = previous ?? new Date().toISOString();
+  if (!previous) {
+    const updated = render
+      ? { ...variable, renders: variable.renders.map(item => item === render ? { ...render, deletedAt } : item) }
+      : { ...variable, deletedAt };
+    await persist(state.variables.map(item => item === variable ? updated : item));
+  }
+  return { success: true, variableId, deletedAt, alreadyDeleted: !!previous,
+    ...(render ? { renderId: render.renderId } : { affectedRenderCount: variable.renders.filter(item => !item.deletedAt).length }) };
+}
 export function deleteVariableDefinition(variableId: string, renderId?: string) {
+  return mutateVariables(() => softDeleteDefinition(variableId, renderId));
+}
+export function restoreVariableDefinition(variableId: string, renderId?: string) {
   return mutateVariables(async () => {
-    const variable = variableById(variableId);
-    if (renderId && !variable.renders.some(render => render.renderId === renderId)) {
-      throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
+    const variable = variableById(variableId, renderId === undefined);
+    const render = renderId === undefined ? undefined : renderById(variable, renderId, true);
+    const alreadyActive = !(render ? render.deletedAt : variable.deletedAt);
+    if (!alreadyActive) {
+      let updated: Variable;
+      if (render) {
+        const restored = { ...render }; delete restored.deletedAt;
+        updated = { ...variable, renders: variable.renders.map(item => item === render ? restored : item) };
+      } else {
+        updated = { ...variable, hasValue: false }; delete updated.deletedAt;
+      }
+      await persist(state.variables.map(item => item === variable ? updated : item));
     }
-    const variables = renderId
-      ? state.variables.map(item => item === variable ? { ...variable, renders: variable.renders.filter(render => render.renderId !== renderId) } : item)
-      : state.variables.filter(item => item !== variable);
-    await persist(variables);
-    return { success: true, variableId, ...(renderId ? { renderId } : { deletedRenderCount: variable.renders.length }) };
+    return { success: true, variableId, ...(render ? { renderId: render.renderId } : {}), alreadyActive,
+      valueInvalidated: !render && !alreadyActive };
   });
+}
+export function getDeletedDefinitions() {
+  return { variables: state.variables.filter(v => v.deletedAt || v.renders.some(r => r.deletedAt))
+    .map(v => {
+      const summary = cleanVariable(v, true);
+      const renders = summary.renders.filter(r => v.deletedAt || r.deletedAt);
+      return { ...summary, renders, renderCount: renders.length };
+    }) };
 }
 async function loadState() {
   await mkdir(DATA_DIR, { recursive: true });
@@ -190,10 +226,17 @@ async function loadState() {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
-function variableById(id: string) {
+function variableById(id: string, includeDeleted = false) {
   const variable = state.variables.find((v) => v.variableId === id);
   if (!variable) throw new ToolError("VARIABLE_NOT_FOUND", `Variable '${id}' was not found`);
+  if (variable.deletedAt && !includeDeleted) throw new ToolError("VARIABLE_DELETED", `Variable '${id}' is deleted; restore it before use`);
   return variable;
+}
+function renderById(variable: Variable, id: string, includeDeleted = false) {
+  const render = variable.renders.find(item => item.renderId === id);
+  if (!render) throw new ToolError("RENDER_NOT_FOUND", `Render '${id}' was not found`);
+  if (render.deletedAt && !includeDeleted) throw new ToolError("RENDER_DELETED", `Render '${id}' is deleted; restore it before use`);
+  return render;
 }
 function documentById(id: string) {
   const doc = documents.get(id);
@@ -285,10 +328,12 @@ function cleanDocument(doc: DocumentRecord) {
 // are deliberately omitted: a full list of them would crowd the model context, and
 // wps_get_variable returns any one definition in full. Definitions stay listed while
 // their documents are disconnected, so leftover rules remain visible.
-function cleanVariable(variable: Variable) {
+function cleanVariable(variable: Variable, includeDeleted = false) {
   const source = documents.get(variable.transform.sourceDocumentId);
+  const renders = variable.renders.filter(render => includeDeleted || !render.deletedAt);
   return {
     variableId: variable.variableId,
+    ...(includeDeleted ? { active: !variable.deletedAt, ...(variable.deletedAt ? { deletedAt: variable.deletedAt } : {}) } : {}),
     name: variable.name,
     ...(variable.description ? { description: variable.description } : {}),
     hasValue: !!variable.hasValue,
@@ -297,11 +342,12 @@ function cleanVariable(variable: Variable) {
     ...(source ? { sourceDocumentName: source.name } : {}),
     sourceConnected: source?.connected === true,
     ...(variable.transform.sourceRef ? { sourceRef: variable.transform.sourceRef } : {}),
-    renderCount: variable.renders.length,
-    renders: variable.renders.map(render => {
+    renderCount: renders.length,
+    renders: renders.map(render => {
       const target = documents.get(render.targetDocumentId);
       return {
         renderId: render.renderId,
+        ...(includeDeleted ? { active: !variable.deletedAt && !render.deletedAt, ...(render.deletedAt ? { deletedAt: render.deletedAt } : {}) } : {}),
         targetDocumentId: render.targetDocumentId,
         ...(target ? { targetDocumentName: target.name } : {}),
         targetConnected: target?.connected === true,
@@ -346,8 +392,7 @@ async function executeWps(doc: DocumentRecord, code: string, variable?: unknown,
 // UI-only navigation: send a fixed command, never execute a Transform or Render.
 export async function navigateVariableLocation(variableId: string, renderId?: string, locationIndex = 0) {
   const variable = variableById(variableId);
-  const render = renderId ? variable.renders.find(r => r.renderId === renderId) : undefined;
-  if (renderId && !render) throw new ToolError("RENDER_NOT_FOUND", "此 Render 绑定已不存在");
+  const render = renderId ? renderById(variable, renderId) : undefined;
   const doc = documentById(render ? render.targetDocumentId : variable.transform.sourceDocumentId);
   const locations = render ? renderLocations(render, doc.type) : parseDocumentRefs(doc.type, variable.transform.sourceRef);
   const location = locations[locationIndex];
@@ -365,7 +410,6 @@ export async function navigateVariableLocation(variableId: string, renderId?: st
   if (!response?.success) throw new ToolError("NAVIGATION_FAILED", response?.error || "WPS 定位失败");
   return { success: true, documentId: doc.documentId, documentName: doc.name, ref: response.result?.ref || location.ref };
 }
-function findVariable(id: string) { return state.variables.find((v) => v.variableId === id); }
 function documentResponse(doc: DocumentRecord) {
   return {
     ...cleanDocument(doc),
@@ -393,12 +437,15 @@ export async function refreshDocument(documentId: string) {
 
 export const toolDefinitions: { name: string; config: any; invoke: (args: any, signal?: AbortSignal) => Promise<any> }[] = [];
 function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema: S; title: string; description: string; annotations: Record<string, boolean> }, handler: (args: z.infer<z.ZodObject<S>>) => Promise<any>) {
-  toolDefinitions.push({ name, config, invoke: (args, signal) => logger.withContext({ toolCallId: randomUUID() }, async () => {
+  // Share the strict object with MCP registration and the Agent's JSON Schema.
+  // A raw shape lets the MCP SDK discard unknown selection fields before invoke.
+  const inputSchema = z.object(config.inputSchema).strict();
+  toolDefinitions.push({ name, config: { ...config, inputSchema }, invoke: (args, signal) => logger.withContext({ toolCallId: randomUUID() }, async () => {
     activeToolCalls++;
     try {
     const started = Date.now();
     let parsed: z.infer<z.ZodObject<S>>;
-    try { parsed = z.object(config.inputSchema).parse(args); }
+    try { parsed = inputSchema.parse(args); }
     catch (error) { logger.warn("tool.end", { toolName: name, success: false, errorCode: "INVALID_REQUEST", durationMs: Date.now() - started }); return toolError(error, "INVALID_REQUEST"); }
     const ids = Object.fromEntries(Object.entries(parsed).filter(([key, value]) => /^(documentId|sourceDocumentId|targetDocumentId|variableId|renderId)$/.test(key) && typeof value === "string" && /^(doc|var|render)_\d+$/.test(value)));
     logger.info("tool.start", { toolName: name, ...ids });
@@ -410,7 +457,7 @@ function defineTool<S extends z.ZodRawShape>(name: string, config: { inputSchema
         if (signal?.aborted) throw new ToolError("OPERATION_CANCELLED", "已停止，未执行此操作");
         return handler(parsed);
       };
-      result = ["wps_create_variable", "wps_update_variable", "wps_create_render", "wps_update_render", "wps_run_transform", "wps_run_render"].includes(name)
+      result = ["wps_create_variable", "wps_update_variable", "wps_create_render", "wps_update_render", "wps_delete_variable", "wps_delete_render", "wps_run_transform", "wps_run_render"].includes(name)
         ? await mutateVariables(execute, signal) : await execute();
     }
     catch (error) { result = toolError(error, "INTERNAL_ERROR"); }
@@ -471,8 +518,9 @@ defineTool("wps_create_variable", {
   try {
     assertReadOnlyCode(code);
     documentById(sourceDocumentId);
-    const variableId = nextId("var");
-    const transformId = nextId("transform");
+    const counters = { var: state.counters.var ?? 0, transform: state.counters.transform ?? 0 };
+    const variableId = nextId("var", counters);
+    const transformId = nextId("transform", counters);
     const variable: Variable = {
       variableId,
       name: variableName,
@@ -480,8 +528,7 @@ defineTool("wps_create_variable", {
       transform: { transformId, sourceDocumentId, code, ...(sourceRef ? { sourceRef } : {}) },
       renders: [],
     };
-    state.variables.push(variable);
-    await persist();
+    await persist([...state.variables, variable], counters);
     return toolResult({ success: true, variableId, transformId });
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
 });
@@ -489,7 +536,7 @@ defineTool("wps_create_variable", {
 defineTool("wps_update_variable", {
   title: "Update Variable",
   description: "Update an existing Variable's name, description, source, or read-only Transform code without changing IDs or Render bindings. Omitted fields stay unchanged; null clears description/sourceRef. Code/source changes invalidate the value: run wps_run_transform before wps_run_render. Saves only, never executes WPS code.",
-  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),
     variableName: z.string().min(1).optional(),
@@ -547,9 +594,11 @@ defineTool("wps_create_render", {
     const variable = variableById(variableId);
     const doc = documentById(targetDocumentId);
     if (targetRef && !parseDocumentRefs(doc.type, targetRef).length) throw new ToolError("INVALID_REQUEST", "targetRef 必须是明确位置：表格 Summary!A1:B4；演示 SlideID:257!ShapeID:4；文字 Heading:本周概况!Paragraph 或 Table:1");
-    const renderId = nextId("render");
-    variable.renders.push({ renderId, targetDocumentId, ...(targetRef ? { targetRef } : {}), ...(description ? { description } : {}), code });
-    await persist();
+    const counters = { render: state.counters.render ?? 0 };
+    const renderId = nextId("render", counters);
+    const render = { renderId, targetDocumentId, ...(targetRef ? { targetRef } : {}), ...(description ? { description } : {}), code };
+    const updated = { ...variable, renders: [...variable.renders, render] };
+    await persist(state.variables.map(item => item === variable ? updated : item), counters);
     return toolResult({ success: true, renderId });
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
 });
@@ -557,7 +606,7 @@ defineTool("wps_create_render", {
 defineTool("wps_update_render", {
   title: "Update Render rule",
   description: "Update one existing Render by variableId and renderId, preserving its ID and other bindings. Omitted fields stay unchanged; null clears description/targetRef. targetRef identifies the destination for UI navigation: Sheet!A1:B4, SlideID:257!ShapeID:4, Paragraph:4, Table:1 or Heading:标题!Paragraph/!Table. Join multiple Word/PPT destinations with +. Saves only: run wps_run_render with this renderId to apply it. Existing document content is not undone or moved.",
-  annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
   inputSchema: {
     variableId: z.string().min(1),
     renderId: z.string().min(1),
@@ -569,8 +618,7 @@ defineTool("wps_update_render", {
 }, async ({ variableId, renderId, targetDocumentId, targetRef, description, code }) => {
   try {
     const variable = variableById(variableId);
-    const render = variable.renders.find(item => item.renderId === renderId);
-    if (!render) throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
+    const render = renderById(variable, renderId);
     if ([targetDocumentId, targetRef, description, code].every(value => value === undefined)) {
       throw new ToolError("INVALID_REQUEST", "Provide at least one field to update");
     }
@@ -597,35 +645,52 @@ defineTool("wps_update_render", {
   } catch (error) { return toolError(error, "INVALID_REQUEST"); }
 });
 
+defineTool("wps_delete_variable", {
+  title: "Soft-delete Variable",
+  description: "Soft-delete a Variable, making its Transform and all Render bindings unavailable. Retains definitions, value and execution history for recovery in the variable panel. Never changes WPS document content. Repeated deletion succeeds with the original deletedAt. Identify the requested rule before deleting.",
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  inputSchema: { variableId: z.string().min(1) },
+}, async ({ variableId }) => toolResult(await softDeleteDefinition(variableId)));
+
+defineTool("wps_delete_render", {
+  title: "Soft-delete Render rule",
+  description: "Soft-delete exactly one Render belonging to the specified active Variable. Retains its definition and execution history for recovery in the variable panel. Preserves the Variable, its value, other bindings and all written document content. Both IDs are required. Repeated deletion succeeds with the original deletedAt.",
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  inputSchema: { variableId: z.string().min(1), renderId: z.string().min(1) },
+}, async ({ variableId, renderId }) => toolResult(await softDeleteDefinition(variableId, renderId)));
+
 defineTool("wps_list_variables", {
   title: "List Variables",
-  description: "List every saved Variable definition with its Transform source and Render targets. Returns summaries only; read wps_get_variable for one definition's complete code. Definitions whose documents are disconnected stay listed, so use this to find stale or leftover rules before creating new ones.",
+  description: "List saved Variable summaries with Transform sources and Render targets, without code or values. Disconnected definitions stay listed. Deleted Variables and Renders are excluded by default; includeDeleted=true includes them with deletedAt and effective active flags for inspection only. Recovery is available in the variable panel.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  inputSchema: {},
-}, async () => toolResult({ variables: state.variables.map(cleanVariable) }));
+  inputSchema: { includeDeleted: z.boolean().optional() },
+}, async ({ includeDeleted = false }) => toolResult({ variables: state.variables.filter(v => includeDeleted || !v.deletedAt).map(v => cleanVariable(v, includeDeleted)) }));
 
 defineTool("wps_get_variable", {
   title: "Get Variable",
-  description: "Get the latest value, hasValue, and complete Transform/Render definitions including code and lastRun. Read this before updating an existing rule.",
+  description: "Get the latest value, hasValue, and complete Transform/Render definitions including code and lastRun. Read before updating. Deleted objects are excluded by default; includeDeleted=true allows inspection with effective active flags and deletedAt, plus retainedValue if a saved value is invalid. Inspection never permits executing deleted rules; restore them in the variable panel first.",
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  inputSchema: { variableId: z.string().min(1) },
-}, async ({ variableId }) => {
+  inputSchema: { variableId: z.string().min(1), includeDeleted: z.boolean().optional() },
+}, async ({ variableId, includeDeleted = false }) => {
   try {
-    const v = variableById(variableId);
+    const v = variableById(variableId, includeDeleted);
     const transform = v.transform;
     return toolResult({
       variableId: v.variableId, name: v.name, ...(v.description ? { description: v.description } : {}),
+      ...(includeDeleted ? { active: !v.deletedAt, ...(v.deletedAt ? { deletedAt: v.deletedAt } : {}) } : {}),
       hasValue: !!v.hasValue, ...(v.hasValue ? { value: v.value } : {}),
+      ...(includeDeleted && !v.hasValue && Object.hasOwn(v, "value") ? { retainedValue: v.value } : {}),
       transform: { ...transform },
-      renders: v.renders.map(render => ({ ...render })),
+      renders: v.renders.filter(render => includeDeleted || !render.deletedAt).map(render => ({ ...render,
+        ...(includeDeleted ? { active: !v.deletedAt && !render.deletedAt } : {}) })),
     });
   } catch (error) { return toolError(error); }
 });
 
 defineTool("wps_run_transform", {
   title: "Run Variable Transform",
-  description: "Run a Variable's read-only Transform in its source document and save the JSON value.",
-  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+  description: "Run a Variable's Transform with read-only access to its source WPS document, then overwrite and persist the Variable's JSON value, hasValue and Transform lastRun. Does not modify WPS documents.",
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   inputSchema: { variableId: z.string().min(1) },
 }, async ({ variableId }) => {
   try {
@@ -633,10 +698,9 @@ defineTool("wps_run_transform", {
     const doc = documentById(variable.transform.sourceDocumentId);
     const started = Date.now();
     const value = await executeWps(doc, variable.transform.code, undefined, "query");
-    variable.value = value;
-    variable.hasValue = true;
-    variable.transform.lastRun = { at: new Date().toISOString(), durationMs: Date.now() - started };
-    await persist();
+    const updated = { ...variable, value, hasValue: true,
+      transform: { ...variable.transform, lastRun: { at: new Date().toISOString(), durationMs: Date.now() - started } } };
+    await persist(state.variables.map(item => item === variable ? updated : item));
     return toolResult({ success: true, variableId, value });
   } catch (error) { return toolError(error, "TRANSFORM_EXECUTION_ERROR"); }
 });
@@ -645,13 +709,12 @@ defineTool("wps_run_render", {
   title: "Run Variable Render",
   description: `Run one Render or all Renders for a Variable, allowing the saved code to modify target WPS documents. Code may return { renderTarget: { targetRef, description? }, ... } to persist its current destinations after writing (up to ${MAX_DOCUMENT_LOCATIONS} locations / ${MAX_DOCUMENT_REF_LENGTH} characters). Omit renderTarget to preserve existing metadata. Invalid metadata fails that Render after possible document writes; no rollback.`,
   annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
-  inputSchema: { variableId: z.string().min(1), renderId: z.string().optional() },
+  inputSchema: { variableId: z.string().min(1), renderId: z.string().min(1).optional() },
 }, async ({ variableId, renderId }) => {
   try {
     let variable = variableById(variableId);
+    const selected = renderId === undefined ? variable.renders.filter(r => !r.deletedAt) : [renderById(variable, renderId)];
     if (!variable.hasValue) throw new ToolError("INVALID_REQUEST", "Variable has no value; run wps_run_transform first");
-    const selected = renderId ? variable.renders.filter((r) => r.renderId === renderId) : variable.renders;
-    if (renderId && selected.length === 0) throw new ToolError("RENDER_NOT_FOUND", `Render '${renderId}' was not found`);
     const renders = [];
     for (const render of selected) {
       try {
@@ -687,12 +750,13 @@ export async function callTool(name: string, args: unknown, signal?: AbortSignal
   return tool.invoke(args, signal);
 }
 export function getState() {
-  return { documents: [...documents.values()].map(documentResponse), variables: state.variables.map(v => {
+  return { documents: [...documents.values()].map(documentResponse), variables: state.variables.filter(v => !v.deletedAt).map(v => {
     const sourceLocations = parseDocumentRefs(documents.get(v.transform.sourceDocumentId)?.type, v.transform.sourceRef);
+    const { value, ...definition } = v;
     return {
-      ...v,
+      ...definition, ...(v.hasValue ? { value } : {}),
       transform: { ...v.transform, sourceLocation: sourceLocations[0], sourceLocations: sourceLocations.length ? sourceLocations : undefined },
-      renders: v.renders.map(r => {
+      renders: v.renders.filter(r => !r.deletedAt).map(r => {
         const locations = renderLocations(r, documents.get(r.targetDocumentId)?.type);
         return { ...r, targetLocation: locations[0], targetLocations: locations.length ? locations : undefined };
       }),

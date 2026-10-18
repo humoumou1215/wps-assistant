@@ -167,7 +167,8 @@ test('updates wait for in-flight execution and deletion removes the updated rule
     assert.equal(h.appState.written, 120);
     assert.equal((await post('/api/delete', { variableId, renderId })).status, 200);
     assert.equal((await call(client, 'wps_get_variable', { variableId })).renders.length, 0);
-    await failed(client, 'wps_update_render', { variableId, renderId, code: 'return false;' }, 'RENDER_NOT_FOUND');
-    assert.equal(JSON.parse(await readFile(join(h.dir, 'state.json'), 'utf8')).variables[0].renders.length, 0);
+    await failed(client, 'wps_update_render', { variableId, renderId, code: 'return false;' }, 'RENDER_DELETED');
+    const retained = JSON.parse(await readFile(join(h.dir, 'state.json'), 'utf8')).variables[0].renders;
+    assert.equal(retained.length, 1); assert.ok(retained[0].deletedAt); assert.equal(retained[0].code, 'return true;');
   } finally { await client.close(); await h.close(); }
 });

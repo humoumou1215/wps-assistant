@@ -434,6 +434,11 @@ button{font-family:inherit}
 }
 .vars-top input:focus{border-color:#a9c2f0}
 .vars-scroll{flex:1;overflow-y:auto;padding:9px 10px}
+.deleted-info{padding:9px 12px;border-top:1px solid var(--border);color:var(--text-muted);font-size:11px;line-height:1.7}
+.deleted-info>.mini{display:block;margin-top:6px}
+.deleted-info .warn{color:#b45309;margin:4px 0}
+.deleted-variable .rhead>.tgt{flex:1;min-width:0}
+.deleted-variable .rhead>.act{flex-shrink:0}
 /* 统计 + 按文件筛选：同一条横向滚动带，常驻不随列表滚动 */
 .vars-bar{
   display:flex;align-items:center;flex-shrink:0;position:relative;border-bottom:1px solid var(--border);background:var(--bg-panel);

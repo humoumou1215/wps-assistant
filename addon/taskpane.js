@@ -13,6 +13,8 @@
   let state = { documents: [], variables: [] }, online = false, config, models = [], kind = 'builtin', level = 'off';
   let actionBusy = false, controller, filter = '', lastState = '', clearKey = false, checkingRefs = false;
   let variableMode = 'current', pendingDelete, stateRequest = 0;
+  let deletedView = false, deletedState, deletedError = '', deletedRequest = 0;
+  const deletedDetails = new Map();
   const variableModeKey = 'wps-mcp.variable-mode';
   try { if (localStorage.getItem(variableModeKey) === 'all') variableMode = 'all'; } catch {}
   let turns = [], peerBusy = false, lastHistory = '', syncing, settingsDirty = false, configConflict = false, formRevision, settingsBusy = false, followTail = true;
@@ -248,7 +250,7 @@
     if (!anchor || !variable || (pendingDelete.renderId && !variable.renders.some(render => render.renderId === pendingDelete.renderId))) {
       pendingDelete = undefined; $('deleteTip').hidden = true; return;
     }
-    $('deleteTip').textContent = pendingDelete.renderId ? '只删除此 Render 绑定，文档内容保留。再次点击「确认」删除。' : `将删除此变量及关联的 ${variable.renders.length} 个 Render，文档内容保留。再次点击「确认」删除。`;
+    $('deleteTip').textContent = pendingDelete.renderId ? '停用此 Render 绑定，可在「已删除」中恢复，文档内容保留。再次点击「确认」删除。' : `停用此变量及关联的 ${variable.renders.length} 个 Render，可在「已删除」中恢复，文档内容保留。再次点击「确认」删除。`;
     const rect = anchor.getBoundingClientRect(), tip = $('deleteTip'), viewport = $('varsScroll').getBoundingClientRect();
     if (rect.bottom <= viewport.top || rect.top >= viewport.bottom) { tip.hidden = true; return; }
     tip.hidden = false;
@@ -259,6 +261,9 @@
   }
   function syncStripEdge() { const n = $('varsStrip'); $('varsBar').classList.toggle('over', n.scrollWidth - n.clientWidth - n.scrollLeft > 2); }
   function renderVars() {
+    $('showDeleted').setAttribute('aria-pressed', String(deletedView));
+    $('varCount').textContent = modeVariables().length;
+    if (deletedView) { renderDeleted(); return; }
     const expanded = new Set([...$('varsList').querySelectorAll('details[open]')].map(n => n.dataset.detail));
     const scope = modeVariables();
     $('varCount').textContent = scope.length;
@@ -286,6 +291,42 @@
     $('varsList').querySelectorAll('[data-detail]').forEach(n => { n.open = expanded.has(n.dataset.detail); }); syncStripEdge(); syncDeleteConfirmation();
     if ($('mentionPop').classList.contains('show')) renderMention($('mentionPop').dataset.query);
   }
+  function renderDeleted() {
+    document.querySelectorAll('[data-var-mode]').forEach(button => button.setAttribute('aria-pressed', 'false'));
+    $('recalcAll').disabled = true; $('rerenderAll').disabled = true;
+    const variables = deletedState?.variables || [], query = $('varSearch').value.trim().toLowerCase();
+    const list = variables.filter(v => [v.name, v.description, v.sourceRef, v.sourceDocumentName].join(' ').toLowerCase().includes(query));
+    $('varsStrip').innerHTML = '<span class="p">已删除规则可恢复 · 数据仍保存在本机 · 文档内容保留</span>';
+    const restoreButton = (v, r) => '<button type="button" class="act sm" data-restore data-var="' + esc(v.variableId) + '"' + (r ? ' data-render="' + esc(r.renderId) + '"' : '') + ' ' + (actionBusy || !online || (r && v.deletedAt) ? 'disabled' : '') + '>' + (r && v.deletedAt ? '先恢复变量' : '恢复') + '</button>';
+    const overlaps = v => v.renders.filter(r => !r.deletedAt || !v.deletedAt).some(r => r.targetRef && state.variables.some(active => active.renders.some(other => other.targetDocumentId === r.targetDocumentId && other.targetRef === r.targetRef)));
+    $('varsList').innerHTML = deletedError ? '<div class="empty-state">读取已删除规则失败：' + esc(deletedError) + '</div>' : !deletedState ? '<div class="empty-state">正在读取已删除规则…</div>' : list.map(v => {
+      const detail = deletedDetails.get(v.variableId);
+      return '<article class="var deleted-variable"><div class="var-head"><div class="mid"><div class="line1"><strong class="var-name">' + esc(v.name) + '</strong><span class="sp"></span>' + (v.deletedAt ? restoreButton(v) : '<span class="stamp">仅部分 Render 已删除</span>') + '</div><div class="line2">' + esc(v.sourceDocumentName || v.sourceDocumentId) + ' · ' + (v.deletedAt ? '变量删除于 ' + esc(new Date(v.deletedAt).toLocaleString()) : '变量仍可正常使用') + '</div></div></div>' +
+        '<div class="var-renders">' + v.renders.map(r => '<div class="render"><div class="rhead"><span class="tgt"><span class="t1">' + esc(r.targetDocumentName || r.targetDocumentId) + ' › ' + esc(r.targetRef || '未标注写入位置') + '</span><span class="t2">' + esc(r.description || r.renderId) + ' · ' + (r.deletedAt ? '删除于 ' + esc(new Date(r.deletedAt).toLocaleString()) : '随变量停用') + '</span></span>' + restoreButton(v, r) + '</div></div>').join('') + '</div>' +
+        '<div class="deleted-info">' + (v.deletedAt ? '恢复变量后需先重算，再核实目标并重写。' : '恢复绑定不会执行写入。') + (overlaps(v) ? '<p class="warn">存在相同目标位置的有效绑定，恢复后请核对重复写入。</p>' : '') + '<button type="button" class="mini" data-deleted-detail="' + esc(v.variableId) + '" aria-expanded="' + !!detail + '">' + (detail ? '收起保留内容' : '查看保留内容') + '</button>' +
+        (detail ? '<div class="sect"><div class="sh">保留值与规则（本次查看快照）</div>' + V.valueHTML(detail.hasValue ? detail.value : detail.retainedValue, detail.hasValue || Object.hasOwn(detail, 'retainedValue')) + '<pre class="code">' + V.highlight(detail.transform.code) + '</pre>' + detail.renders.map(r => '<div class="sh">' + esc(r.renderId) + (r.active ? ' · 有效' : ' · 已停用') + '</div><pre class="code">' + V.highlight(r.code) + '</pre>').join('') + '</div>' : '') + '</div></article>';
+    }).join('') || '<div class="empty-state">' + (query ? '没有匹配的已删除规则。' : '没有已删除规则。') + '</div>';
+    syncStripEdge();
+  }
+  async function refreshDeleted() {
+    const request = ++deletedRequest;
+    try {
+      const next = await api('/api/deleted');
+      if (request !== deletedRequest || !deletedView) return;
+      const changed = deletedError || JSON.stringify(next) !== JSON.stringify(deletedState);
+      deletedState = next; deletedError = '';
+      if (changed) { deletedDetails.clear(); renderVars(); }
+    } catch (error) { if (request === deletedRequest && deletedView) { deletedError = error.message; renderVars(); } }
+  }
+  async function restoreDefinition(item) {
+    if (actionBusy || !online) return;
+    actionBusy = true; renderVars();
+    try {
+      await api('/api/restore', item); stateRequest++; deletedRequest++; deletedDetails.clear();
+      notice(item.renderId ? 'Render 绑定已恢复，请核对目标后再重写。' : '变量已恢复，需先重算，再核对目标并重写。');
+    } catch (error) { notice('恢复失败：' + error.message, true); }
+    finally { actionBusy = false; await refresh(); renderVars(); }
+  }
   async function refresh() {
     const request = ++stateRequest;
     try {
@@ -299,6 +340,7 @@
       $('footMsg').textContent = count ? '变量与会话保存在本机' : '请在 WPS 中打开文档并加载 Add-in';
       $('footClock').textContent = new Date().toLocaleTimeString();
       if (changed) { renderVars(); syncComposerRefs(); if (!controller) renderTurns(); }
+      if (deletedView) await refreshDeleted();
     } catch {
       if (request !== stateRequest) return;
       online = false; $('livePill').innerHTML = '<span class="dot"></span>桥接已断开'; $('livePill').classList.add('off'); $('footMsg').textContent = '无法连接本机服务，正在重试'; renderVars(); syncComposerRefs();
@@ -310,10 +352,15 @@
   window.addEventListener('resize', syncStripEdge);
   $('varSearch').oninput = renderVars;
   document.querySelectorAll('[data-var-mode]').forEach(button => { button.onclick = () => {
+    deletedView = false; deletedRequest++; cancelDelete();
     variableMode = button.dataset.varMode;
     try { localStorage.setItem(variableModeKey, variableMode); } catch {}
     renderVars(); $('varsScroll').scrollTop = 0;
   }; });
+  $('showDeleted').onclick = () => {
+    deletedView = !deletedView; deletedRequest++; cancelDelete(); renderVars();
+    if (deletedView) void refreshDeleted();
+  };
   window.addEventListener('storage', event => {
     if (event.key !== variableModeKey) return;
     variableMode = event.newValue === 'all' ? 'all' : 'current'; renderVars();
@@ -346,7 +393,7 @@
       else state.variables = state.variables.filter(v => v.variableId !== item.variableId);
       syncComposerRefs();
       actionErrors.delete(item.variableId);
-      notice(item.renderId ? 'Render 绑定已删除，文档内容保留。' : '变量及关联 Render 已删除，文档内容保留。');
+      notice(item.renderId ? 'Render 绑定已删除，可在「已删除」中恢复，文档内容保留。' : '变量已删除，可在「已删除」中恢复，文档内容保留。');
     } catch (error) { actionErrors.set(item.variableId, '删除失败：' + error.message); notice('删除失败：' + error.message, true); }
     finally { actionBusy = false; await refresh(); renderVars(); }
   }
@@ -360,6 +407,22 @@
     finally { actionBusy = false; await refresh(); renderVars(); }
   }
   $('varsList').onclick = event => {
+    const restoration = event.target.closest('[data-restore]');
+    if (restoration) {
+      if (!restoration.disabled) void restoreDefinition({ variableId: restoration.dataset.var, ...(restoration.dataset.render ? { renderId: restoration.dataset.render } : {}) });
+      return;
+    }
+    const inspection = event.target.closest('[data-deleted-detail]');
+    if (inspection) {
+      const id = inspection.dataset.deletedDetail;
+      if (deletedDetails.has(id)) { deletedDetails.delete(id); renderVars(); }
+      else {
+        inspection.disabled = true;
+        void api('/api/variable', { variableId: id }).then(value => { if (deletedView) { deletedDetails.set(id, value); renderVars(); } })
+          .catch(error => { inspection.disabled = false; notice('读取保留内容失败：' + error.message, true); });
+      }
+      return;
+    }
     if (event.target.closest('.location-link.unavailable')) { event.preventDefault(); event.stopPropagation(); return; }
     const navigation = event.target.closest('[data-navigate]');
     if (navigation) {

@@ -23,7 +23,29 @@ const realExec = childProcess.execFile;
 const realNow = Date.now;
 let calls, running, scenario, clock, quitRequested, relaunched;
 const documentNames = ['wps', 'et', 'wpp'];
-const documentHosts = () => documentNames.filter(name => running.has(name));
+// 本机实测的真实命令行：WPS 12.x 用同一个 wps.exe 兼任文档宿主与多种辅助宿主，
+// 辅助宿主的首参固定是 Run 子命令。测试替身按同一规则分类，才能覆盖 0.1.22 的误判。
+const PROCESSES = {
+  wps: '"C:\\Program Files\\Kingsoft\\WPS Office\\12.1\\office6\\wps.exe"  "C:\\Users\\me\\report.docx"',
+  et: '"C:\\Program Files\\Kingsoft\\WPS Office\\12.1\\office6\\et.exe"  "C:\\Users\\me\\book.xlsx"',
+  wpp: '"C:\\Program Files\\Kingsoft\\WPS Office\\12.1\\office6\\wpp.exe"  "C:\\Users\\me\\deck.pptx"',
+  'wps.entry': '"C:\\Program Files\\Kingsoft\\WPS Office\\12.1\\office6\\wps.exe"  Run -Entry=EntryPoint C:\\addons\\pool\\aspcenter.dll --host',
+  'wps.cef': '"C:\\Program Files\\Kingsoft\\WPS Office\\12.1\\office6\\wps.exe" Run /AppUserModelID=Kingsoft.Office.cefhomepage -Entry=CefRenderEntryPoint -CefParentID=21816 "C:/x/promecefpluginhost.exe" --type=renderer',
+  'wps.yunbox': '"C:\\Program Files\\Kingsoft\\WPS Office\\12.1\\office6\\wps.exe"  Run /InstanceId=yunbox "C:/x/addons/yunbox/yunbox.dll" /show /from:tray',
+  promecefpluginhost: '"C:/x\\promecefpluginhost.exe" --type=gpu-process --no-sandbox',
+  wpsoffice: '"C:\\Program Files\\Kingsoft\\WPS Office\\12.1\\office6\\wps.exe"  "C:\\Users\\me\\report.docx"',
+};
+const hostName = token => token.split('.')[0];
+// 与 src/desktop-runtime.ts 的 Test-WpsDocumentHost 一一对应。
+const isDocumentHost = commandLine => {
+  const cmd = commandLine ?? '';
+  const quoted = /^"[^"]*"/.exec(cmd);
+  const rest = quoted ? cmd.slice(quoted[0].length) : cmd.replace(/^\S+/, '');
+  if (/^\s*Run(\s|$)/i.test(rest)) return false;
+  if (/-Entry=|--type=|\/InstanceId=/i.test(cmd)) return false;
+  return true;
+};
+const documentHosts = () => [...running].filter(token => documentNames.includes(hostName(token)) && isDocumentHost(PROCESSES[token]));
 const missing = () => Object.assign(new Error('No process'), { code: 1 });
 const fakeExec = () => { throw new Error('Unexpected callback invocation'); };
 fakeExec[promisify.custom] = async (file, args, options) => {
@@ -47,14 +69,16 @@ fakeExec[promisify.custom] = async (file, args, options) => {
       }
       return { stdout: '', stderr: '' };
     }
-    // 一次性探测：命令行带 -Entry=EntryPoint 的辅助宿主只计入 backgrounds。
+    // 一次性探测：命令行首参为 Run 的加载项/CEF/云盘宿主只计入 backgrounds。
     if (quitRequested && scenario === 'relaunch') { running.add('wps'); relaunched = true; }
     if (scenario === 'slow-close') clock += 8_000;
-    const count = name => (running.has(name) ? 1 : 0);
+    const open = documentHosts();
     return {
       stdout: JSON.stringify({
-        wps: count('wps'), et: count('et'), wpp: count('wpp'),
-        backgrounds: [...running].filter(name => !documentNames.includes(name)).length,
+        wps: open.filter(token => hostName(token) === 'wps').length,
+        et: open.filter(token => hostName(token) === 'et').length,
+        wpp: open.filter(token => hostName(token) === 'wpp').length,
+        backgrounds: [...running].filter(token => !open.includes(token)).length,
       }),
       stderr: '',
     };
@@ -77,9 +101,10 @@ function reset(target = 'darwin', mode = '') {
   Object.defineProperty(process, 'platform', { ...platform, value: target });
   calls = []; scenario = mode; clock = 0; quitRequested = false; relaunched = false;
   Date.now = () => clock;
-  running = new Set(target === 'darwin' ? ['wpsoffice', 'promecefpluginhost'] : ['wps', 'wps-helper', 'promecefpluginhost']);
-  // WPS 12.x 的 wps.exe 也承载加载项辅助宿主：没有窗口、常驻不退出。
+  running = new Set(target === 'darwin' ? ['wpsoffice', 'promecefpluginhost'] : ['wps', 'wps.entry', 'promecefpluginhost']);
+  // 文档窗口全关了，只剩常驻的辅助宿主：WPS 12.x 的加载项宿主、CEF 渲染宿主、云盘实例。
   if (mode === 'helpers-only') ['wpsoffice', 'wps'].forEach(name => running.delete(name));
+  if (mode === 'aux-hosts') running = new Set(target === 'darwin' ? ['promecefpluginhost'] : ['wps.entry', 'wps.cef', 'wps.yunbox', 'promecefpluginhost']);
 }
 test.beforeEach(() => reset());
 test.afterEach(() => { Date.now = realNow; Object.defineProperty(process, 'platform', platform); });
@@ -119,6 +144,22 @@ for (const target of ['darwin', 'win32']) {
     });
   }
 }
+for (const target of ['darwin', 'win32']) {
+  for (const command of ['register', 'unregister', 'register-close-wps', 'unregister-close-wps']) {
+    test(`${target} ${command} ignores CEF render and cloud hosts`, async () => {
+      reset(target, 'aux-hosts');
+      assert.deepEqual(documentHosts(), [], 'only auxiliary hosts are running');
+      assert.match(await desktopCommand(command), command.startsWith('unregister') ? /已移除/ : /已注册/);
+      assert.ok(!calls.some(c => c.file === 'taskkill.exe' || c.file.endsWith('/osascript')), 'no document window means no close attempt');
+    });
+  }
+}
+test('a real document window still blocks registration', async () => {
+  reset('win32');
+  assert.deepEqual(documentHosts(), ['wps'], 'a document host is detected next to the auxiliary ones');
+  await assert.rejects(desktopCommand('register'), /请关闭 WPS 中已打开的文档/);
+  assert.ok(!calls.some(c => c.file === 'taskkill.exe'), 'registration never closes WPS on its own');
+});
 for (const target of ['darwin', 'win32']) {
   for (const command of ['register-close-wps', 'unregister-close-wps']) {
     test(`${target} ${command} leaves registration unchanged when WPS relaunches`, async () => {

@@ -61,9 +61,11 @@ function assertTrayOwner(meta: Metadata, status: Metadata) {
   }
 }
 /// 文档宿主：只有 Writer/表格/演示退出时才会重写 jsaddons/publish.xml，注册与移除
-/// 以此为准。WPS 12.x 也用同一个 wps.exe 承载加载项辅助宿主（命令行带
-/// -Entry=EntryPoint，加载 jsapibrowser/aspcenter 等），它们没有窗口、常驻不退出，
-/// 也不接收 taskkill 的 WM_CLOSE，因此不计入前置条件、也不强行结束。
+/// 以此为准。WPS 12.x 用同一个 wps.exe 兼任多种角色，其中辅助宿主的命令行首参
+/// 固定是 Run 子命令——加载项宿主（-Entry=EntryPoint）、CEF 渲染宿主
+/// （-Entry=CefRenderEntryPoint）、云盘实例（/InstanceId=yunbox）——它们没有文档
+/// 窗口、常驻不退出，也不接收 taskkill 的 WM_CLOSE，因此不计入前置条件、也不强行
+/// 结束。只按进程名判断，或只排除其中一种命令行，都会把它们误当成未退出的文档。
 type DocumentHosts = { wps: number; et: number; wpp: number };
 type WpsHosts = { documents: DocumentHosts; backgrounds: number };
 const DOCUMENT_HOSTS = ["wps", "et", "wpp"] as const;
@@ -71,19 +73,32 @@ const documentTotal = (documents: DocumentHosts) => documents.wps + documents.et
 const CLOSE_BUDGET = 15_000;
 const CLOSE_TIMEOUT = "WPS 未能在 15 秒内关闭已打开的文档；请在 WPS 中保存并关闭文档后重试";
 /// 一次查出全部宿主并区分文档宿主与后台宿主：CIM 查询能读到命令行，Get-Process 不能。
-const WIN32_PROBE = `# WPS_DOC_PROBE
+/// 判定只看可执行文件之后的参数：首参是 Run 的一律是辅助宿主；另外任何位置出现
+/// -Entry= / --type= / /InstanceId= 的也按辅助宿主处理（含未加引号的 exe 路径）。
+/// 读不到命令行时按文档宿主处理——宁可多问一句，也不要写坏 publish.xml。
+const PS_DOC_HOST = `
+function Test-WpsDocumentHost($p){
+  $cmd=[string]$p.CommandLine
+  $rest=$cmd
+  if($cmd.StartsWith('"')){$close=$cmd.IndexOf('"',1); if($close -gt 0){$rest=$cmd.Substring($close+1)}}
+  elseif($cmd -match '^\\S+'){$rest=$cmd.Substring($Matches[0].Length)}
+  if($rest -match '^\\s*Run(\\s|$)'){return $false}
+  if($cmd -match '-Entry=|--type=|/InstanceId='){return $false}
+  return $true
+}`;
+const WIN32_PROBE = `# WPS_DOC_PROBE${PS_DOC_HOST}
 $doc=@{wps=0;et=0;wpp=0};$bg=0
 foreach($p in @(Get-CimInstance Win32_Process -Filter "Name='wps.exe' OR Name='et.exe' OR Name='wpp.exe' OR Name='wpscenter.exe' OR Name='promecefpluginhost.exe'" -ErrorAction SilentlyContinue)){
   $name=$p.Name.ToLower().Replace('.exe','')
-  if($doc.ContainsKey($name) -and (([string]$p.CommandLine) -notmatch '-Entry=EntryPoint')){$doc[$name]++}else{$bg++}
+  if($doc.ContainsKey($name) -and (Test-WpsDocumentHost $p)){$doc[$name]++}else{$bg++}
 }
 [pscustomobject]@{wps=$doc.wps;et=$doc.et;wpp=$doc.wpp;backgrounds=$bg} | ConvertTo-Json -Compress`;
 /// 等待文档宿主退出不逐轮冷启 powershell.exe（一次 0.3~1.5 秒，会把 15 秒预算耗在探测上），
 /// 而是让一个长驻脚本在同一预算内自行轮询。
-const winWaitScript = (budget: number) => `# WPS_DOC_WAIT
+const winWaitScript = (budget: number) => `# WPS_DOC_WAIT${PS_DOC_HOST}
 $end=[DateTime]::UtcNow.AddMilliseconds(${budget})
 do{
-  $open=@(Get-CimInstance Win32_Process -Filter "Name='wps.exe' OR Name='et.exe' OR Name='wpp.exe'" -ErrorAction SilentlyContinue | Where-Object{ (([string]$_.CommandLine) -notmatch '-Entry=EntryPoint') })
+  $open=@(Get-CimInstance Win32_Process -Filter "Name='wps.exe' OR Name='et.exe' OR Name='wpp.exe'" -ErrorAction SilentlyContinue | Where-Object{ Test-WpsDocumentHost $_ })
   if($open.Count -eq 0){exit 0}
   Start-Sleep -Milliseconds 250
 }while([DateTime]::UtcNow -lt $end)

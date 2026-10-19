@@ -15,9 +15,20 @@ $node = (Get-Command node.exe -ErrorAction Stop).Source
 $npm = (Get-Command npm.cmd -ErrorAction Stop).Source
 $nodeVersion = (& $node --version).TrimStart('v').Split('.')
 if ($LASTEXITCODE -ne 0 -or [int]$nodeVersion[0] -lt 22 -or ([int]$nodeVersion[0] -eq 22 -and [int]$nodeVersion[1] -lt 19)) { throw 'Node.js 22.19.0 or newer is required.' }
-# 只有文档宿主会重写 jsaddons/publish.xml；wps.exe 同时承载 -Entry=EntryPoint 的常驻
-# 加载项辅助宿主，按名字判断会把它们误当成 WPS 未退出。
-$documentHosts = @(Get-CimInstance Win32_Process -Filter "Name='wps.exe' OR Name='et.exe' OR Name='wpp.exe'" -ErrorAction SilentlyContinue | Where-Object { (([string]$_.CommandLine) -notmatch '-Entry=EntryPoint') })
+# Only document hosts rewrite jsaddons/publish.xml. WPS 12.x runs add-in hosts
+# (-Entry=EntryPoint), CEF render hosts (-Entry=CefRenderEntryPoint) and cloud
+# instances (/InstanceId=) from the same wps.exe; all of them put a Run subcommand
+# first, so matching by process name misreads them as a WPS that never exits.
+function Test-WpsDocumentHost($process) {
+  $commandLine = [string]$process.CommandLine
+  $rest = $commandLine
+  if ($commandLine.StartsWith('"')) { $close = $commandLine.IndexOf('"', 1); if ($close -gt 0) { $rest = $commandLine.Substring($close + 1) } }
+  elseif ($commandLine -match '^\S+') { $rest = $commandLine.Substring($Matches[0].Length) }
+  if ($rest -match '^\s*Run(\s|$)') { return $false }
+  if ($commandLine -match '-Entry=|--type=|/InstanceId=') { return $false }
+  return $true
+}
+$documentHosts = @(Get-CimInstance Win32_Process -Filter "Name='wps.exe' OR Name='et.exe' OR Name='wpp.exe'" -ErrorAction SilentlyContinue | Where-Object { Test-WpsDocumentHost $_ })
 if ($documentHosts.Count) { throw 'Close every WPS document (Writer, Spreadsheets, Presentation) before deployment.' }
 $baseUrl = "http://127.0.0.1:$Port"
 $metadataPath = Join-Path $projectDirectory '.dev\windows-deployment.json'
